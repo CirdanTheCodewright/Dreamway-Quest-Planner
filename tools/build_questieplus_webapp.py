@@ -1715,6 +1715,17 @@ def render_inventory_html(records, chains):
       filter: saturate(0.78);
     }}
 
+    .quest-icon.assignment-locked {{
+      opacity: 0.56;
+      filter: grayscale(0.72) saturate(0.36);
+    }}
+
+    .quest-icon.assignment-locked:hover,
+    .quest-icon.assignment-locked:focus-visible,
+    .quest-icon.assignment-locked.active {{
+      opacity: 0.78;
+    }}
+
     .details {{
       display: grid;
       grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
@@ -3830,6 +3841,32 @@ def render_classic_html(records, chains, zones, continents):
       font-weight: 700;
     }}
 
+    .batch-zones-row {{
+      min-width: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 8px;
+    }}
+
+    .batch-type-badges {{
+      position: relative;
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      min-width: 34px;
+      min-height: 18px;
+      justify-content: end;
+    }}
+
+    .batch-type-badges .quest-type-badge {{
+      position: static;
+      width: 16px;
+      height: 16px;
+      font-size: 0.58rem;
+    }}
+
     .journey-batch-drop {{
       min-height: 0;
       display: grid;
@@ -3920,6 +3957,7 @@ def render_classic_html(records, chains, zones, continents):
     }}
 
     .journey-quest-step {{
+      position: relative;
       display: grid;
       place-items: center;
       width: 22px;
@@ -4690,6 +4728,16 @@ def render_classic_html(records, chains, zones, continents):
       opacity: 0.48;
     }}
 
+    .chain-quest-item.assignment-locked {{
+      opacity: 0.58;
+      filter: grayscale(0.72) saturate(0.38);
+    }}
+
+    .chain-quest-item.assignment-locked:hover,
+    .chain-quest-item.assignment-locked:focus-visible {{
+      opacity: 0.76;
+    }}
+
     .chain-quest-item.has-detail {{
       align-items: start;
     }}
@@ -4894,6 +4942,17 @@ def render_classic_html(records, chains, zones, continents):
 
     .quest-icon.no-map {{
       border-style: dashed;
+    }}
+
+    .quest-icon.assignment-locked {{
+      opacity: 0.56;
+      filter: grayscale(0.72) saturate(0.36);
+    }}
+
+    .quest-icon.assignment-locked:hover,
+    .quest-icon.assignment-locked:focus-visible,
+    .quest-icon.assignment-locked.active {{
+      opacity: 0.78;
     }}
 
     .chain-row[draggable="true"],
@@ -5644,7 +5703,10 @@ def render_classic_html(records, chains, zones, continents):
             </label>
             <button class="batch-delete-button" type="button" data-batch-id="${{escapeHtml(batch.id)}}" aria-label="Delete batch ${{index + 1}}">x</button>
           </div>
-          <div class="batch-zone-summary" title="${{escapeHtml(batchZoneSummary(batch))}}">${{escapeHtml(batchZoneSummary(batch))}}</div>
+          <div class="batch-zones-row">
+            <div class="batch-zone-summary" title="${{escapeHtml(batchZoneSummary(batch))}}">${{escapeHtml(batchZoneSummary(batch))}}</div>
+            <div class="batch-type-badges">${{questTypeBadgesHtml(batchQuests(batch))}}</div>
+          </div>
         </div>
         <div class="journey-batch-drop" data-batch-index="${{index}}" aria-label="Batch ${{index + 1}} quest drop area"></div>
       `;
@@ -5685,7 +5747,10 @@ def render_classic_html(records, chains, zones, continents):
           <div class="batch-title-row">
             <div class="batch-name-input" role="heading" aria-level="3">Unused</div>
           </div>
-          <div class="batch-zone-summary" title="${{escapeHtml(batchZoneSummary(unusedBatch))}}">${{escapeHtml(batchZoneSummary(unusedBatch))}}</div>
+          <div class="batch-zones-row">
+            <div class="batch-zone-summary" title="${{escapeHtml(batchZoneSummary(unusedBatch))}}">${{escapeHtml(batchZoneSummary(unusedBatch))}}</div>
+            <div class="batch-type-badges">${{questTypeBadgesHtml(batchQuests(unusedBatch))}}</div>
+          </div>
         </div>
         <div class="journey-batch-drop journey-unused-drop" aria-label="Unused quest drop area"></div>
       `;
@@ -5724,7 +5789,7 @@ def render_classic_html(records, chains, zones, continents):
       item.dataset.batchId = batchId;
       item.style.setProperty("--chain-color", quest.chainColor);
       item.innerHTML = `
-        <span class="journey-quest-step">${{quest.chainStep}}</span>
+        <span class="journey-quest-step"><span>${{quest.chainStep}}</span>${{questTypeBadgesHtml(quest)}}</span>
         <span class="journey-quest-name" ${{questDifficultyAttrs(quest)}}>${{escapeHtml(quest.name)}}</span>
         <span class="journey-quest-level">${{quest.requiredLevel ?? "?"}} / ${{quest.questLevel ?? "?"}}</span>
         ${{options.unused
@@ -6941,6 +7006,20 @@ def render_classic_html(records, chains, zones, continents):
       return "";
     }}
 
+    function questCanBeAssignedNow(quest) {{
+      if (!activeJourney || !quest) return true;
+      const id = Number(quest.id);
+      if (assignedJourneyQuestIds().has(id) || unusedJourneyQuestIds().has(id)) return true;
+      const availability = questAllowedForJourney(quest);
+      if (!availability.ok) return false;
+      return !questPrerequisiteFailure(quest, assignedJourneyQuestIds());
+    }}
+
+    function questAssignmentTitle(quest) {{
+      const base = `${{quest.name}} (#${{quest.id}})`;
+      return questCanBeAssignedNow(quest) ? base : `${{base}} - prerequisites not assigned yet`;
+    }}
+
     function questStatusBadgeHtml(quest) {{
       const status = questJourneyStatus(quest);
       if (!status) return "";
@@ -7050,7 +7129,7 @@ def render_classic_html(records, chains, zones, continents):
       const element = target instanceof Element ? target : null;
       if (!element) return true;
       if (element.closest("input, textarea, select, [contenteditable='true']")) return false;
-      return Boolean(element.closest("#sequencer-board") || element.closest(".map-frame") || element.closest("#chain-list") || element === document.body);
+      return true;
     }}
 
     function canUseEnterPlacement(target) {{
@@ -7338,6 +7417,7 @@ def render_classic_html(records, chains, zones, continents):
       const icon = document.createElement("button");
       icon.type = "button";
       icon.className = "quest-icon";
+      if (!questCanBeAssignedNow(quest)) icon.classList.add("assignment-locked");
       if (!quest.startPoints.length && !quest.endPoints.length && !quest.objectivePoints.length) icon.classList.add("no-map");
       icon.dataset.questId = quest.id;
       icon.dataset.chainId = quest.chainId;
@@ -7346,7 +7426,8 @@ def render_classic_html(records, chains, zones, continents):
       const difficulty = questDifficultyId(quest);
       icon.dataset.difficulty = difficulty || "none";
       if (difficulty) icon.style.setProperty("--quest-icon-ring", QUEST_DIFFICULTY_COLORS[difficulty]);
-      icon.title = `${{quest.name}} (#${{quest.id}}) - requires ${{quest.requiredLevel}}, quest level ${{quest.questLevel}}`;
+      const assignmentSuffix = questCanBeAssignedNow(quest) ? "" : " - prerequisites not assigned yet";
+      icon.title = `${{quest.name}} (#${{quest.id}}) - requires ${{quest.requiredLevel}}, quest level ${{quest.questLevel}}${{assignmentSuffix}}`;
       icon.innerHTML = `<span class="quest-icon-step">${{quest.chainStep}}</span>${{questTypeBadgesHtml(quest)}}`;
       icon.addEventListener("click", (event) => {{
         event.stopPropagation();
@@ -7359,6 +7440,7 @@ def render_classic_html(records, chains, zones, continents):
       const isSelected = selectedId === quest.id;
       const item = document.createElement("div");
       item.className = "chain-quest-item";
+      if (!questCanBeAssignedNow(quest)) item.classList.add("assignment-locked");
       if (isSelected) item.classList.add("has-detail");
       item.dataset.questId = quest.id;
       item.dataset.chainId = quest.chainId;
@@ -7367,7 +7449,7 @@ def render_classic_html(records, chains, zones, continents):
       item.setAttribute("role", "button");
       item.setAttribute("aria-pressed", String(isSelected));
       item.style.setProperty("--chain-color", quest.chainColor);
-      item.title = `${{quest.name}} (#${{quest.id}})`;
+      item.title = questAssignmentTitle(quest);
       const questZones = isSelected ? "" : questZoneSummaryText(quest);
       item.innerHTML = `
         <span class="chain-quest-step"><span>${{quest.chainStep}}</span>${{questTypeBadgesHtml(quest)}}</span>
