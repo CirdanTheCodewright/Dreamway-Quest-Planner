@@ -7036,6 +7036,17 @@ def render_classic_html(records, chains, zones, continents):
       return "";
     }}
 
+    function forcedCatalogueChainIsActive(chain) {{
+      if (forcedCatalogueChainId == null || !chain) return false;
+      const chainId = Number(chain.id);
+      if (Number(forcedCatalogueChainId) !== chainId) return false;
+      if (selectedChainId != null && Number(selectedChainId) === chainId) return true;
+      const selectedQuest = selectedId != null ? questsById.get(Number(selectedId)) : null;
+      if (selectedQuest && Number(selectedQuest.chainId) === chainId) return true;
+      const activeQuest = activeId != null ? questsById.get(Number(activeId)) : null;
+      return Boolean(activeQuest && Number(activeQuest.chainId) === chainId);
+    }}
+
     function currentChains() {{
       const chains = [...chainsById.values()];
       const zones = filterableZones();
@@ -7043,7 +7054,7 @@ def render_classic_html(records, chains, zones, continents):
       const selectedZoneNames = zoneFiltered ? selectedZoneNameSet() : null;
       return chains
         .map((chain) => {{
-          const forceVisible = forcedCatalogueChainId != null && chain.id === forcedCatalogueChainId;
+          const forceVisible = forcedCatalogueChainIsActive(chain);
           const visibleQuests = forceVisible
             ? chain.quests
             : chain.quests.filter((quest) => questPassesRaceClass(quest) && questPassesType(quest) && questPassesCatalogueOptions(quest));
@@ -8129,6 +8140,7 @@ def render_classic_html(records, chains, zones, continents):
       selectedId = null;
       activeId = null;
       selectedChainId = null;
+      forcedCatalogueChainId = null;
       if (options.renderInventory !== false) renderInventory();
       refreshSelectionState();
       return hadSelection;
@@ -8140,6 +8152,9 @@ def render_classic_html(records, chains, zones, continents):
       if (selectedChainId === chain.id && options.toggle !== false) {{
         deselectCatalogueTarget();
         return;
+      }}
+      if (forcedCatalogueChainId != null && Number(forcedCatalogueChainId) !== Number(chain.id)) {{
+        forcedCatalogueChainId = null;
       }}
       selectedChainId = chain.id;
       selectedId = null;
@@ -8164,6 +8179,9 @@ def render_classic_html(records, chains, zones, continents):
       if (selectedId === id && options.toggle !== false) {{
         deselectCatalogueTarget();
         return;
+      }}
+      if (forcedCatalogueChainId != null && Number(forcedCatalogueChainId) !== Number(quest.chainId)) {{
+        forcedCatalogueChainId = null;
       }}
       selectedId = id;
       activeId = id;
