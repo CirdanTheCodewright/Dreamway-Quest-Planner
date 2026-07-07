@@ -601,15 +601,14 @@ await page.waitForTimeout(150);
 await page.keyboard.press("ArrowDown");
 await page.waitForTimeout(150);
 const keyboardAfterChainBoundary = await page.evaluate(() => {
-  const selected = document.querySelector(".chain-quest-item.selected");
-  const row = selected?.closest(".chain-row");
+  const selectedChain = document.querySelector(".chain-row.selected");
   const list = document.querySelector("#chain-list");
-  const selectedRect = selected?.getBoundingClientRect();
+  const selectedRect = selectedChain?.getBoundingClientRect();
   const listRect = list?.getBoundingClientRect();
   return {
-    selectedId: Number(selected?.dataset.questId),
-    selectedChainId: Number(selected?.dataset.chainId),
-    selectedRowExpanded: row?.classList.contains("expanded"),
+    selectedId: Number(document.querySelector(".chain-quest-item.selected")?.dataset.questId),
+    selectedChainId: Number(selectedChain?.dataset.chainId),
+    selectedRowExpanded: selectedChain?.classList.contains("expanded"),
     visibleInCatalogue: Boolean(selectedRect && listRect && selectedRect.bottom >= listRect.top && selectedRect.top <= listRect.bottom),
   };
 });
@@ -632,12 +631,12 @@ if (keyboardAfterUp.selectedId !== 173 || keyboardAfterUp.activeId !== 173) {
 if (
   !keyboardNavExpected.lastWorgenNext ||
   keyboardNavExpected.lastWorgenNext.chainId === Number(worgenChainId) ||
-  keyboardAfterChainBoundary.selectedId !== keyboardNavExpected.lastWorgenNext.id ||
   keyboardAfterChainBoundary.selectedChainId !== keyboardNavExpected.lastWorgenNext.chainId ||
+  keyboardAfterChainBoundary.selectedId ||
   !keyboardAfterChainBoundary.selectedRowExpanded ||
   !keyboardAfterChainBoundary.visibleInCatalogue
 ) {
-  throw new Error(`Expected ArrowDown at the end of a chain to continue into the next chain, got ${JSON.stringify(catalogueKeyboardNav)}.`);
+  throw new Error(`Expected ArrowDown at the end of a chain to target the next chain header, got ${JSON.stringify(catalogueKeyboardNav)}.`);
 }
 await page.click('.chain-quest-item[data-quest-id="173"]');
 await page.waitForTimeout(200);

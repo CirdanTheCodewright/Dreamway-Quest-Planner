@@ -3674,6 +3674,11 @@ def render_classic_html(records, chains, zones, continents):
       box-shadow: inset 0 0 0 1px rgba(255, 116, 116, 0.18);
     }}
 
+    .journey-batch.unused.selected {{
+      border-color: rgba(255, 211, 79, 0.72);
+      box-shadow: inset 0 0 0 1px rgba(255, 211, 79, 0.34), 0 0 22px rgba(255, 116, 116, 0.16);
+    }}
+
     .journey-batch-head {{
       display: grid;
       gap: 6px;
@@ -3690,7 +3695,6 @@ def render_classic_html(records, chains, zones, continents):
     .journey-batch.unused .journey-batch-head {{
       border-bottom-color: rgba(255, 116, 116, 0.24);
       background: rgba(129, 24, 24, 0.34);
-      cursor: default;
     }}
 
     .batch-title-row {{
@@ -4442,6 +4446,12 @@ def render_classic_html(records, chains, zones, continents):
       box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--chain-color) 42%, transparent);
     }}
 
+    .chain-row.selected {{
+      outline: 2px solid #ffd34f;
+      outline-offset: 1px;
+      background: color-mix(in srgb, var(--chain-color) 18%, rgba(255, 255, 255, 0.06));
+    }}
+
     .chain-meta {{
       display: flex;
       align-items: center;
@@ -4780,11 +4790,13 @@ def render_classic_html(records, chains, zones, continents):
       border-style: dashed;
     }}
 
+    .chain-row[draggable="true"],
     .quest-icon[draggable="true"],
     .chain-quest-item[draggable="true"] {{
       cursor: grab;
     }}
 
+    .chain-row.dragging,
     .quest-icon.dragging,
     .chain-quest-item.dragging {{
       opacity: 0.55;
@@ -5101,7 +5113,7 @@ def render_classic_html(records, chains, zones, continents):
     const displayFilters = new Set(DISPLAY_FILTERS.filter((filter) => filter.defaultEnabled).map((filter) => filter.id));
     const CATALOGUE_OPTIONS = [
       {{ id: "show-unused", label: "Show Unused quests", defaultEnabled: false }},
-      {{ id: "show-assigned", label: "Show Assigned quests", defaultEnabled: true }},
+      {{ id: "show-assigned", label: "Show Assigned quests", defaultEnabled: false }},
     ];
     const catalogueOptions = new Set(CATALOGUE_OPTIONS.filter((option) => option.defaultEnabled).map((option) => option.id));
     const questsById = new Map(DATA.quests.map((quest) => [quest.id, quest]));
@@ -5184,10 +5196,13 @@ def render_classic_html(records, chains, zones, continents):
     let currentAppMode = "map";
     let activeId = null;
     let selectedId = null;
+    let selectedChainId = null;
     let mapFitFrame = 0;
     let pickupPopoverCloseTimer = 0;
     let preDragAppMode = "map";
     let draggingQuestId = null;
+    let draggingQuestIds = [];
+    let draggingChainId = null;
     let draggingJourneyQuestId = null;
     const expandedChainIds = new Set();
     let activeJourney = null;
@@ -5210,8 +5225,7 @@ def render_classic_html(records, chains, zones, continents):
       mapEl.style.width = `${{Math.floor(width)}}px`;
       mapEl.style.height = `${{Math.floor(height)}}px`;
       renderAvailablePickupMarkers();
-      const quest = activeId == null ? null : questsById.get(activeId);
-      if (quest) renderOverlay(quest);
+      renderSelectionOverlays();
     }}
 
     function scheduleMapFit() {{
@@ -5300,6 +5314,9 @@ def render_classic_html(records, chains, zones, continents):
       selectedBatchId = null;
       preBatchLevelValue = null;
       forcedCatalogueChainId = null;
+      selectedChainId = null;
+      selectedId = null;
+      activeId = null;
       raceFilter.value = String(race.mask);
       classFilter.value = String(klass.mask);
       updateFiltersFromControls();
@@ -5535,10 +5552,11 @@ def render_classic_html(records, chains, zones, continents):
       const unusedIds = cloneUnusedQuestIds(activeJourney?.unusedQuestIds || []);
       const batchEl = document.createElement("section");
       batchEl.className = "journey-batch unused";
+      if (selectedBatchId === "unused") batchEl.classList.add("selected");
       batchEl.dataset.batchId = "unused";
       const unusedBatch = {{ id: "unused", name: "Unused", questIds: unusedIds }};
       batchEl.innerHTML = `
-        <div class="journey-batch-head">
+        <div class="journey-batch-head" data-batch-id="unused">
           <div class="batch-title-row">
             <div class="batch-name-input" role="heading" aria-level="3">Unused</div>
           </div>
@@ -5593,6 +5611,7 @@ def render_classic_html(records, chains, zones, continents):
 
     function selectedBatch() {{
       if (!activeJourney || !selectedBatchId) return null;
+      if (selectedBatchId === "unused") return {{ id: "unused", name: "Unused", questIds: cloneUnusedQuestIds(activeJourney.unusedQuestIds || []) }};
       return activeJourney.batches.find((batch) => batch.id === selectedBatchId) || null;
     }}
 
@@ -5605,19 +5624,29 @@ def render_classic_html(records, chains, zones, continents):
 
     function applySelectedBatchLevel() {{
       const batch = selectedBatch();
-      if (!batch) return;
+      if (!batch || batch.id === "unused") {{
+        renderCurrentView();
+        return;
+      }}
       const level = computedBatchExpectedLevel(batch);
       applyLevelFilterValue(level ?? "all");
     }}
 
-    function selectJourneyBatch(batchId) {{
+    function selectJourneyBatch(batchId, options = {{}}) {{
       if (!activeJourney) return;
-      const batch = activeJourney.batches.find((item) => item.id === batchId);
+      if (selectedBatchId === batchId && options.toggle !== false) {{
+        deselectJourneyBatch();
+        return;
+      }}
+      const batch = batchId === "unused"
+        ? {{ id: "unused", name: "Unused" }}
+        : activeJourney.batches.find((item) => item.id === batchId);
       if (!batch) return;
       if (selectedBatchId == null) preBatchLevelValue = levelFilter.value;
       selectedBatchId = batch.id;
       renderJourney();
       applySelectedBatchLevel();
+      renderSelectionOverlays();
     }}
 
     function deselectJourneyBatch(options = {{}}) {{
@@ -5628,6 +5657,56 @@ def render_classic_html(records, chains, zones, continents):
       preBatchLevelValue = null;
       renderJourney();
       if (restoreLevel) applyLevelFilterValue(previousLevel || "all");
+      else renderSelectionOverlays();
+    }}
+
+    function sequencerTargetOrder() {{
+      if (!activeJourney) return [];
+      return [...activeJourney.batches.map((batch) => batch.id), "unused"];
+    }}
+
+    function moveSequencerSelection(delta) {{
+      const order = sequencerTargetOrder();
+      if (!order.length) return false;
+      let index = selectedBatchId == null ? -1 : order.findIndex((id) => id === selectedBatchId);
+      if (index < 0) index = delta > 0 ? -1 : order.length;
+      const nextIndex = Math.max(0, Math.min(order.length - 1, index + delta));
+      if (nextIndex === index) return false;
+      selectJourneyBatch(order[nextIndex], {{ toggle: false }});
+      const target = sequencerBoard.querySelector(`.journey-batch[data-batch-id="${{order[nextIndex]}}"]`);
+      target?.scrollIntoView({{ block: "nearest", inline: "center" }});
+      return true;
+    }}
+
+    function selectedCatalogueQuestIds() {{
+      if (selectedId != null) return [Number(selectedId)];
+      if (selectedChainId != null) {{
+        return selectedChainQuests().map((quest) => quest.id);
+      }}
+      return [];
+    }}
+
+    function placeSelectedCatalogueTarget() {{
+      if (!activeJourney) {{
+        showJourneyMessage("Create a Journey before adding quests.");
+        return false;
+      }}
+      if (selectedBatchId == null) {{
+        showJourneyMessage("Select a batch or the Unused column first.");
+        return false;
+      }}
+      const questIds = selectedCatalogueQuestIds();
+      if (!questIds.length) {{
+        showJourneyMessage("Select a quest or quest chain first.");
+        return false;
+      }}
+      if (selectedBatchId === "unused") return moveQuestIdsToUnused(questIds);
+      const targetIndex = activeJourney.batches.findIndex((batch) => batch.id === selectedBatchId);
+      if (targetIndex < 0) {{
+        showJourneyMessage("Select a valid batch first.");
+        return false;
+      }}
+      return moveQuestIdsToBatch(questIds, targetIndex);
     }}
 
     function showJourneyMessage(message, type = "error") {{
@@ -5658,44 +5737,68 @@ def render_classic_html(records, chains, zones, continents):
       return true;
     }}
 
-    function moveQuestToBatch(questId, targetBatchIndex) {{
+    function normalizeQuestIdList(questIds) {{
+      const ids = Array.isArray(questIds) ? questIds : [questIds];
+      return [...new Set(ids
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && questsById.has(id)))];
+    }}
+
+    function moveQuestIdsToBatch(questIds, targetBatchIndex, options = {{}}) {{
       if (!activeJourney) {{
         showJourneyMessage("Create a Journey before adding quests.");
         return false;
       }}
-      const quest = questsById.get(Number(questId));
-      const availability = questAllowedForJourney(quest);
-      if (!availability.ok) {{
-        showJourneyMessage(availability.message);
+      const ids = normalizeQuestIdList(questIds);
+      if (!ids.length) {{
+        showJourneyMessage("No quests selected.");
         return false;
       }}
       const candidate = cloneBatches();
-      const existingIndex = findQuestBatchIndex(questId, candidate);
-      if (existingIndex >= 0 && draggingJourneyQuestId == null) {{
-        showJourneyMessage(`${{quest.name}} is already in Batch ${{existingIndex + 1}}. Drag it from that batch to move it.`);
-        return false;
+      for (const questId of ids) {{
+        const quest = questsById.get(Number(questId));
+        const availability = questAllowedForJourney(quest);
+        if (!availability.ok) {{
+          showJourneyMessage(availability.message);
+          return false;
+        }}
+        const existingIndex = findQuestBatchIndex(questId, candidate);
+        if (existingIndex >= 0 && !options.moveExisting) {{
+          showJourneyMessage(`${{quest.name}} is already in Batch ${{existingIndex + 1}}. Drag it from that batch to move it.`);
+          return false;
+        }}
       }}
-      removeQuestFromBatchCopies(candidate, questId);
       const target = candidate[targetBatchIndex];
       if (!target) return false;
-      target.questIds.push(Number(questId));
-      const moved = commitJourneyBatches(candidate, `${{quest.name}} added to Batch ${{targetBatchIndex + 1}}.`);
+      ids.forEach((questId) => removeQuestFromBatchCopies(candidate, questId));
+      ids.forEach((questId) => {{
+        if (!target.questIds.some((item) => Number(item) === Number(questId))) target.questIds.push(Number(questId));
+      }});
+      const moved = commitJourneyBatches(candidate, `${{ids.length === 1 ? questsById.get(ids[0])?.name : `${{ids.length}} quests`}} added to Batch ${{targetBatchIndex + 1}}.`);
       if (moved) {{
-        activeJourney.unusedQuestIds = removeQuestFromUnusedCopies(activeJourney.unusedQuestIds, questId);
+        ids.forEach((questId) => {{
+          activeJourney.unusedQuestIds = removeQuestFromUnusedCopies(activeJourney.unusedQuestIds, questId);
+        }});
         renderJourney();
         renderCurrentView();
       }}
       return moved;
     }}
 
-    function insertBatchAt(insertIndex, questId = null) {{
+    function moveQuestToBatch(questId, targetBatchIndex) {{
+      return moveQuestIdsToBatch([questId], targetBatchIndex, {{ moveExisting: draggingJourneyQuestId != null }});
+    }}
+
+    function insertBatchAt(insertIndex, questIds = null) {{
       if (!activeJourney) {{
         showJourneyMessage("Create a Journey before adding batches.");
         return false;
       }}
       const candidate = cloneBatches();
       const batch = newBatch(String(insertIndex + 1), []);
-      if (questId != null) {{
+      const ids = questIds == null ? [] : normalizeQuestIdList(questIds);
+      if (ids.length) {{
+        for (const questId of ids) {{
         const quest = questsById.get(Number(questId));
         const availability = questAllowedForJourney(quest);
         if (!availability.ok) {{
@@ -5707,13 +5810,18 @@ def render_classic_html(records, chains, zones, continents):
           showJourneyMessage(`${{quest.name}} is already in Batch ${{existingIndex + 1}}. Drag it from that batch to move it.`);
           return false;
         }}
+        }}
+        ids.forEach((questId) => {{
         removeQuestFromBatchCopies(candidate, questId);
-        batch.questIds.push(Number(questId));
+          batch.questIds.push(Number(questId));
+        }});
       }}
       candidate.splice(insertIndex, 0, batch);
-      const inserted = commitJourneyBatches(candidate, questId == null ? `Batch ${{insertIndex + 1}} created.` : `Batch ${{insertIndex + 1}} created.`);
-      if (inserted && questId != null) {{
-        activeJourney.unusedQuestIds = removeQuestFromUnusedCopies(activeJourney.unusedQuestIds, questId);
+      const inserted = commitJourneyBatches(candidate, `Batch ${{insertIndex + 1}} created.`);
+      if (inserted && ids.length) {{
+        ids.forEach((questId) => {{
+          activeJourney.unusedQuestIds = removeQuestFromUnusedCopies(activeJourney.unusedQuestIds, questId);
+        }});
         renderJourney();
         renderCurrentView();
       }}
@@ -5737,33 +5845,39 @@ def render_classic_html(records, chains, zones, continents):
       showJourneyMessage(`${{quest?.name || questName(questId)}} removed from Journey.`, "ok");
     }}
 
-    function moveQuestToUnused(questId) {{
+    function moveQuestIdsToUnused(questIds) {{
       if (!activeJourney) {{
         showJourneyMessage("Create a Journey before marking quests Unused.");
         return false;
       }}
-      const quest = questsById.get(Number(questId));
-      if (!quest) {{
-        showJourneyMessage("Unknown quest.");
+      const ids = normalizeQuestIdList(questIds);
+      if (!ids.length) {{
+        showJourneyMessage("No quests selected.");
         return false;
       }}
       const candidate = cloneBatches();
-      removeQuestFromBatchCopies(candidate, questId);
+      ids.forEach((questId) => removeQuestFromBatchCopies(candidate, questId));
       const validation = validateJourneyBatches(candidate);
       if (!validation.ok) {{
-        showJourneyMessage(`Cannot mark ${{quest.name}} Unused. ${{validation.message}}`);
+        showJourneyMessage(`Cannot mark selected quests Unused. ${{validation.message}}`);
         return false;
       }}
       activeJourney.batches = candidate;
-      const unused = removeQuestFromUnusedCopies(activeJourney.unusedQuestIds, questId);
-      unused.push(Number(questId));
-      activeJourney.unusedQuestIds = unused;
+      let unused = cloneUnusedQuestIds(activeJourney.unusedQuestIds || []);
+      ids.forEach((questId) => {{
+        unused = removeQuestFromUnusedCopies(unused, questId);
+      }});
+      activeJourney.unusedQuestIds = [...ids, ...unused];
       renumberNumericBatches(activeJourney.batches);
       renderJourney();
       if (selectedBatchId != null) applySelectedBatchLevel();
       else renderCurrentView();
-      showJourneyMessage(`${{quest.name}} marked Unused.`, "ok");
+      showJourneyMessage(`${{ids.length === 1 ? questsById.get(ids[0])?.name : `${{ids.length}} quests`}} marked Unused.`, "ok");
       return true;
+    }}
+
+    function moveQuestToUnused(questId) {{
+      return moveQuestIdsToUnused([questId]);
     }}
 
     function restoreUnusedQuest(questId) {{
@@ -5933,6 +6047,9 @@ def render_classic_html(records, chains, zones, continents):
       selectedBatchId = null;
       preBatchLevelValue = null;
       forcedCatalogueChainId = null;
+      selectedChainId = null;
+      selectedId = null;
+      activeId = null;
       raceFilter.value = String(race.mask);
       classFilter.value = String(klass.mask);
       updateFiltersFromControls();
@@ -5953,25 +6070,52 @@ def render_classic_html(records, chains, zones, continents):
 
     function handleCatalogueDragStart(event) {{
       const questNode = event.target.closest(".quest-icon, .chain-quest-item");
-      if (!questNode || !chainList.contains(questNode)) return;
+      const chainNode = event.target.closest(".chain-row");
+      if (!questNode && (!chainNode || !chainList.contains(chainNode))) return;
       if (event.target.closest(".zone-link, .quest-wowhead-link")) {{
         event.preventDefault();
         return;
       }}
-      const quest = questsById.get(Number(questNode.dataset.questId));
-      if (!quest || !event.dataTransfer) return;
-      preDragAppMode = currentAppMode;
+      if (!event.dataTransfer) return;
       if (!activeJourney) {{
         if (currentAppMode === "map") setAppMode("sequencer");
         showJourneyMessage("Create a Journey before adding quests.");
         event.preventDefault();
         return;
       }}
+      if (!questNode && chainNode) {{
+        const chain = currentChains().find((item) => Number(item.id) === Number(chainNode.dataset.chainId));
+        const ids = (chain?.visibleQuests || []).map((quest) => quest.id);
+        if (!ids.length) {{
+          event.preventDefault();
+          return;
+        }}
+        preDragAppMode = currentAppMode;
+        draggingQuestIds = ids;
+        draggingQuestId = ids[0];
+        draggingChainId = chain.id;
+        draggingJourneyQuestId = null;
+        event.dataTransfer.effectAllowed = "copy";
+        event.dataTransfer.setData("text/plain", ids.join(","));
+        event.dataTransfer.setData("application/x-questieplus-quests", JSON.stringify(ids));
+        event.dataTransfer.setData("application/x-questieplus-chain", String(chain.id));
+        event.dataTransfer.setData("application/x-questieplus-source", "catalogue-chain");
+        chainNode.classList.add("dragging");
+        document.body.classList.add("dragging-quest");
+        if (currentAppMode === "map") setAppMode("sequencer");
+        return;
+      }}
+      const quest = questsById.get(Number(questNode.dataset.questId));
+      if (!quest) return;
+      preDragAppMode = currentAppMode;
       draggingQuestId = quest.id;
+      draggingQuestIds = [quest.id];
+      draggingChainId = null;
       draggingJourneyQuestId = null;
       event.dataTransfer.effectAllowed = "copy";
       event.dataTransfer.setData("text/plain", String(quest.id));
       event.dataTransfer.setData("application/x-questieplus-quest", String(quest.id));
+      event.dataTransfer.setData("application/x-questieplus-quests", JSON.stringify([quest.id]));
       event.dataTransfer.setData("application/x-questieplus-source", "catalogue");
       questNode.classList.add("dragging");
       document.body.classList.add("dragging-quest");
@@ -5989,21 +6133,26 @@ def render_classic_html(records, chains, zones, continents):
       if (!quest || !event.dataTransfer) return;
       preDragAppMode = currentAppMode;
       draggingQuestId = quest.id;
+      draggingQuestIds = [quest.id];
+      draggingChainId = null;
       draggingJourneyQuestId = quest.id;
       event.dataTransfer.effectAllowed = "move";
       event.dataTransfer.setData("text/plain", String(quest.id));
       event.dataTransfer.setData("application/x-questieplus-quest", String(quest.id));
+      event.dataTransfer.setData("application/x-questieplus-quests", JSON.stringify([quest.id]));
       event.dataTransfer.setData("application/x-questieplus-source", "journey");
       questNode.classList.add("dragging");
       document.body.classList.add("dragging-quest");
     }}
 
     function handleCatalogueDragEnd() {{
-      document.querySelectorAll(".quest-icon.dragging, .chain-quest-item.dragging, .journey-quest.dragging").forEach((element) => element.classList.remove("dragging"));
+      document.querySelectorAll(".chain-row.dragging, .quest-icon.dragging, .chain-quest-item.dragging, .journey-quest.dragging").forEach((element) => element.classList.remove("dragging"));
       document.body.classList.remove("dragging-quest");
       clearSequencerDragTargets();
       const shouldRestoreMap = preDragAppMode === "map";
       draggingQuestId = null;
+      draggingQuestIds = [];
+      draggingChainId = null;
       draggingJourneyQuestId = null;
       preDragAppMode = currentAppMode;
       if (shouldRestoreMap) setAppMode("map");
@@ -6018,7 +6167,7 @@ def render_classic_html(records, chains, zones, continents):
     }}
 
     function handleSequencerDragOver(event) {{
-      if (draggingQuestId == null) return;
+      if (draggingQuestId == null && !draggingQuestIds.length) return;
       const target = activeSequencerDropTarget(event);
       if (!target) return;
       event.preventDefault();
@@ -6035,20 +6184,25 @@ def render_classic_html(records, chains, zones, continents):
     }}
 
     function handleSequencerDrop(event) {{
-      if (draggingQuestId == null && !event.dataTransfer) return;
+      if (draggingQuestId == null && !draggingQuestIds.length && !event.dataTransfer) return;
       const target = activeSequencerDropTarget(event);
       if (!target) return;
       event.preventDefault();
+      const rawQuestIds = event.dataTransfer?.getData("application/x-questieplus-quests");
+      const parsedQuestIds = rawQuestIds
+        ? JSON.parse(rawQuestIds)
+        : [];
       const rawQuestId = event.dataTransfer?.getData("application/x-questieplus-quest")
         || event.dataTransfer?.getData("text/plain")
         || String(draggingQuestId ?? "");
+      const questIds = parsedQuestIds.length ? parsedQuestIds : normalizeQuestIdList(rawQuestId.split ? rawQuestId.split(",") : rawQuestId);
       clearSequencerDragTargets();
       if (target.classList.contains("journey-insert-target")) {{
-        insertBatchAt(Number(target.dataset.insertIndex), Number(rawQuestId));
+        insertBatchAt(Number(target.dataset.insertIndex), questIds);
       }} else if (target.classList.contains("journey-unused-drop")) {{
-        moveQuestToUnused(Number(rawQuestId));
+        moveQuestIdsToUnused(questIds);
       }} else {{
-        moveQuestToBatch(Number(rawQuestId), Number(target.dataset.batchIndex));
+        moveQuestIdsToBatch(questIds, Number(target.dataset.batchIndex), {{ moveExisting: draggingJourneyQuestId != null }});
       }}
     }}
 
@@ -6643,14 +6797,14 @@ def render_classic_html(records, chains, zones, continents):
       renderInventory();
       chainList.scrollTop = catalogueScrollTop;
       renderAvailablePickupMarkers();
-      const targetQuest = selectedId ? questsById.get(selectedId) : activeId ? questsById.get(activeId) : null;
-      if (targetQuest && visibleInInventory(targetQuest)) {{
-        activateQuest(targetQuest.id, false);
-      }} else {{
+      if (selectedId != null && !visibleInInventory(questsById.get(selectedId))) {{
         activeId = null;
         selectedId = null;
-        clearTarget();
       }}
+      if (selectedChainId != null && !currentChains().some((chain) => Number(chain.id) === Number(selectedChainId))) {{
+        selectedChainId = null;
+      }}
+      refreshSelectionState();
       scheduleMapFit();
     }}
 
@@ -6661,8 +6815,11 @@ def render_classic_html(records, chains, zones, continents):
       ));
     }}
 
-    function catalogueQuestOrder() {{
-      return currentChains().flatMap((chain) => chain.visibleQuests);
+    function catalogueSelectionOrder() {{
+      return currentChains().flatMap((chain) => [
+        {{ type: "chain", id: chain.id }},
+        ...chain.visibleQuests.map((quest) => ({{ type: "quest", id: quest.id, chainId: chain.id }})),
+      ]);
     }}
 
     function canUseCatalogueArrowKeys(target) {{
@@ -6670,6 +6827,21 @@ def render_classic_html(records, chains, zones, continents):
       if (!element) return true;
       if (element.closest("input, textarea, select, [contenteditable='true']")) return false;
       return Boolean(element.closest("#chain-list") || element.closest(".map-frame") || element === document.body);
+    }}
+
+    function canUseSequencerKeys(target) {{
+      const element = target instanceof Element ? target : null;
+      if (!element) return true;
+      if (element.closest("input, textarea, select, [contenteditable='true']")) return false;
+      return Boolean(element.closest("#sequencer-board") || element.closest(".map-frame") || element.closest("#chain-list") || element === document.body);
+    }}
+
+    function canUseEnterPlacement(target) {{
+      const element = target instanceof Element ? target : null;
+      if (!element) return true;
+      if (element.closest("input, textarea, select, [contenteditable='true']")) return false;
+      if (element.closest(".zone-link, .quest-wowhead-link, .pickup-choice-item, .journey-quest-remove, .journey-quest-unhide, .journey-insert-target")) return false;
+      return Boolean(element.closest("#chain-list") || element.closest("#sequencer-board") || element.closest(".map-frame") || element === document.body);
     }}
 
     function scrollQuestIntoCatalogueView(id) {{
@@ -6694,17 +6866,38 @@ def render_classic_html(records, chains, zones, continents):
       }}
     }}
 
+    function focusCatalogueChain(chainId) {{
+      const target = document.querySelector(`.chain-row[data-chain-id="${{chainId}}"]`);
+      try {{
+        target?.focus({{ preventScroll: true }});
+      }} catch {{
+        target?.focus();
+      }}
+    }}
+
     function moveCatalogueSelection(delta) {{
-      const order = catalogueQuestOrder();
+      const order = catalogueSelectionOrder();
       if (!order.length) return false;
-      const currentId = selectedId ?? activeId;
-      let index = order.findIndex((quest) => quest.id === currentId);
+      const current = selectedId != null
+        ? {{ type: "quest", id: selectedId }}
+        : selectedChainId != null
+          ? {{ type: "chain", id: selectedChainId }}
+          : activeId != null
+            ? {{ type: "quest", id: activeId }}
+            : null;
+      let index = current
+        ? order.findIndex((item) => item.type === current.type && item.id === current.id)
+        : -1;
       if (index < 0) index = delta > 0 ? -1 : order.length;
       const nextIndex = Math.max(0, Math.min(order.length - 1, index + delta));
       if (nextIndex === index) return false;
-      const nextQuest = order[nextIndex];
-      if (!nextQuest) return false;
-      selectQuest(nextQuest.id, {{ scrollQuestIntoView: true, focusQuest: true }});
+      const nextItem = order[nextIndex];
+      if (!nextItem) return false;
+      if (nextItem.type === "chain") {{
+        selectCatalogueChain(nextItem.id, {{ scrollChainIntoView: true, focusChain: true, toggle: false }});
+      }} else {{
+        selectQuest(nextItem.id, {{ scrollQuestIntoView: true, focusQuest: true, toggle: false }});
+      }}
       return true;
     }}
 
@@ -6718,7 +6911,7 @@ def render_classic_html(records, chains, zones, continents):
     function clearTarget() {{
       highlightLayer.innerHTML = "";
       closePickupQuestList();
-      document.querySelectorAll(".quest-icon.active, .quest-icon.selected, .chain-row.active, .map-marker.active, .map-marker.selected, .chain-quest-item.active, .chain-quest-item.selected, .journey-quest.active, .journey-quest.selected").forEach((element) => {{
+      document.querySelectorAll(".quest-icon.active, .quest-icon.selected, .chain-row.active, .chain-row.selected, .map-marker.active, .map-marker.selected, .chain-quest-item.active, .chain-quest-item.selected, .journey-quest.active, .journey-quest.selected").forEach((element) => {{
         element.classList.remove("active", "selected");
       }});
       if (!details) return;
@@ -6839,19 +7032,22 @@ def render_classic_html(records, chains, zones, continents):
         const row = document.createElement("section");
         row.className = "chain-row";
         if (isExpanded) row.classList.add("expanded");
+        if (selectedChainId === chain.id) row.classList.add("selected");
         row.dataset.chainId = chain.id;
+        row.draggable = true;
         row.tabIndex = 0;
         row.setAttribute("aria-expanded", String(isExpanded));
+        row.setAttribute("aria-pressed", String(selectedChainId === chain.id));
         row.style.setProperty("--chain-color", chain.color);
         row.addEventListener("click", (event) => {{
           if (event.target.closest(".quest-icon, .chain-quest-item")) return;
-          toggleChainExpanded(chain.id);
+          selectCatalogueChain(chain.id);
         }});
         row.addEventListener("keydown", (event) => {{
-          if (event.key !== "Enter" && event.key !== " ") return;
+          if (event.key !== " ") return;
           if (event.target !== row) return;
           event.preventDefault();
-          toggleChainExpanded(chain.id);
+          selectCatalogueChain(chain.id);
         }});
 
         const meta = document.createElement("div");
@@ -6905,22 +7101,19 @@ def render_classic_html(records, chains, zones, continents):
         expandedChainIds.add(chainId);
       }}
       renderInventory();
-      const targetQuest = selectedId ? questsById.get(selectedId) : activeId ? questsById.get(activeId) : null;
-      if (targetQuest && visibleInInventory(targetQuest)) activateQuest(targetQuest.id, false);
+      refreshSelectionState();
     }}
 
     function collapseAllChains() {{
       currentChains().forEach((chain) => expandedChainIds.delete(chain.id));
       renderInventory();
-      const targetQuest = selectedId ? questsById.get(selectedId) : activeId ? questsById.get(activeId) : null;
-      if (targetQuest && visibleInInventory(targetQuest)) activateQuest(targetQuest.id, false);
+      refreshSelectionState();
     }}
 
     function expandAllChains() {{
       currentChains().forEach((chain) => expandedChainIds.add(chain.id));
       renderInventory();
-      const targetQuest = selectedId ? questsById.get(selectedId) : activeId ? questsById.get(activeId) : null;
-      if (targetQuest && visibleInInventory(targetQuest)) activateQuest(targetQuest.id, false);
+      refreshSelectionState();
     }}
 
     function createQuestIcon(quest) {{
@@ -6978,7 +7171,7 @@ def render_classic_html(records, chains, zones, continents):
       }});
       item.addEventListener("keydown", (event) => {{
         if (event.target.closest(".zone-link, .quest-wowhead-link")) return;
-        if (event.key !== "Enter" && event.key !== " ") return;
+        if (event.key !== " ") return;
         event.preventDefault();
         selectQuest(quest.id);
       }});
@@ -7626,9 +7819,54 @@ def render_classic_html(records, chains, zones, continents):
       positionPickupPopover(popover, group);
     }}
 
+    function chainForId(chainId) {{
+      return currentChains().find((chain) => Number(chain.id) === Number(chainId)) || chainsById.get(Number(chainId)) || null;
+    }}
+
+    function deselectCatalogueTarget(options = {{}}) {{
+      const hadSelection = selectedId != null || selectedChainId != null || activeId != null;
+      selectedId = null;
+      activeId = null;
+      selectedChainId = null;
+      if (options.renderInventory !== false) renderInventory();
+      refreshSelectionState();
+      return hadSelection;
+    }}
+
+    function selectCatalogueChain(chainId, options = {{}}) {{
+      const chain = chainForId(chainId);
+      if (!chain) return;
+      if (selectedChainId === chain.id && options.toggle !== false) {{
+        deselectCatalogueTarget();
+        return;
+      }}
+      selectedChainId = chain.id;
+      selectedId = null;
+      activeId = null;
+      expandedChainIds.add(chain.id);
+      const previousScrollTop = chainList.scrollTop;
+      renderInventory();
+      if (options.scrollChainIntoView) {{
+        scrollChainIntoCatalogueView(chain.id);
+      }} else if (options.scrollChainToTop) {{
+        scrollChainToTop(chain.id);
+      }} else {{
+        chainList.scrollTop = previousScrollTop;
+      }}
+      if (options.focusChain) focusCatalogueChain(chain.id);
+      refreshSelectionState();
+    }}
+
     function selectQuest(id, options = {{}}) {{
-      selectedId = id;
       const quest = questsById.get(id);
+      if (!quest) return;
+      if (selectedId === id && options.toggle !== false) {{
+        deselectCatalogueTarget();
+        return;
+      }}
+      selectedId = id;
+      activeId = id;
+      selectedChainId = null;
       if (quest) {{
         const previousScrollTop = chainList.scrollTop;
         expandedChainIds.add(quest.chainId);
@@ -7650,7 +7888,7 @@ def render_classic_html(records, chains, zones, continents):
       if (!quest) return;
       forcedCatalogueChainId = quest.chainId;
       expandedChainIds.add(quest.chainId);
-      selectQuest(quest.id, {{ scrollChainToTop: true, focusQuest: true }});
+      selectQuest(quest.id, {{ scrollChainToTop: true, focusQuest: true, toggle: false }});
       showJourneyMessage(`Showing ${{quest.chainName}} in the Quest Catalogue.`, "ok");
     }}
 
@@ -7662,50 +7900,109 @@ def render_classic_html(records, chains, zones, continents):
       chainList.scrollTop += rowRect.top - listRect.top - 8;
     }}
 
+    function scrollChainIntoCatalogueView(chainId) {{
+      const row = document.querySelector(`.chain-row[data-chain-id="${{chainId}}"]`);
+      if (!row) return;
+      const listRect = chainList.getBoundingClientRect();
+      const rowRect = row.getBoundingClientRect();
+      const margin = 14;
+      if (rowRect.top < listRect.top + margin) {{
+        chainList.scrollTop += rowRect.top - listRect.top - margin;
+      }} else if (rowRect.bottom > listRect.bottom - margin) {{
+        chainList.scrollTop += rowRect.bottom - listRect.bottom + margin;
+      }}
+    }}
+
+    function selectedChainQuests() {{
+      if (selectedChainId == null) return [];
+      const chain = currentChains().find((item) => Number(item.id) === Number(selectedChainId)) || chainsById.get(Number(selectedChainId));
+      return (chain?.visibleQuests || chain?.quests || []).filter(Boolean);
+    }}
+
+    function selectedBatchQuests() {{
+      if (!activeJourney || selectedBatchId == null) return [];
+      if (selectedBatchId === "unused") {{
+        return cloneUnusedQuestIds(activeJourney.unusedQuestIds || [])
+          .map((questId) => questsById.get(Number(questId)))
+          .filter(Boolean);
+      }}
+      const batch = selectedBatch();
+      return batchQuests(batch);
+    }}
+
+    function selectedOverlayQuests() {{
+      const quests = new Map();
+      selectedBatchQuests().forEach((quest) => quests.set(quest.id, quest));
+      selectedChainQuests().forEach((quest) => quests.set(quest.id, quest));
+      const selectedQuest = selectedId != null ? questsById.get(Number(selectedId)) : null;
+      if (selectedQuest) quests.set(selectedQuest.id, selectedQuest);
+      return [...quests.values()];
+    }}
+
+    function refreshSelectionState() {{
+      const overlayQuestIds = new Set(selectedOverlayQuests().map((quest) => quest.id));
+      document.querySelectorAll(".quest-icon").forEach((icon) => {{
+        const questId = Number(icon.dataset.questId);
+        icon.classList.toggle("active", activeId === questId || overlayQuestIds.has(questId));
+        icon.classList.toggle("selected", selectedId !== null && questId === selectedId);
+      }});
+      document.querySelectorAll(".chain-quest-item").forEach((item) => {{
+        const questId = Number(item.dataset.questId);
+        item.classList.toggle("active", activeId === questId || overlayQuestIds.has(questId));
+        item.classList.toggle("selected", selectedId !== null && questId === selectedId);
+      }});
+      document.querySelectorAll(".journey-quest").forEach((item) => {{
+        const questId = Number(item.dataset.questId);
+        item.classList.toggle("active", activeId === questId || overlayQuestIds.has(questId));
+        item.classList.toggle("selected", selectedId !== null && questId === selectedId);
+      }});
+      document.querySelectorAll(".chain-row").forEach((row) => {{
+        const chainId = Number(row.dataset.chainId);
+        const activeQuest = activeId != null ? questsById.get(Number(activeId)) : null;
+        row.classList.toggle("active", selectedChainId === chainId || activeQuest?.chainId === chainId);
+        row.classList.toggle("selected", selectedChainId === chainId);
+        row.setAttribute("aria-pressed", String(selectedChainId === chainId));
+      }});
+      document.querySelectorAll(".map-marker").forEach((marker) => {{
+        const questId = Number(marker.dataset.questId);
+        const questIds = marker.dataset.questIds || `|${{questId}}|`;
+        const active = [...overlayQuestIds].some((id) => questIds.includes(`|${{id}}|`));
+        marker.classList.toggle("active", active);
+        marker.classList.toggle("selected", selectedId !== null && questIds.includes(`|${{selectedId}}|`));
+      }});
+      renderSelectionOverlays();
+    }}
+
     function activateQuest(id, scrollIntoView = true) {{
       activeId = id;
       const quest = questsById.get(id);
       if (!quest) return;
 
-      document.querySelectorAll(".quest-icon").forEach((icon) => {{
-        const questId = Number(icon.dataset.questId);
-        icon.classList.toggle("active", questId === id);
-        icon.classList.toggle("selected", selectedId !== null && questId === selectedId);
-      }});
-      document.querySelectorAll(".chain-quest-item").forEach((item) => {{
-        const questId = Number(item.dataset.questId);
-        item.classList.toggle("active", questId === id);
-        item.classList.toggle("selected", selectedId !== null && questId === selectedId);
-      }});
-      document.querySelectorAll(".journey-quest").forEach((item) => {{
-        const questId = Number(item.dataset.questId);
-        item.classList.toggle("active", questId === id);
-        item.classList.toggle("selected", selectedId !== null && questId === selectedId);
-      }});
-      document.querySelectorAll(".chain-row").forEach((row) => {{
-        row.classList.toggle("active", Number(row.dataset.chainId) === quest.chainId);
-      }});
-      document.querySelectorAll(".map-marker").forEach((marker) => {{
-        const questId = Number(marker.dataset.questId);
-        const questIds = marker.dataset.questIds || `|${{questId}}|`;
-        marker.classList.toggle("active", questIds.includes(`|${{id}}|`));
-        marker.classList.toggle("selected", selectedId !== null && questIds.includes(`|${{selectedId}}|`));
-      }});
+      refreshSelectionState();
       if (scrollIntoView) {{
         const target = document.querySelector(`.chain-quest-item[data-quest-id="${{id}}"]`) || document.querySelector(`.quest-icon[data-quest-id="${{id}}"]`);
         target?.scrollIntoView({{ block: "start", inline: "nearest" }});
       }}
-      renderOverlay(quest);
       renderDetails(quest);
     }}
 
-    function renderOverlay(quest) {{
+    function renderSelectionOverlays() {{
       highlightLayer.innerHTML = "";
-      highlightLayer.style.setProperty("--chain-color", questObjectiveColor(quest));
+      const quests = selectedOverlayQuests();
+      const forcePickupPins = selectedBatchId != null || selectedChainId != null;
+      quests.forEach((quest) => renderOverlay(quest, {{ append: true, forcePickupPins }}));
+    }}
+
+    function renderOverlay(quest, options = {{}}) {{
+      if (!options.append) highlightLayer.innerHTML = "";
+      const color = questObjectiveColor(quest);
+      highlightLayer.style.setProperty("--chain-color", color);
       const objectivePoints = relevantPoints(quest.objectivePoints);
-      renderObjectiveLayer(objectivePoints);
+      renderObjectiveLayer(objectivePoints, color);
       const startPoints = relevantPoints(quest.startPoints);
-      if (startPoints.length > 1) {{
+      if (options.forcePickupPins) {{
+        renderPins(startPoints, "pickup", "!", "Quest pickup");
+      }} else if (startPoints.length > 1) {{
         renderPickupDots(startPoints);
       }} else if (!displayFilters.has("available-pickups")) {{
         renderPins(startPoints, "pickup", "!", "Quest pickup");
@@ -7717,7 +8014,7 @@ def render_classic_html(records, chains, zones, continents):
       return points.map(viewPoint).filter(Boolean);
     }}
 
-    function renderObjectiveLayer(points) {{
+    function renderObjectiveLayer(points, color = null) {{
       if (points.length) {{
         const bounds = points.reduce((box, point) => {{
           box.minX = Math.min(box.minX, point.x);
@@ -7732,6 +8029,7 @@ def render_classic_html(records, chains, zones, continents):
           const pad = points.length === 1 ? 4 : 2.8;
           const area = document.createElement("div");
           area.className = "objective-area";
+          if (color) area.style.setProperty("--chain-color", color);
           area.style.left = `${{(bounds.minX + bounds.maxX) / 2}}%`;
           area.style.top = `${{(bounds.minY + bounds.maxY) / 2}}%`;
           area.style.width = `${{Math.max(5, spreadX + pad * 2)}}%`;
@@ -7742,6 +8040,7 @@ def render_classic_html(records, chains, zones, continents):
       points.forEach((point) => {{
         const dot = document.createElement("div");
         dot.className = "objective-dot";
+        if (color) dot.style.setProperty("--chain-color", color);
         dot.style.left = `${{point.x}}%`;
         dot.style.top = `${{point.y}}%`;
         highlightLayer.append(dot);
@@ -7901,12 +8200,27 @@ def render_classic_html(records, chains, zones, continents):
       }}
       const questNode = event.target.closest(".journey-quest");
       if (questNode) {{
-        openJourneyQuestInCatalogue(Number(questNode.dataset.questId));
+        const questId = Number(questNode.dataset.questId);
+        if (selectedId === questId) {{
+          deselectCatalogueTarget();
+        }} else {{
+          openJourneyQuestInCatalogue(questId);
+        }}
         return;
       }}
       const batchHead = event.target.closest(".journey-batch-head");
       if (batchHead) {{
-        selectJourneyBatch(batchHead.dataset.batchId);
+        const batchId = batchHead.dataset.batchId;
+        if (event.target.matches("input.batch-name-input, input.batch-level-input")) {{
+          if (selectedBatchId !== batchId) selectJourneyBatch(batchId, {{ toggle: false }});
+          return;
+        }}
+        selectJourneyBatch(batchId);
+        return;
+      }}
+      const batchColumn = event.target.closest(".journey-batch");
+      if (batchColumn) {{
+        selectJourneyBatch(batchColumn.dataset.batchId);
       }}
     }});
     sequencerPanel.addEventListener("click", (event) => {{
@@ -7963,10 +8277,28 @@ def render_classic_html(records, chains, zones, continents):
       }}
     }});
     document.addEventListener("keydown", (event) => {{
-      if ((event.key === "ArrowDown" || event.key === "ArrowUp") && canUseCatalogueArrowKeys(event.target)) {{
-        if (moveCatalogueSelection(event.key === "ArrowDown" ? 1 : -1)) {{
+      const key = event.key.toLowerCase();
+      if ((event.key === "Enter" || event.code === "NumpadEnter") && canUseEnterPlacement(event.target)) {{
+        if (placeSelectedCatalogueTarget()) {{
           event.preventDefault();
           closePickupQuestList();
+          return;
+        }}
+      }}
+      if ((event.key === "ArrowDown" || key === "s" || event.key === "ArrowUp" || key === "w") && canUseCatalogueArrowKeys(event.target)) {{
+        const direction = event.key === "ArrowDown" || key === "s" ? 1 : -1;
+        if (moveCatalogueSelection(direction)) {{
+          event.preventDefault();
+          closePickupQuestList();
+          return;
+        }}
+      }}
+      if ((event.key === "ArrowRight" || key === "d" || event.key === "ArrowLeft" || key === "a") && canUseSequencerKeys(event.target)) {{
+        const direction = event.key === "ArrowRight" || key === "d" ? 1 : -1;
+        if (moveSequencerSelection(direction)) {{
+          event.preventDefault();
+          closePickupQuestList();
+          return;
         }}
       }}
       if (event.key === "Escape") {{
@@ -7975,6 +8307,16 @@ def render_classic_html(records, chains, zones, continents):
         setDisplayFilterMenuOpen(false);
         setOptionsFilterMenuOpen(false);
         closePickupQuestList();
+        if (selectedId != null || selectedChainId != null || activeId != null) {{
+          deselectCatalogueTarget();
+          event.preventDefault();
+          return;
+        }}
+        if (selectedBatchId != null) {{
+          deselectJourneyBatch();
+          event.preventDefault();
+          return;
+        }}
       }}
     }});
 
