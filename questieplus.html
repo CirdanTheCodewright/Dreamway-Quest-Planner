@@ -45,9 +45,25 @@
     header {
       min-height: 42px;
       display: grid;
-      grid-template-columns: auto minmax(320px, 1fr) auto;
+      grid-template-columns: minmax(0, 1fr) minmax(380px, 25vw);
       align-items: center;
-      gap: 12px;
+      gap: 10px;
+    }
+
+    .header-main {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .header-side {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
     }
 
     h1 {
@@ -125,7 +141,25 @@
       cursor: pointer;
     }
 
+    .options-filter-button {
+      min-height: 34px;
+      padding: 0 12px;
+      border: 1px solid rgba(255, 235, 196, 0.24);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.07);
+      color: #fff0ce;
+      font: inherit;
+      font-size: 0.88rem;
+      cursor: pointer;
+    }
+
     .toolbar button.active {
+      border-color: var(--gold);
+      background: rgba(255, 211, 79, 0.16);
+      color: #fff8dc;
+    }
+
+    .options-filter-button.active {
       border-color: var(--gold);
       background: rgba(255, 211, 79, 0.16);
       color: #fff8dc;
@@ -156,13 +190,15 @@
 
     .quest-filter-wrap,
     .zone-filter-wrap,
-    .display-filter-wrap {
+    .display-filter-wrap,
+    .options-filter-wrap {
       position: relative;
     }
 
     .quest-filter-button,
     .zone-filter-button,
-    .display-filter-button {
+    .display-filter-button,
+    .options-filter-button {
       display: inline-flex;
       align-items: center;
       gap: 8px;
@@ -171,7 +207,8 @@
 
     .quest-filter-button .filter-count,
     .zone-filter-button .filter-count,
-    .display-filter-button .filter-count {
+    .display-filter-button .filter-count,
+    .options-filter-button .filter-count {
       display: inline-grid;
       place-items: center;
       min-width: 18px;
@@ -186,11 +223,13 @@
 
     .quest-filter-menu,
     .zone-filter-menu,
-    .display-filter-menu {
+    .display-filter-menu,
+    .options-filter-menu {
       position: absolute;
       z-index: 80;
       top: calc(100% + 7px);
-      right: 0;
+      left: 0;
+      right: auto;
       width: 280px;
       max-height: min(520px, calc(100vh - 84px));
       overflow: auto;
@@ -203,7 +242,8 @@
 
     .quest-filter-menu[hidden],
     .zone-filter-menu[hidden],
-    .display-filter-menu[hidden] {
+    .display-filter-menu[hidden],
+    .options-filter-menu[hidden] {
       display: none;
     }
 
@@ -213,7 +253,8 @@
 
     .quest-filter-title,
     .zone-filter-title,
-    .display-filter-title {
+    .display-filter-title,
+    .options-filter-title {
       padding: 4px 6px 8px;
       margin-bottom: 5px;
       border-bottom: 1px solid rgba(255, 235, 196, 0.14);
@@ -536,6 +577,12 @@
       box-shadow: inset 0 0 0 1px rgba(255, 211, 79, 0.42), 0 0 22px rgba(255, 211, 79, 0.12);
     }
 
+    .journey-batch.unused {
+      border-color: rgba(234, 83, 83, 0.68);
+      background: rgba(76, 13, 13, 0.28);
+      box-shadow: inset 0 0 0 1px rgba(255, 116, 116, 0.18);
+    }
+
     .journey-batch-head {
       display: grid;
       gap: 6px;
@@ -547,6 +594,12 @@
 
     .journey-batch.selected .journey-batch-head {
       background: rgba(255, 211, 79, 0.1);
+    }
+
+    .journey-batch.unused .journey-batch-head {
+      border-bottom-color: rgba(255, 116, 116, 0.24);
+      background: rgba(129, 24, 24, 0.34);
+      cursor: default;
     }
 
     .batch-title-row {
@@ -607,6 +660,11 @@
       box-shadow: inset 0 0 0 2px rgba(255, 211, 79, 0.36);
     }
 
+    .journey-batch.unused .journey-batch-drop.drag-over {
+      background: rgba(234, 83, 83, 0.12);
+      box-shadow: inset 0 0 0 2px rgba(255, 116, 116, 0.5);
+    }
+
     .batch-empty {
       display: grid;
       place-items: center;
@@ -649,7 +707,7 @@
 
     .journey-quest {
       display: grid;
-      grid-template-columns: 26px minmax(0, 1fr) auto 22px;
+      grid-template-columns: 26px minmax(0, 1fr) auto minmax(22px, auto);
       align-items: center;
       gap: 8px;
       min-height: 38px;
@@ -658,6 +716,11 @@
       border: 1px solid rgba(255, 235, 196, 0.14);
       background: rgba(255, 255, 255, 0.06);
       cursor: grab;
+    }
+
+    .journey-quest.unused {
+      border-color: rgba(255, 116, 116, 0.2);
+      background: rgba(255, 116, 116, 0.08);
     }
 
     .journey-quest.dragging {
@@ -702,11 +765,13 @@
       white-space: nowrap;
     }
 
-    .journey-quest-remove {
+    .journey-quest-remove,
+    .journey-quest-unhide {
       display: grid;
       place-items: center;
-      width: 21px;
+      min-width: 21px;
       height: 21px;
+      padding: 0 7px;
       border: 0;
       border-radius: 999px;
       background: rgba(112, 20, 20, 0.68);
@@ -715,6 +780,14 @@
       font-weight: 900;
       line-height: 1;
       cursor: pointer;
+    }
+
+    .journey-quest-unhide {
+      background: rgba(255, 211, 79, 0.16);
+      color: #ffe28a;
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0;
     }
 
     .journey-quest-remove:hover,
@@ -1786,39 +1859,49 @@
 <body>
   <main>
     <header>
-      <h1 class="brand"><span class="brand-questie">Questie</span><span class="brand-plus">Plus</span></h1>
-      <div class="toolbar">
-        <div class="view-toggle" role="group" aria-label="Workspace view">
-          <button type="button" id="map-view-button" class="active" aria-pressed="true">Map</button>
-          <button type="button" id="sequencer-view-button" aria-pressed="false">Sequencer</button>
-        </div>
-        <button type="button" id="world-button">World</button>
-        <select id="zone-select" aria-label="Zone"></select>
-        <span class="toolbar-separator" aria-hidden="true"></span>
-        <select id="race-filter" class="filter-select" aria-label="Race"></select>
-        <select id="class-filter" class="filter-select" aria-label="Class"></select>
-        <select id="level-filter" class="filter-select level-select" aria-label="Current level"></select>
-        <span class="toolbar-separator" aria-hidden="true"></span>
-        <div class="quest-filter-wrap" id="quest-filter-wrap">
-          <button type="button" id="quest-filter-button" class="quest-filter-button" aria-expanded="false" aria-controls="quest-filter-menu">
-            Quest filter <span class="filter-count" id="quest-filter-count"></span>
-          </button>
-          <div class="quest-filter-menu" id="quest-filter-menu" hidden></div>
-        </div>
-        <div class="zone-filter-wrap" id="zone-filter-wrap">
-          <button type="button" id="zone-filter-button" class="zone-filter-button" aria-expanded="false" aria-controls="zone-filter-menu">
-            Zone filter <span class="filter-count" id="zone-filter-count"></span>
-          </button>
-          <div class="zone-filter-menu" id="zone-filter-menu" hidden></div>
-        </div>
-        <div class="display-filter-wrap" id="display-filter-wrap">
-          <button type="button" id="display-filter-button" class="display-filter-button" aria-expanded="false" aria-controls="display-filter-menu">
-            Display <span class="filter-count" id="display-filter-count"></span>
-          </button>
-          <div class="display-filter-menu" id="display-filter-menu" hidden></div>
+      <div class="header-main">
+        <h1 class="brand"><span class="brand-questie">Questie</span><span class="brand-plus">Plus</span></h1>
+        <div class="toolbar">
+          <div class="view-toggle" role="group" aria-label="Workspace view">
+            <button type="button" id="map-view-button" class="active" aria-pressed="true">Map</button>
+            <button type="button" id="sequencer-view-button" aria-pressed="false">Sequencer</button>
+          </div>
+          <button type="button" id="world-button">World</button>
+          <select id="zone-select" aria-label="Zone"></select>
+          <span class="toolbar-separator" aria-hidden="true"></span>
+          <select id="race-filter" class="filter-select" aria-label="Race"></select>
+          <select id="class-filter" class="filter-select" aria-label="Class"></select>
+          <select id="level-filter" class="filter-select level-select" aria-label="Current level"></select>
+          <span class="toolbar-separator" aria-hidden="true"></span>
+          <div class="quest-filter-wrap" id="quest-filter-wrap">
+            <button type="button" id="quest-filter-button" class="quest-filter-button" aria-expanded="false" aria-controls="quest-filter-menu">
+              Quest filter <span class="filter-count" id="quest-filter-count"></span>
+            </button>
+            <div class="quest-filter-menu" id="quest-filter-menu" hidden></div>
+          </div>
+          <div class="zone-filter-wrap" id="zone-filter-wrap">
+            <button type="button" id="zone-filter-button" class="zone-filter-button" aria-expanded="false" aria-controls="zone-filter-menu">
+              Zone filter <span class="filter-count" id="zone-filter-count"></span>
+            </button>
+            <div class="zone-filter-menu" id="zone-filter-menu" hidden></div>
+          </div>
+          <div class="display-filter-wrap" id="display-filter-wrap">
+            <button type="button" id="display-filter-button" class="display-filter-button" aria-expanded="false" aria-controls="display-filter-menu">
+              Display <span class="filter-count" id="display-filter-count"></span>
+            </button>
+            <div class="display-filter-menu" id="display-filter-menu" hidden></div>
+          </div>
         </div>
       </div>
-      <div class="count">4243 quests - 46 zone maps</div>
+      <div class="header-side">
+        <div class="options-filter-wrap" id="options-filter-wrap">
+          <button type="button" id="options-filter-button" class="options-filter-button" aria-expanded="false" aria-controls="options-filter-menu">
+            Options <span class="filter-count" id="options-filter-count"></span>
+          </button>
+          <div class="options-filter-menu" id="options-filter-menu" hidden></div>
+        </div>
+        <div class="count">4243 quests - 46 zone maps</div>
+      </div>
     </header>
     <section class="workbench">
       <section class="map-frame" aria-label="Quest map">
@@ -1925,6 +2008,11 @@
       { id: "quest-handins", label: "All quest hand-ins", defaultEnabled: false },
     ];
     const displayFilters = new Set(DISPLAY_FILTERS.filter((filter) => filter.defaultEnabled).map((filter) => filter.id));
+    const CATALOGUE_OPTIONS = [
+      { id: "show-unused", label: "Show Unused quests", defaultEnabled: false },
+      { id: "show-assigned", label: "Show Assigned quests", defaultEnabled: true },
+    ];
+    const catalogueOptions = new Set(CATALOGUE_OPTIONS.filter((option) => option.defaultEnabled).map((option) => option.id));
     const questsById = new Map(DATA.quests.map((quest) => [quest.id, quest]));
     const zonesById = new Map(DATA.zones.map((zone) => [zone.id, zone]));
     const zonesByName = new Map(DATA.zones.map((zone) => [zone.name, zone]));
@@ -1964,6 +2052,10 @@
     const displayFilterButton = document.querySelector("#display-filter-button");
     const displayFilterCount = document.querySelector("#display-filter-count");
     const displayFilterMenu = document.querySelector("#display-filter-menu");
+    const optionsFilterWrap = document.querySelector("#options-filter-wrap");
+    const optionsFilterButton = document.querySelector("#options-filter-button");
+    const optionsFilterCount = document.querySelector("#options-filter-count");
+    const optionsFilterMenu = document.querySelector("#options-filter-menu");
     const mapViewButton = document.querySelector("#map-view-button");
     const sequencerViewButton = document.querySelector("#sequencer-view-button");
     const mapFrame = document.querySelector(".map-frame");
@@ -2112,6 +2204,7 @@
         class: klass.label,
         classMask: klass.mask,
         batches: [newBatch("1")],
+        unusedQuestIds: [],
       };
       selectedBatchId = null;
       preBatchLevelValue = null;
@@ -2136,6 +2229,12 @@
         questIds: [...batch.questIds],
         expectedLevelOverride: batch.expectedLevelOverride == null ? null : Number(batch.expectedLevelOverride),
       }));
+    }
+
+    function cloneUnusedQuestIds(ids = activeJourney?.unusedQuestIds || []) {
+      return [...new Set((ids || [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && questsById.has(id)))];
     }
 
     function batchQuests(batch) {
@@ -2185,6 +2284,14 @@
       return ids;
     }
 
+    function assignedJourneyQuestIds() {
+      return allJourneyQuestIds();
+    }
+
+    function unusedJourneyQuestIds() {
+      return new Set(cloneUnusedQuestIds(activeJourney?.unusedQuestIds || []));
+    }
+
     function findQuestBatchIndex(questId, batches = activeJourney?.batches || []) {
       const id = Number(questId);
       return batches.findIndex((batch) => batch.questIds.some((item) => Number(item) === id));
@@ -2195,6 +2302,11 @@
       batches.forEach((batch) => {
         batch.questIds = batch.questIds.filter((item) => Number(item) !== id);
       });
+    }
+
+    function removeQuestFromUnusedCopies(unusedQuestIds, questId) {
+      const id = Number(questId);
+      return cloneUnusedQuestIds(unusedQuestIds).filter((item) => Number(item) !== id);
     }
 
     function questAllowedForJourney(quest) {
@@ -2281,6 +2393,7 @@
         sequencerBoard.append(createJourneyBatchElement(batch, index));
         sequencerBoard.append(createJourneyInsertElement(index + 1));
       });
+      sequencerBoard.append(createUnusedColumnElement());
     }
 
     function createJourneyBatchElement(batch, index) {
@@ -2327,6 +2440,36 @@
       return batchEl;
     }
 
+    function createUnusedColumnElement() {
+      const unusedIds = cloneUnusedQuestIds(activeJourney?.unusedQuestIds || []);
+      const batchEl = document.createElement("section");
+      batchEl.className = "journey-batch unused";
+      batchEl.dataset.batchId = "unused";
+      const unusedBatch = { id: "unused", name: "Unused", questIds: unusedIds };
+      batchEl.innerHTML = `
+        <div class="journey-batch-head">
+          <div class="batch-title-row">
+            <div class="batch-name-input" role="heading" aria-level="3">Unused</div>
+          </div>
+          <div class="batch-zone-summary" title="${escapeHtml(batchZoneSummary(unusedBatch))}">${escapeHtml(batchZoneSummary(unusedBatch))}</div>
+        </div>
+        <div class="journey-batch-drop journey-unused-drop" aria-label="Unused quest drop area"></div>
+      `;
+      const drop = batchEl.querySelector(".journey-unused-drop");
+      if (!unusedIds.length) {
+        const empty = document.createElement("div");
+        empty.className = "batch-empty";
+        empty.textContent = "Drop quests here to mark them Unused.";
+        drop.append(empty);
+      } else {
+        unusedIds.forEach((questId) => {
+          const quest = questsById.get(Number(questId));
+          if (quest) drop.append(createJourneyQuestElement(quest, "unused", { unused: true }));
+        });
+      }
+      return batchEl;
+    }
+
     function createJourneyInsertElement(insertIndex) {
       const slot = document.createElement("div");
       slot.className = "journey-insert-slot";
@@ -2336,9 +2479,10 @@
       return slot;
     }
 
-    function createJourneyQuestElement(quest, batchId) {
+    function createJourneyQuestElement(quest, batchId, options = {}) {
       const item = document.createElement("div");
       item.className = "journey-quest";
+      if (options.unused) item.classList.add("unused");
       if (selectedId === quest.id) item.classList.add("selected");
       if (activeId === quest.id) item.classList.add("active");
       item.draggable = true;
@@ -2349,7 +2493,9 @@
         <span class="journey-quest-step">${quest.chainStep}</span>
         <span class="journey-quest-name" ${questDifficultyAttrs(quest)}>${escapeHtml(quest.name)}</span>
         <span class="journey-quest-level">${quest.requiredLevel ?? "?"} / ${quest.questLevel ?? "?"}</span>
-        <button class="journey-quest-remove" type="button" aria-label="Remove ${escapeHtml(quest.name)} from Journey">x</button>
+        ${options.unused
+          ? `<button class="journey-quest-unhide" type="button" aria-label="Unhide ${escapeHtml(quest.name)}">Unhide</button>`
+          : `<button class="journey-quest-remove" type="button" aria-label="Remove ${escapeHtml(quest.name)} from Journey">x</button>`}
       `;
       return item;
     }
@@ -2415,6 +2561,7 @@
       renumberNumericBatches(activeJourney.batches);
       renderJourney();
       if (selectedBatchId != null) applySelectedBatchLevel();
+      else renderCurrentView();
       showJourneyMessage(successMessage, successMessage ? "ok" : "error");
       if (!successMessage) showJourneyMessage("");
       return true;
@@ -2441,7 +2588,13 @@
       const target = candidate[targetBatchIndex];
       if (!target) return false;
       target.questIds.push(Number(questId));
-      return commitJourneyBatches(candidate, `${quest.name} added to Batch ${targetBatchIndex + 1}.`);
+      const moved = commitJourneyBatches(candidate, `${quest.name} added to Batch ${targetBatchIndex + 1}.`);
+      if (moved) {
+        activeJourney.unusedQuestIds = removeQuestFromUnusedCopies(activeJourney.unusedQuestIds, questId);
+        renderJourney();
+        renderCurrentView();
+      }
+      return moved;
     }
 
     function insertBatchAt(insertIndex, questId = null) {
@@ -2467,7 +2620,13 @@
         batch.questIds.push(Number(questId));
       }
       candidate.splice(insertIndex, 0, batch);
-      return commitJourneyBatches(candidate, questId == null ? `Batch ${insertIndex + 1} created.` : `Batch ${insertIndex + 1} created.`);
+      const inserted = commitJourneyBatches(candidate, questId == null ? `Batch ${insertIndex + 1} created.` : `Batch ${insertIndex + 1} created.`);
+      if (inserted && questId != null) {
+        activeJourney.unusedQuestIds = removeQuestFromUnusedCopies(activeJourney.unusedQuestIds, questId);
+        renderJourney();
+        renderCurrentView();
+      }
+      return inserted;
     }
 
     function removeQuestFromJourney(questId) {
@@ -2483,7 +2642,46 @@
       activeJourney.batches = candidate;
       renderJourney();
       if (selectedBatchId != null) applySelectedBatchLevel();
+      else renderCurrentView();
       showJourneyMessage(`${quest?.name || questName(questId)} removed from Journey.`, "ok");
+    }
+
+    function moveQuestToUnused(questId) {
+      if (!activeJourney) {
+        showJourneyMessage("Create a Journey before marking quests Unused.");
+        return false;
+      }
+      const quest = questsById.get(Number(questId));
+      if (!quest) {
+        showJourneyMessage("Unknown quest.");
+        return false;
+      }
+      const candidate = cloneBatches();
+      removeQuestFromBatchCopies(candidate, questId);
+      const validation = validateJourneyBatches(candidate);
+      if (!validation.ok) {
+        showJourneyMessage(`Cannot mark ${quest.name} Unused. ${validation.message}`);
+        return false;
+      }
+      activeJourney.batches = candidate;
+      const unused = removeQuestFromUnusedCopies(activeJourney.unusedQuestIds, questId);
+      unused.push(Number(questId));
+      activeJourney.unusedQuestIds = unused;
+      renumberNumericBatches(activeJourney.batches);
+      renderJourney();
+      if (selectedBatchId != null) applySelectedBatchLevel();
+      else renderCurrentView();
+      showJourneyMessage(`${quest.name} marked Unused.`, "ok");
+      return true;
+    }
+
+    function restoreUnusedQuest(questId) {
+      if (!activeJourney) return;
+      const quest = questsById.get(Number(questId));
+      activeJourney.unusedQuestIds = removeQuestFromUnusedCopies(activeJourney.unusedQuestIds, questId);
+      renderJourney();
+      renderCurrentView();
+      showJourneyMessage(`${quest?.name || questName(questId)} restored to the catalogue.`, "ok");
     }
 
     function journeyExportData() {
@@ -2502,6 +2700,17 @@
           class: activeJourney.class,
           classMask: activeJourney.classMask,
         },
+        unusedQuestIds: cloneUnusedQuestIds(activeJourney.unusedQuestIds),
+        unusedQuests: cloneUnusedQuestIds(activeJourney.unusedQuestIds).map((questId) => {
+          const quest = questsById.get(Number(questId));
+          return {
+            id: Number(questId),
+            name: quest?.name || "",
+            requiredLevel: quest?.requiredLevel ?? null,
+            questLevel: quest?.questLevel ?? null,
+            unused: true,
+          };
+        }),
         batches: activeJourney.batches.map((batch, index) => ({
           id: batch.id,
           name: batch.name || String(index + 1),
@@ -2569,6 +2778,19 @@
         .filter((id, index, list) => Number.isFinite(id) && questsById.has(id) && list.indexOf(id) === index);
     }
 
+    function questIdsFromImportedUnused(data) {
+      const ids = Array.isArray(data.unusedQuestIds)
+        ? data.unusedQuestIds
+        : Array.isArray(data.unused?.questIds)
+          ? data.unused.questIds
+          : Array.isArray(data.unusedQuests)
+            ? data.unusedQuests.map((quest) => typeof quest === "number" ? quest : quest?.id)
+            : [];
+      return ids
+        .map((id) => Number(id))
+        .filter((id, index, list) => Number.isFinite(id) && questsById.has(id) && list.indexOf(id) === index);
+    }
+
     function importedBatchLevelOverride(batch) {
       if (batch.expectedLevelManual === false) return null;
       return normalizeExpectedLevel(batch.expectedLevelOverride ?? batch.levelOverride ?? (batch.expectedLevelManual ? batch.expectedLevel : null));
@@ -2587,6 +2809,7 @@
         return false;
       }
       const rawBatches = Array.isArray(data.batches) && data.batches.length ? data.batches : [{ name: "1", questIds: [] }];
+      const unusedQuestIds = questIdsFromImportedUnused(data);
       journeyBatchCounter = 0;
       const importedJourney = {
         schemaVersion: Number(data.schemaVersion) || 1,
@@ -2599,12 +2822,13 @@
         classMask: klass.mask,
         batches: rawBatches.map((batch, index) => newBatch(
           String(batch.name || index + 1),
-          questIdsFromImportedBatch(batch),
+          questIdsFromImportedBatch(batch).filter((questId) => !unusedQuestIds.includes(Number(questId))),
           {
             id: batch.id ? String(batch.id) : null,
             expectedLevelOverride: importedBatchLevelOverride(batch),
           },
         )),
+        unusedQuestIds,
       };
       const previousJourney = activeJourney;
       activeJourney = importedJourney;
@@ -2666,7 +2890,7 @@
     function handleJourneyDragStart(event) {
       const questNode = event.target.closest(".journey-quest");
       if (!questNode || !sequencerBoard.contains(questNode)) return;
-      if (event.target.closest(".journey-quest-remove")) {
+      if (event.target.closest(".journey-quest-remove, .journey-quest-unhide")) {
         event.preventDefault();
         return;
       }
@@ -2695,7 +2919,7 @@
     }
 
     function activeSequencerDropTarget(event) {
-      return event.target.closest(".journey-batch-drop, .journey-insert-target");
+      return event.target.closest(".journey-batch-drop, .journey-insert-target, .journey-unused-drop");
     }
 
     function clearSequencerDragTargets() {
@@ -2730,6 +2954,8 @@
       clearSequencerDragTargets();
       if (target.classList.contains("journey-insert-target")) {
         insertBatchAt(Number(target.dataset.insertIndex), Number(rawQuestId));
+      } else if (target.classList.contains("journey-unused-drop")) {
+        moveQuestToUnused(Number(rawQuestId));
       } else {
         moveQuestToBatch(Number(rawQuestId), Number(target.dataset.batchIndex));
       }
@@ -2844,6 +3070,22 @@
       updateDisplayFilterButton();
     }
 
+    function populateOptionsFilters() {
+      optionsFilterMenu.innerHTML = `
+        <div class="options-filter-title">Catalogue Options</div>
+        ${CATALOGUE_OPTIONS.map((option) => `
+          <label class="quest-type-option">
+            <input type="checkbox" value="${option.id}" ${catalogueOptions.has(option.id) ? "checked" : ""}>
+            <span>${escapeHtml(option.label)}</span>
+          </label>
+        `).join("")}
+      `;
+      optionsFilterMenu.querySelectorAll('input[type="checkbox"]').forEach((input) => {
+        input.addEventListener("change", updateOptionsFiltersFromMenu);
+      });
+      updateOptionsFilterButton();
+    }
+
     function updateQuestTypeFiltersFromMenu() {
       forcedCatalogueChainId = null;
       filters.typeIds = new Set([...questFilterMenu.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value));
@@ -2864,6 +3106,16 @@
         displayFilters.add(input.value);
       });
       updateDisplayFilterButton();
+      renderCurrentView();
+    }
+
+    function updateOptionsFiltersFromMenu() {
+      forcedCatalogueChainId = null;
+      catalogueOptions.clear();
+      optionsFilterMenu.querySelectorAll('input[type="checkbox"]:checked').forEach((input) => {
+        catalogueOptions.add(input.value);
+      });
+      updateOptionsFilterButton();
       renderCurrentView();
     }
 
@@ -2897,6 +3149,15 @@
       displayFilterButton.classList.toggle("active", enabledLabels.length > 0);
     }
 
+    function updateOptionsFilterButton() {
+      const enabledLabels = CATALOGUE_OPTIONS
+        .filter((option) => catalogueOptions.has(option.id))
+        .map((option) => option.label);
+      optionsFilterCount.textContent = String(enabledLabels.length);
+      optionsFilterButton.title = enabledLabels.length ? enabledLabels.join(", ") : "No catalogue options selected";
+      optionsFilterButton.classList.toggle("active", enabledLabels.length !== CATALOGUE_OPTIONS.length);
+    }
+
     function setQuestFilterMenuOpen(open) {
       questFilterMenu.hidden = !open;
       questFilterButton.setAttribute("aria-expanded", String(open));
@@ -2910,6 +3171,11 @@
     function setDisplayFilterMenuOpen(open) {
       displayFilterMenu.hidden = !open;
       displayFilterButton.setAttribute("aria-expanded", String(open));
+    }
+
+    function setOptionsFilterMenuOpen(open) {
+      optionsFilterMenu.hidden = !open;
+      optionsFilterButton.setAttribute("aria-expanded", String(open));
     }
 
     function updateFilterSelectColors() {
@@ -3221,6 +3487,14 @@
       return chain.visibleQuests.some(questPassesSearch);
     }
 
+    function questPassesCatalogueOptions(quest) {
+      if (!activeJourney || !quest) return true;
+      const id = Number(quest.id);
+      if (!catalogueOptions.has("show-assigned") && assignedJourneyQuestIds().has(id)) return false;
+      if (!catalogueOptions.has("show-unused") && unusedJourneyQuestIds().has(id)) return false;
+      return true;
+    }
+
     function currentChains() {
       const chains = [...chainsById.values()];
       const zones = filterableZones();
@@ -3231,7 +3505,7 @@
           const forceVisible = forcedCatalogueChainId != null && chain.id === forcedCatalogueChainId;
           const visibleQuests = forceVisible
             ? chain.quests
-            : chain.quests.filter((quest) => questPassesRaceClass(quest) && questPassesType(quest));
+            : chain.quests.filter((quest) => questPassesRaceClass(quest) && questPassesType(quest) && questPassesCatalogueOptions(quest));
           const visibleStartQuest = visibleQuests[0] || null;
           const zoneNames = chainZoneNamesFromQuests(visibleQuests);
           return {
@@ -4528,6 +4802,12 @@
         if (questNode) removeQuestFromJourney(Number(questNode.dataset.questId));
         return;
       }
+      const unhideButton = event.target.closest(".journey-quest-unhide");
+      if (unhideButton) {
+        const questNode = unhideButton.closest(".journey-quest");
+        if (questNode) restoreUnusedQuest(Number(questNode.dataset.questId));
+        return;
+      }
       const questNode = event.target.closest(".journey-quest");
       if (questNode) {
         openJourneyQuestInCatalogue(Number(questNode.dataset.questId));
@@ -4547,16 +4827,25 @@
       setQuestFilterMenuOpen(questFilterMenu.hidden);
       setZoneFilterMenuOpen(false);
       setDisplayFilterMenuOpen(false);
+      setOptionsFilterMenuOpen(false);
     });
     zoneFilterButton.addEventListener("click", () => {
       setZoneFilterMenuOpen(zoneFilterMenu.hidden);
       setQuestFilterMenuOpen(false);
       setDisplayFilterMenuOpen(false);
+      setOptionsFilterMenuOpen(false);
     });
     displayFilterButton.addEventListener("click", () => {
       setDisplayFilterMenuOpen(displayFilterMenu.hidden);
       setQuestFilterMenuOpen(false);
       setZoneFilterMenuOpen(false);
+      setOptionsFilterMenuOpen(false);
+    });
+    optionsFilterButton.addEventListener("click", () => {
+      setOptionsFilterMenuOpen(optionsFilterMenu.hidden);
+      setQuestFilterMenuOpen(false);
+      setZoneFilterMenuOpen(false);
+      setDisplayFilterMenuOpen(false);
     });
     document.addEventListener("click", (event) => {
       const zoneLink = event.target.closest(".zone-link");
@@ -4578,6 +4867,9 @@
       if (!displayFilterWrap.contains(event.target)) {
         setDisplayFilterMenuOpen(false);
       }
+      if (!optionsFilterWrap.contains(event.target)) {
+        setOptionsFilterMenuOpen(false);
+      }
     });
     document.addEventListener("keydown", (event) => {
       if ((event.key === "ArrowDown" || event.key === "ArrowUp") && canUseCatalogueArrowKeys(event.target)) {
@@ -4590,6 +4882,7 @@
         setQuestFilterMenuOpen(false);
         setZoneFilterMenuOpen(false);
         setDisplayFilterMenuOpen(false);
+        setOptionsFilterMenuOpen(false);
         closePickupQuestList();
       }
     });
@@ -4599,6 +4892,7 @@
     populateQuestFilters();
     populateZoneFilters();
     populateDisplayFilters();
+    populateOptionsFilters();
     populateJourneySetupControls();
     renderWorldTiles();
     renderJourney();
