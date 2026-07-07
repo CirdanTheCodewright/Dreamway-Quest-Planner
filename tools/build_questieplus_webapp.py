@@ -3157,6 +3157,10 @@ def render_classic_html(records, chains, zones, continents):
       gap: 8px;
     }}
 
+    .header-side .count {{
+      flex: 0 0 auto;
+    }}
+
     h1 {{
       margin: 0;
       font-size: clamp(1.35rem, 2.1vw, 2rem);
@@ -3242,6 +3246,60 @@ def render_classic_html(records, chains, zones, continents):
       font: inherit;
       font-size: 0.88rem;
       cursor: pointer;
+    }}
+
+    .batch-navigator {{
+      min-width: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      flex: 1 1 auto;
+      justify-content: center;
+    }}
+
+    .batch-navigator[hidden] {{
+      display: none;
+    }}
+
+    .batch-nav-button {{
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      padding: 0;
+      border: 1px solid rgba(255, 235, 196, 0.2);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.06);
+      color: #ffe28a;
+      font: inherit;
+      font-size: 1rem;
+      font-weight: 900;
+      line-height: 1;
+      cursor: pointer;
+    }}
+
+    .batch-nav-button:disabled {{
+      cursor: not-allowed;
+      opacity: 0.42;
+    }}
+
+    .batch-nav-pill {{
+      min-width: 0;
+      max-width: min(260px, 52vw);
+      height: 30px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 10px;
+      border: 1px solid rgba(255, 211, 79, 0.34);
+      border-radius: 999px;
+      background: rgba(255, 211, 79, 0.12);
+      color: #fff4d2;
+      font-size: 0.78rem;
+      font-weight: 850;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }}
 
     .toolbar button.active {{
@@ -3540,6 +3598,7 @@ def render_classic_html(records, chains, zones, continents):
 
     .journey-start-button,
     .journey-save-button,
+    .journey-close-button,
     .journey-import-button {{
       justify-self: start;
       min-height: 34px;
@@ -3556,9 +3615,16 @@ def render_classic_html(records, chains, zones, continents):
 
     .journey-start-button:disabled,
     .journey-save-button:disabled,
+    .journey-close-button:disabled,
     .journey-import-button:disabled {{
       cursor: not-allowed;
       opacity: 0.48;
+    }}
+
+    .journey-close-button {{
+      border-color: rgba(255, 91, 91, 0.42);
+      background: rgba(112, 20, 20, 0.34);
+      color: #ffb0a8;
     }}
 
     .journey-import-input {{
@@ -3699,7 +3765,7 @@ def render_classic_html(records, chains, zones, continents):
 
     .batch-title-row {{
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: minmax(0, 1fr) auto auto;
       align-items: center;
       gap: 8px;
     }}
@@ -3729,6 +3795,29 @@ def render_classic_html(records, chains, zones, continents):
       color: #ffe28a;
       font-weight: 850;
       text-align: center;
+    }}
+
+    .batch-delete-button {{
+      display: grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      padding: 0;
+      border: 0;
+      border-radius: 999px;
+      background: rgba(112, 20, 20, 0.68);
+      color: #ffb0a8;
+      font-size: 0.86rem;
+      font-weight: 900;
+      line-height: 1;
+      cursor: pointer;
+    }}
+
+    .batch-delete-button:hover,
+    .batch-delete-button:focus-visible {{
+      outline: 2px solid rgba(255, 91, 91, 0.52);
+      outline-offset: 1px;
+      background: rgba(146, 31, 31, 0.86);
     }}
 
     .batch-zone-summary {{
@@ -4486,6 +4575,23 @@ def render_classic_html(records, chains, zones, continents):
       color: var(--quest-difficulty-color, #fff2cf);
     }}
 
+    .quest-status-dot {{
+      flex: 0 0 auto;
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.7);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+    }}
+
+    .quest-status-dot.assigned {{
+      background: #40c463;
+    }}
+
+    .quest-status-dot.hidden {{
+      background: #e04444;
+    }}
+
     .chain-zone-summary,
     .quest-zone-summary {{
       min-width: 0;
@@ -5003,6 +5109,11 @@ def render_classic_html(records, chains, zones, continents):
           </button>
           <div class="options-filter-menu" id="options-filter-menu" hidden></div>
         </div>
+        <div class="batch-navigator" id="batch-navigator" hidden>
+          <button type="button" class="batch-nav-button" id="batch-nav-prev" aria-label="Previous batch">&lsaquo;</button>
+          <span class="batch-nav-pill" id="batch-nav-label">No batch</span>
+          <button type="button" class="batch-nav-button" id="batch-nav-next" aria-label="Next batch">&rsaquo;</button>
+        </div>
         <div class="count">{quest_count} quests - {zone_count} zone maps</div>
       </div>
     </header>
@@ -5048,6 +5159,7 @@ def render_classic_html(records, chains, zones, continents):
               <div class="journey-title-tools">
                 <input class="journey-name-editor" id="journey-name-editor" type="text" aria-label="Journey name">
                 <button class="journey-save-button" id="journey-save-button" type="button">Save Journey</button>
+                <button class="journey-close-button" id="journey-close-button" type="button">Close Journey</button>
                 <span class="journey-character-summary" id="journey-character-summary"></span>
               </div>
             </div>
@@ -5159,6 +5271,10 @@ def render_classic_html(records, chains, zones, continents):
     const optionsFilterButton = document.querySelector("#options-filter-button");
     const optionsFilterCount = document.querySelector("#options-filter-count");
     const optionsFilterMenu = document.querySelector("#options-filter-menu");
+    const batchNavigator = document.querySelector("#batch-navigator");
+    const batchNavPrev = document.querySelector("#batch-nav-prev");
+    const batchNavNext = document.querySelector("#batch-nav-next");
+    const batchNavLabel = document.querySelector("#batch-nav-label");
     const mapViewButton = document.querySelector("#map-view-button");
     const sequencerViewButton = document.querySelector("#sequencer-view-button");
     const mapFrame = document.querySelector(".map-frame");
@@ -5172,6 +5288,7 @@ def render_classic_html(records, chains, zones, continents):
     const journeyWorkspace = document.querySelector("#journey-workspace");
     const journeyNameEditor = document.querySelector("#journey-name-editor");
     const journeySaveButton = document.querySelector("#journey-save-button");
+    const journeyCloseButton = document.querySelector("#journey-close-button");
     const journeyImportButton = document.querySelector("#journey-import-button");
     const journeyImportInput = document.querySelector("#journey-import-input");
     const journeyCharacterSummary = document.querySelector("#journey-character-summary");
@@ -5490,8 +5607,13 @@ def render_classic_html(records, chains, zones, continents):
       journeySetup.hidden = hasJourney;
       journeyWorkspace.hidden = !hasJourney;
       journeySaveButton.disabled = !hasJourney;
+      journeyCloseButton.disabled = !hasJourney;
       journeyImportButton.disabled = false;
-      if (!hasJourney) return;
+      updateBatchNavigator();
+      if (!hasJourney) {{
+        sequencerBoard.innerHTML = "";
+        return;
+      }}
       journeyNameEditor.value = activeJourney.name;
       const race = selectedJourneyRace();
       const klass = selectedJourneyClass();
@@ -5502,6 +5624,7 @@ def render_classic_html(records, chains, zones, continents):
         sequencerBoard.append(createJourneyInsertElement(index + 1));
       }});
       sequencerBoard.append(createUnusedColumnElement());
+      updateBatchNavigator();
     }}
 
     function createJourneyBatchElement(batch, index) {{
@@ -5519,6 +5642,7 @@ def render_classic_html(records, chains, zones, continents):
               <span>Lv</span>
               <input class="batch-level-input" type="number" min="1" max="60" value="${{expectedLevel ?? ""}}" placeholder="-" aria-label="Batch ${{index + 1}} expected level">
             </label>
+            <button class="batch-delete-button" type="button" data-batch-id="${{escapeHtml(batch.id)}}" aria-label="Delete batch ${{index + 1}}">x</button>
           </div>
           <div class="batch-zone-summary" title="${{escapeHtml(batchZoneSummary(batch))}}">${{escapeHtml(batchZoneSummary(batch))}}</div>
         </div>
@@ -5527,6 +5651,7 @@ def render_classic_html(records, chains, zones, continents):
       const input = batchEl.querySelector(".batch-name-input");
       input.addEventListener("input", () => {{
         batch.name = input.value || String(index + 1);
+        updateBatchNavigator();
       }});
       const levelInput = batchEl.querySelector(".batch-level-input");
       levelInput.addEventListener("input", () => {{
@@ -5613,6 +5738,26 @@ def render_classic_html(records, chains, zones, continents):
       if (!activeJourney || !selectedBatchId) return null;
       if (selectedBatchId === "unused") return {{ id: "unused", name: "Unused", questIds: cloneUnusedQuestIds(activeJourney.unusedQuestIds || []) }};
       return activeJourney.batches.find((batch) => batch.id === selectedBatchId) || null;
+    }}
+
+    function selectedBatchNavigatorText() {{
+      if (!activeJourney) return "No Journey";
+      if (selectedBatchId === "unused") return "Unused";
+      const index = activeJourney.batches.findIndex((batch) => batch.id === selectedBatchId);
+      if (index < 0) return "No batch selected";
+      const batch = activeJourney.batches[index];
+      const name = String(batch.name || index + 1).trim() || String(index + 1);
+      return `${{name}} [${{index + 1}}/${{activeJourney.batches.length}}]`;
+    }}
+
+    function updateBatchNavigator() {{
+      if (!batchNavigator) return;
+      const hasJourney = Boolean(activeJourney);
+      batchNavigator.hidden = !hasJourney;
+      batchNavPrev.disabled = !hasJourney;
+      batchNavNext.disabled = !hasJourney;
+      batchNavLabel.textContent = selectedBatchNavigatorText();
+      batchNavLabel.title = selectedBatchNavigatorText();
     }}
 
     function applyLevelFilterValue(value) {{
@@ -5843,6 +5988,54 @@ def render_classic_html(records, chains, zones, continents):
       if (selectedBatchId != null) applySelectedBatchLevel();
       else renderCurrentView();
       showJourneyMessage(`${{quest?.name || questName(questId)}} removed from Journey.`, "ok");
+    }}
+
+    function deleteJourneyBatch(batchId) {{
+      if (!activeJourney || batchId === "unused") return false;
+      const index = activeJourney.batches.findIndex((batch) => batch.id === batchId);
+      if (index < 0) return false;
+      const candidate = cloneBatches();
+      const [removedBatch] = candidate.splice(index, 1);
+      if (!candidate.length) candidate.push(newBatch("1"));
+      const validation = validateJourneyBatches(candidate);
+      if (!validation.ok) {{
+        showJourneyMessage(`Cannot delete ${{removedBatch?.name || `Batch ${{index + 1}}`}}. ${{validation.message}}`);
+        return false;
+      }}
+      const wasSelected = selectedBatchId === batchId;
+      const previousLevel = preBatchLevelValue;
+      activeJourney.batches = candidate;
+      renumberNumericBatches(activeJourney.batches);
+      if (wasSelected) {{
+        selectedBatchId = null;
+        preBatchLevelValue = null;
+      }}
+      renderJourney();
+      if (wasSelected) applyLevelFilterValue(previousLevel || "all");
+      else renderCurrentView();
+      showJourneyMessage(`${{removedBatch?.name || `Batch ${{index + 1}}`}} deleted. Quests from that batch are now unassigned.`, "ok");
+      return true;
+    }}
+
+    function closeCurrentJourney() {{
+      if (!activeJourney) return;
+      const ok = window.confirm("Close the current Journey? Make sure you have saved it first. Unsaved changes will be lost.");
+      if (!ok) return;
+      activeJourney = null;
+      selectedBatchId = null;
+      preBatchLevelValue = null;
+      forcedCatalogueChainId = null;
+      selectedChainId = null;
+      selectedId = null;
+      activeId = null;
+      journeyNameInput.value = "";
+      journeyRaceSelect.value = "";
+      journeyClassSelect.value = "";
+      updateJourneyStartButton();
+      showJourneyMessage("");
+      setAppMode("sequencer");
+      renderJourney();
+      renderCurrentView();
     }}
 
     function moveQuestIdsToUnused(questIds) {{
@@ -6740,6 +6933,30 @@ def render_classic_html(records, chains, zones, continents):
       return true;
     }}
 
+    function questJourneyStatus(quest) {{
+      if (!activeJourney || !quest) return "";
+      const id = Number(quest.id);
+      if (unusedJourneyQuestIds().has(id)) return "hidden";
+      if (assignedJourneyQuestIds().has(id)) return "assigned";
+      return "";
+    }}
+
+    function questStatusBadgeHtml(quest) {{
+      const status = questJourneyStatus(quest);
+      if (!status) return "";
+      const label = status === "assigned" ? "Assigned" : "Hidden";
+      return `<span class="quest-status-dot ${{status}}" title="${{label}}" aria-label="${{label}}"></span>`;
+    }}
+
+    function chainStatusBadgeHtml(quests) {{
+      const visibleQuests = (quests || []).filter(Boolean);
+      if (!activeJourney || !visibleQuests.length) return "";
+      const statuses = visibleQuests.map(questJourneyStatus);
+      if (statuses.every((status) => status === "assigned")) return '<span class="quest-status-dot assigned" title="Assigned" aria-label="Assigned"></span>';
+      if (statuses.every((status) => status === "hidden")) return '<span class="quest-status-dot hidden" title="Hidden" aria-label="Hidden"></span>';
+      return "";
+    }}
+
     function currentChains() {{
       const chains = [...chainsById.values()];
       const zones = filterableZones();
@@ -7057,6 +7274,7 @@ def render_classic_html(records, chains, zones, continents):
         meta.innerHTML = `
           <div class="chain-name" title="${{escapeHtml(chainTitle)}}">
             <span class="chain-name-text" ${{questDifficultyAttrs(chain.visibleStartQuest)}}>${{escapeHtml(chain.name)}}</span>
+            ${{chainStatusBadgeHtml(chain.visibleQuests)}}
             ${{chainZones ? `<span class="chain-zone-summary">${{escapeHtml(chainZones)}}</span>` : ""}}
           </div>
           <div class="chain-summary">
@@ -7156,6 +7374,7 @@ def render_classic_html(records, chains, zones, continents):
         <span class="chain-quest-main">
           <span class="chain-quest-title-row">
             <span class="chain-quest-title" ${{questDifficultyAttrs(quest)}}>${{escapeHtml(quest.name)}}</span>
+            ${{questStatusBadgeHtml(quest)}}
             ${{questTypeTextBadgesHtml(quest)}}
             ${{questZones ? `<span class="quest-zone-summary">${{escapeHtml(questZones)}}</span>` : ""}}
           </span>
@@ -8169,6 +8388,7 @@ def render_classic_html(records, chains, zones, continents):
       activeJourney.name = journeyNameEditor.value.trim() || activeJourney.name;
     }});
     journeySaveButton.addEventListener("click", saveJourneyJson);
+    journeyCloseButton.addEventListener("click", closeCurrentJourney);
     journeyImportButton.addEventListener("click", () => journeyImportInput.click());
     journeyImportInput.addEventListener("change", () => {{
       importJourneyFile(journeyImportInput.files?.[0]);
@@ -8184,6 +8404,11 @@ def render_classic_html(records, chains, zones, continents):
       const insertTarget = event.target.closest(".journey-insert-target");
       if (insertTarget) {{
         insertBatchAt(Number(insertTarget.dataset.insertIndex));
+        return;
+      }}
+      const deleteBatchButton = event.target.closest(".batch-delete-button");
+      if (deleteBatchButton) {{
+        deleteJourneyBatch(deleteBatchButton.dataset.batchId);
         return;
       }}
       const removeButton = event.target.closest(".journey-quest-remove");
@@ -8223,6 +8448,8 @@ def render_classic_html(records, chains, zones, continents):
         selectJourneyBatch(batchColumn.dataset.batchId);
       }}
     }});
+    batchNavPrev.addEventListener("click", () => moveSequencerSelection(-1));
+    batchNavNext.addEventListener("click", () => moveSequencerSelection(1));
     sequencerPanel.addEventListener("click", (event) => {{
       if (!activeJourney || journeyWorkspace.hidden) return;
       if (event.target.closest(".journey-batch, .journey-head, .journey-message, .journey-insert-target")) return;
