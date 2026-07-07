@@ -1,0 +1,3 @@
+[submodule "Questie"]
+	path = Questie
+	url = https://github.com/Questie/Questie.git

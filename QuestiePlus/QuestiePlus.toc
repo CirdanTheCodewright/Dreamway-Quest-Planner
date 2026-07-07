@@ -1,0 +1,8 @@
+## Interface: 11508
+## Title: QuestiePlus
+## Notes: Questie companion addon for testing journey batch tracking.
+## Author: Codex
+## Version: 0.1.0
+## RequiredDeps: Questie
+
+QuestiePlus.lua

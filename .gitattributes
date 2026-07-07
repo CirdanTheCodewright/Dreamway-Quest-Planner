@@ -1,0 +1,11 @@
+* text=auto
+
+*.lua text eol=lf
+*.toc text eol=lf
+*.py text eol=lf
+*.mjs text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+
+questieplus.html linguist-generated=true
+assets/** linguist-generated=true
