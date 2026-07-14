@@ -4,5 +4,8 @@
 ## Author: Codex
 ## Version: 0.1.0
 ## RequiredDeps: Questie
+## SavedVariables: QuestiePlusDB
+## SavedVariablesPerCharacter: QuestiePlusProfile
 
+QuestiePlusQuestZones.lua
 QuestiePlus.lua

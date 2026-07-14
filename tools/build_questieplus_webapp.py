@@ -10,7 +10,13 @@ from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[1]
-QUESTIE = ROOT / "Questie" / "Database" / "Classic"
+QUESTIE_DATABASE = ROOT / "Questie" / "Database"
+QUESTIE = QUESTIE_DATABASE / "Classic"
+QUEST_XP_CLASSIC = QUESTIE_DATABASE / "QuestXP" / "DB" / "xpDB-classic.lua"
+QUEST_DB_SCHEMA = QUESTIE_DATABASE / "questDB.lua"
+CLASSIC_REPUTATION_FIXES = QUESTIE_DATABASE / "Corrections" / "Automatic" / "classicQuestReputationFixes.lua"
+CLASSIC_QUEST_FIXES = QUESTIE_DATABASE / "Corrections" / "classicQuestFixes.lua"
+CLASSIC_ITEM_FIXES = QUESTIE_DATABASE / "Corrections" / "classicItemFixes.lua"
 DUSKWOOD_ZONE_ID = 10
 ALLIANCE_RACE_MASK = 77
 
@@ -135,6 +141,87 @@ def load_lua_data(path):
     if not match:
         raise ValueError(f"Could not find Questie data table in {path}")
     return LuaTableParser(match.group(1)).parse()
+
+
+def load_lua_assignment_table(path, assignment):
+    text = path.read_text(encoding="utf-8")
+    match = re.search(rf"{re.escape(assignment)}\s*=\s*\{{", text)
+    if not match:
+        raise ValueError(f"Could not find {assignment} table in {path}")
+    start = text.find("{", match.start())
+    end = text.rfind("}")
+    if start < 0 or end < start:
+        raise ValueError(f"Could not read {assignment} table in {path}")
+    table_text = re.sub(r"--[^\r\n]*", "", text[start:end + 1])
+    return LuaTableParser(table_text).parse()
+
+
+def faction_display_name(key):
+    overrides = {
+        "OGRILA": "Ogri'la",
+        "SHEN_DRALAR": "Shen'dralar",
+        "THE_MAGHAR": "The Mag'har",
+        "THE_SHA_TAR": "The Sha'tar",
+    }
+    if key in overrides:
+        return overrides[key]
+    name = key.replace("_", " ").title()
+    return name.replace(" Of ", " of ").replace(" The ", " the ")
+
+
+def load_faction_ids():
+    text = QUEST_DB_SCHEMA.read_text(encoding="utf-8")
+    match = re.search(r"QuestieDB\.factionIDs\s*=\s*\{(.*?)^\}", text, flags=re.S | re.M)
+    if not match:
+        return {}
+    return {
+        key: int(faction_id)
+        for key, faction_id in re.findall(r"^\s*([A-Z][A-Z0-9_]*)\s*=\s*(\d+)\s*,?", match.group(1), flags=re.M)
+    }
+
+
+def load_faction_names():
+    return {faction_id: faction_display_name(key) for key, faction_id in load_faction_ids().items()}
+
+
+def load_reputation_corrections(path, faction_ids):
+    corrections = {}
+    current_quest_id = None
+    quest_pattern = re.compile(r"^ {8}\[(\d+)\]\s*=\s*\{")
+    reward_pattern = re.compile(r"\[questKeys\.reputationReward\]\s*=\s*(\{.*\})\s*,?$")
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.split("--", 1)[0].rstrip()
+        quest_match = quest_pattern.match(line)
+        if quest_match:
+            current_quest_id = int(quest_match.group(1))
+            continue
+        reward_match = reward_pattern.search(line)
+        if current_quest_id is None or not reward_match:
+            continue
+        reward_text = re.sub(
+            r"factionIDs\.([A-Z][A-Z0-9_]*)",
+            lambda match: str(faction_ids.get(match.group(1), 0)),
+            reward_match.group(1),
+        )
+        corrections[current_quest_id] = LuaTableParser(reward_text).parse()
+    return corrections
+
+
+def load_item_reward_corrections(path):
+    corrections = {}
+    current_item_id = None
+    item_pattern = re.compile(r"^ {8}\[(\d+)\]\s*=\s*\{")
+    reward_pattern = re.compile(r"\[itemKeys\.questRewards\]\s*=\s*(\{.*\})\s*,?$")
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.split("--", 1)[0].rstrip()
+        item_match = item_pattern.match(line)
+        if item_match:
+            current_item_id = int(item_match.group(1))
+            continue
+        reward_match = reward_pattern.search(line)
+        if current_item_id is not None and reward_match:
+            corrections[current_item_id] = flatten_numbers(LuaTableParser(reward_match.group(1)).parse())
+    return corrections
 
 
 def flatten_numbers(value):
@@ -410,6 +497,140 @@ def objective_ids(objectives, index):
         elif isinstance(entry, (int, float)):
             ids.append(int(entry))
     return ids
+
+
+def load_objective_first_corrections():
+    corrections = {
+        "object": set(),
+        "item": set(),
+        "killcredit": set(),
+        "spell": set(),
+        "event": set(),
+    }
+    if not CLASSIC_QUEST_FIXES.exists():
+        return corrections
+    key_types = {
+        "objectObjectiveFirst": "object",
+        "itemObjectiveFirst": "item",
+        "killCreditObjectiveFirst": "killcredit",
+        "spellObjectiveFirst": "spell",
+        "eventObjectiveFirst": "event",
+    }
+    pattern = re.compile(r"QuestieCorrections\.(\w+ObjectiveFirst)\[(\d+)\]\s*=\s*true")
+    for key, quest_id in pattern.findall(CLASSIC_QUEST_FIXES.read_text(encoding="utf-8")):
+        objective_type = key_types.get(key)
+        if objective_type:
+            corrections[objective_type].add(int(quest_id))
+    return corrections
+
+
+def ordered_objective_details(quest_id, quest, items, npcs, objects, objective_first):
+    objectives = table_value(quest, 9)
+    details = []
+
+    def add_detail(objective_type, ids, label, text="", first=False):
+        ids = list(dict.fromkeys(int(value) for value in ids if isinstance(value, (int, float))))
+        detail = {
+            "index": 0,
+            "type": objective_type,
+            "id": ids[0] if ids else None,
+            "ids": ids,
+            "name": label.split(": ", 1)[-1] if label else text or "Quest objective",
+            "label": label or text or "Quest objective",
+        }
+        if text:
+            detail["text"] = text
+        if first:
+            details.insert(0, detail)
+        else:
+            details.append(detail)
+
+    def entries_at(category_index):
+        if not isinstance(objectives, list) or category_index >= len(objectives):
+            return []
+        entries = objectives[category_index]
+        return entries if isinstance(entries, list) else []
+
+    for entry in entries_at(0):
+        if not isinstance(entry, list) or not entry:
+            continue
+        ids = flatten_numbers(entry[0])
+        text = entry[1] if len(entry) > 1 and isinstance(entry[1], str) else ""
+        names = [npc_name(npcs, npc_id) for npc_id in ids]
+        add_detail("monster", ids, "Kill: " + ", ".join(dict.fromkeys(names)) if names else text, text)
+
+    for entry in entries_at(1):
+        if not isinstance(entry, list) or not entry:
+            continue
+        ids = flatten_numbers(entry[0])
+        text = entry[1] if len(entry) > 1 and isinstance(entry[1], str) else ""
+        names = [object_name(objects, object_id) for object_id in ids]
+        add_detail(
+            "object",
+            ids,
+            "Use/find: " + ", ".join(dict.fromkeys(names)) if names else text,
+            text,
+            quest_id in objective_first["object"],
+        )
+
+    for entry in entries_at(2):
+        if not isinstance(entry, list) or not entry:
+            continue
+        ids = flatten_numbers(entry[0])
+        text = entry[1] if len(entry) > 1 and isinstance(entry[1], str) else ""
+        names = [item_name(items, item_id) for item_id in ids]
+        add_detail(
+            "item",
+            ids,
+            "Collect: " + ", ".join(dict.fromkeys(names)) if names else text,
+            text,
+            quest_id in objective_first["item"],
+        )
+
+    reputation = table_value(objectives, 3) if isinstance(objectives, list) else None
+    if isinstance(reputation, list) and reputation:
+        reputation_ids = flatten_numbers(reputation[0])
+        add_detail("reputation", reputation_ids, "Reach the required reputation")
+
+    for entry in entries_at(4):
+        if not isinstance(entry, list) or not entry:
+            continue
+        ids = flatten_numbers(entry[0])
+        root_ids = flatten_numbers(entry[1]) if len(entry) > 1 else []
+        text = entry[2] if len(entry) > 2 and isinstance(entry[2], str) else ""
+        names = [npc_name(npcs, npc_id) for npc_id in (root_ids or ids)]
+        label = text or ("Credit: " + ", ".join(dict.fromkeys(names)) if names else "Earn quest credit")
+        if text and not text.lower().startswith("credit"):
+            label = "Credit: " + text
+        add_detail(
+            "killcredit",
+            [*root_ids, *ids],
+            label,
+            text,
+            quest_id in objective_first["killcredit"],
+        )
+
+    for entry in entries_at(5):
+        if not isinstance(entry, list) or not entry:
+            continue
+        ids = flatten_numbers(entry[0])
+        text = entry[1] if len(entry) > 1 and isinstance(entry[1], str) else ""
+        add_detail(
+            "spell",
+            ids,
+            text or (f"Use spell #{ids[0]}" if ids else "Use the required spell"),
+            text,
+            quest_id in objective_first["spell"],
+        )
+
+    trigger_end = table_value(quest, 8)
+    if isinstance(trigger_end, list) and trigger_end:
+        text = trigger_end[0] if isinstance(trigger_end[0], str) else "Reach the objective area"
+        add_detail("event", [], text, text, quest_id in objective_first["event"])
+
+    for index, detail in enumerate(details, start=1):
+        detail["index"] = index
+    return details
 
 
 def is_alliance_compatible(quest):
@@ -1174,9 +1395,9 @@ def render_html(records, chains):
     const DATA = {payload};
     const QUEST_TYPE_FILTERS = DATA.questTypeFilters;
     const DISPLAY_FILTERS = [
-      {{ id: "available-pickups", label: "Available quest pickups", defaultEnabled: true }},
-      {{ id: "quest-objectives", label: "All quest objectives", defaultEnabled: false }},
-      {{ id: "quest-handins", label: "All quest hand-ins", defaultEnabled: false }},
+      {{ id: "available-pickups", label: "Pickups", defaultEnabled: true }},
+      {{ id: "quest-objectives", label: "Objectives", defaultEnabled: false }},
+      {{ id: "quest-handins", label: "Hand ins", defaultEnabled: false }},
     ];
     const RACES = [
       {{ label: "All races", mask: null, color: "#fff0ce" }},
@@ -1202,13 +1423,15 @@ def render_html(records, chains):
       {{ label: "Druid", mask: 1024, color: "#FF7D0A" }},
     ];
     const filters = {{
-      raceMask: null,
-      classMask: null,
+      factions: new Set(["Alliance", "Horde"]),
+      raceMasks: new Set(RACES.filter((race) => race.mask != null).map((race) => race.mask)),
+      classMasks: new Set(CLASSES.filter((klass) => klass.mask != null).map((klass) => klass.mask)),
       level: null,
       search: "",
       typeIds: new Set(QUEST_TYPE_FILTERS.filter((filter) => filter.defaultEnabled).map((filter) => filter.id)),
-      zoneIds: new Set(DATA.zones.filter((zone) => zone.questCount > 0).map((zone) => zone.id)),
+      zoneIds: new Set([0, ...DATA.zones.filter((zone) => zone.questCount > 0).map((zone) => zone.id)]),
     }};
+    const UNKNOWN_ZONE_ID = 0;
     const displayFilters = new Set(DISPLAY_FILTERS.filter((filter) => filter.defaultEnabled).map((filter) => filter.id));
     const displayFilters = new Set(DISPLAY_FILTERS.filter((filter) => filter.defaultEnabled).map((filter) => filter.id));
     const questsById = new Map(DATA.quests.map((quest) => [quest.id, quest]));
@@ -1613,7 +1836,7 @@ def render_inventory_html(records, chains):
     }}
 
     .chain-row.active {{
-      background: color-mix(in srgb, var(--chain-color) 13%, rgba(255, 255, 255, 0.055));
+      background: rgba(255, 255, 255, 0.06);
       box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--chain-color) 42%, transparent);
     }}
 
@@ -1713,17 +1936,6 @@ def render_inventory_html(records, chains):
     .quest-icon.offmap {{
       border-style: dashed;
       filter: saturate(0.78);
-    }}
-
-    .quest-icon.assignment-locked {{
-      opacity: 0.56;
-      filter: grayscale(0.72) saturate(0.36);
-    }}
-
-    .quest-icon.assignment-locked:hover,
-    .quest-icon.assignment-locked:focus-visible,
-    .quest-icon.assignment-locked.active {{
-      opacity: 0.78;
     }}
 
     .details {{
@@ -2087,8 +2299,8 @@ CONTINENT_MAP_ASSET_DIR = ROOT / "assets" / "classic-maps" / "continents"
 CONTINENT_IMAGE_WIDTH = 1002
 CONTINENT_IMAGE_HEIGHT = 668
 CONTINENT_IMAGE_CROPS = {
-    0: (280, 0, 690, 668),
-    1: (290, 0, 700, 668),
+    0: (234, 0, 735, 668),
+    1: (244, 0, 745, 668),
 }
 WORLD_MAP_ASPECT = 3 / 2
 WORLD_CONTINENT_PANEL_ASPECT = (CONTINENT_IMAGE_CROPS[0][2] - CONTINENT_IMAGE_CROPS[0][0]) / CONTINENT_IMAGE_HEIGHT
@@ -2485,7 +2697,7 @@ def load_world_area_data():
             }
 
     panel_width = WORLD_CONTINENT_PANEL_WIDTH_PCT
-    outer_margin = 4.0
+    outer_margin = 0.0
     middle_gap = 100 - panel_width * 2 - outer_margin * 2
     layout = {
         1: {
@@ -2942,11 +3154,53 @@ def zone_level_ranges(records):
     return ranges
 
 
+def reputation_reward_records(value, faction_names):
+    rewards = []
+    if not isinstance(value, list):
+        return rewards
+    for entry in value:
+        if not isinstance(entry, list) or len(entry) < 2:
+            continue
+        faction_id, amount = entry[0], entry[1]
+        if not isinstance(faction_id, (int, float)) or not isinstance(amount, (int, float)):
+            continue
+        faction_id = int(faction_id)
+        rewards.append({
+            "factionId": faction_id,
+            "name": faction_names.get(faction_id, f"Faction {faction_id}"),
+            "amount": int(amount),
+        })
+    return rewards
+
+
+def item_rewards_by_quest(items):
+    corrections = load_item_reward_corrections(CLASSIC_ITEM_FIXES)
+    rewards = defaultdict(list)
+    for item_id, item in items.items():
+        if not isinstance(item_id, int) or not isinstance(item, list):
+            continue
+        name = table_value(item, 0)
+        if not isinstance(name, str) or not name:
+            continue
+        quest_ids = corrections.get(item_id, flatten_numbers(table_value(item, 5)))
+        for quest_id in quest_ids:
+            rewards[int(quest_id)].append({"id": item_id, "name": name})
+    for quest_id in rewards:
+        rewards[quest_id].sort(key=lambda item: (item["name"].lower(), item["id"]))
+    return rewards
+
+
 def build_classic_records():
     quests = load_lua_data(QUESTIE / "classicQuestDB.lua")
     npcs = load_lua_data(QUESTIE / "classicNpcDB.lua")
     objects = load_lua_data(QUESTIE / "classicObjectDB.lua")
     items = load_lua_data(QUESTIE / "classicItemDB.lua")
+    xp_data = load_lua_assignment_table(QUEST_XP_CLASSIC, "QuestXP.db")
+    faction_names = load_faction_names()
+    faction_ids = load_faction_ids()
+    reputation_corrections = load_reputation_corrections(CLASSIC_REPUTATION_FIXES, faction_ids)
+    reputation_corrections.update(load_reputation_corrections(CLASSIC_QUEST_FIXES, faction_ids))
+    quest_item_rewards = item_rewards_by_quest(items)
     zones, continents = load_world_area_data()
     subzones = load_lua_return_table_merge(SUBZONE_TO_PARENT)
     quest_sort_names = load_quest_sort_names()
@@ -2955,6 +3209,7 @@ def build_classic_records():
     aq_war_effort = load_quest_id_table("AQWarEffortQuests")
     invasion_quests = load_quest_id_table("InvasionQuests")
     fixed_breadcrumb_ids, fixed_escort_ids = load_classic_quest_fix_category_ids()
+    objective_first = load_objective_first_corrections()
 
     candidates = {
         quest_id: quest
@@ -2969,7 +3224,9 @@ def build_classic_records():
         quest = candidates[quest_id]
         start_points = normalize_project_sample(start_points_for_quest_all(quest, items, npcs, objects), zones, continents, subzones, 80)
         end_points = normalize_project_sample(end_points_for_quest_all(quest, npcs, objects), zones, continents, subzones, 80)
-        objective_summary, raw_objective_points = objective_summary_and_points_all(quest, items, npcs, objects)
+        grouped_objective_summary, raw_objective_points = objective_summary_and_points_all(quest, items, npcs, objects)
+        objective_details = ordered_objective_details(quest_id, quest, items, npcs, objects, objective_first)
+        objective_summary = [detail["label"] for detail in objective_details] or grouped_objective_summary
         objective_points = normalize_project_sample(raw_objective_points, zones, continents, subzones, 140)
         zone_or_sort = table_value(quest, 16)
         start_zone_ids = zone_ids_from_points(start_points, zones, subzones)
@@ -3001,6 +3258,10 @@ def build_classic_records():
             breadcrumb_ids,
             fixed_escort_ids,
         )
+        xp_entry = xp_data.get(quest_id) if isinstance(xp_data, dict) else None
+        xp_level = int(xp_entry[0]) if isinstance(xp_entry, list) and xp_entry and isinstance(xp_entry[0], (int, float)) else None
+        base_xp = int(xp_entry[1]) if isinstance(xp_entry, list) and len(xp_entry) > 1 and isinstance(xp_entry[1], (int, float)) else None
+        reputation_value = reputation_corrections.get(quest_id, table_value(quest, 25))
 
         records.append({
             "id": quest_id,
@@ -3024,9 +3285,14 @@ def build_classic_records():
             "endSources": describe_end(quest, npcs, objects, zones, subzones),
             "objectiveText": text_lines,
             "objectiveSummary": objective_summary,
+            "objectiveDetails": objective_details,
             "preQuestGroup": pre_group,
             "preQuestSingle": pre_single,
             "nextQuestInChain": next_id if isinstance(next_id, int) else None,
+            "xpLevel": xp_level,
+            "baseXp": base_xp,
+            "reputationRewards": reputation_reward_records(reputation_value, faction_names),
+            "itemRewards": quest_item_rewards.get(quest_id, []),
             **type_metadata,
             **chain,
         })
@@ -3052,6 +3318,7 @@ def build_classic_records():
         level_range = level_ranges.get(zone_id)
         serializable_zones.append({
             "id": zone_id,
+            "uiMapId": zone.get("uiMapId"),
             "name": zone["name"],
             "continentId": zone["continentId"],
             "image": zone["image"],
@@ -3087,15 +3354,21 @@ def build_classic_records():
         for continent_id, continent in sorted(continents.items(), key=lambda item: item[0], reverse=True)
     ]
 
-    return records, chain_meta, serializable_zones, serializable_continents
+    npc_names = {
+        int(npc_id): row[0]
+        for npc_id, row in npcs.items()
+        if isinstance(npc_id, int) and isinstance(row, list) and row and isinstance(row[0], str)
+    }
+    return records, chain_meta, serializable_zones, serializable_continents, npc_names
 
 
-def render_classic_html(records, chains, zones, continents):
+def render_classic_html(records, chains, zones, continents, npc_names):
     payload = json.dumps({
         "quests": records,
         "chains": chains,
         "zones": zones,
         "continents": continents,
+        "npcNames": npc_names,
         "questTypeFilters": QUEST_TYPE_FILTERS,
     }, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     quest_count = len(records)
@@ -3106,6 +3379,7 @@ def render_classic_html(records, chains, zones, continents):
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>QuestiePlus</title>
+  <link rel="icon" type="image/png" sizes="64x64" href="assets/branding/questieplus-favicon-64.png">
   <style>
     :root {{
       color-scheme: dark;
@@ -3137,7 +3411,7 @@ def render_classic_html(records, chains, zones, continents):
 
     main {{
       height: 100vh;
-      width: 100vw;
+      width: 100%;
       padding: 12px;
       display: grid;
       grid-template-rows: auto minmax(0, 1fr);
@@ -3147,7 +3421,7 @@ def render_classic_html(records, chains, zones, continents):
     header {{
       min-height: 42px;
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(380px, 25vw);
+      grid-template-columns: minmax(0, var(--map-pane-width, 1fr)) minmax(380px, var(--catalogue-pane-width, 25vw));
       align-items: center;
       gap: 10px;
     }}
@@ -3156,25 +3430,45 @@ def render_classic_html(records, chains, zones, continents):
       min-width: 0;
       display: flex;
       align-items: center;
-      gap: 14px;
-      flex-wrap: wrap;
+      gap: 10px;
+      flex-wrap: nowrap;
     }}
 
     .header-side {{
       min-width: 0;
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      justify-content: flex-start;
       gap: 8px;
+    }}
+
+    .header-side .inventory-mode-toggle button {{
+      padding-inline: 7px;
+      font-size: 0.7rem;
     }}
 
     .header-side .count {{
       flex: 0 0 auto;
     }}
 
+    .brand-lockup {{
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }}
+
+    .brand-icon {{
+      display: block;
+      width: 34px;
+      height: 34px;
+      object-fit: contain;
+      flex: 0 0 34px;
+    }}
+
     h1 {{
       margin: 0;
-      font-size: clamp(1.35rem, 2.1vw, 2rem);
+      font-size: clamp(1.35rem, 1.75vw, 1.75rem);
       line-height: 1;
       letter-spacing: 0;
       white-space: nowrap;
@@ -3206,12 +3500,12 @@ def render_classic_html(records, chains, zones, continents):
 
     .toolbar .view-toggle button {{
       min-height: 28px;
-      padding: 0 12px;
+      padding: 0 9px;
       border: 0;
       border-radius: 999px;
       background: transparent;
       color: #c9baa0;
-      font-size: 0.78rem;
+      font-size: 0.74rem;
       font-weight: 850;
       box-shadow: none;
     }}
@@ -3227,8 +3521,215 @@ def render_classic_html(records, chains, zones, continents):
       min-width: 0;
       display: flex;
       align-items: center;
-      gap: 8px;
-      flex-wrap: wrap;
+      gap: 6px;
+      flex-wrap: nowrap;
+      flex: 1 1 auto;
+    }}
+
+    .normal-toolbar-controls {{
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: 1 1 auto;
+    }}
+
+    .normal-toolbar-controls > * {{
+      flex: 0 0 auto;
+    }}
+
+    .replay-toolbar[hidden] {{
+      display: none;
+    }}
+
+    .replay-toolbar {{
+      min-width: 0;
+      flex: 1 1 auto;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }}
+
+    body.replay-mode header {{
+      grid-template-columns: minmax(0, 1fr);
+    }}
+
+    body.replay-mode .header-main {{
+      flex-wrap: nowrap;
+    }}
+
+    body.replay-mode .toolbar {{
+      flex-wrap: nowrap;
+    }}
+
+    body.replay-mode .normal-toolbar-controls,
+    body.replay-mode .header-side {{
+      display: none;
+    }}
+
+    .replay-scope-toggle {{
+      flex: 0 0 auto;
+      display: inline-flex;
+      padding: 3px;
+      border: 1px solid rgba(255, 235, 196, 0.24);
+      border-radius: 999px;
+      background: rgba(7, 9, 7, 0.55);
+    }}
+
+    .toolbar .replay-scope-toggle button {{
+      min-height: 28px;
+      padding: 0 11px;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: #aa9d87;
+      font-size: 0.76rem;
+      font-weight: 850;
+    }}
+
+    .toolbar .replay-scope-toggle button.active {{
+      background: rgba(64, 196, 99, 0.18);
+      color: #d7ffe0;
+      box-shadow: inset 0 0 0 1px rgba(64, 196, 99, 0.42);
+    }}
+
+    .replay-playback-controls {{
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }}
+
+    .replay-playback-toggle {{
+      display: inline-flex;
+      align-items: stretch;
+      padding: 3px;
+      border: 1px solid rgba(255, 235, 196, 0.24);
+      border-radius: 999px;
+      background: rgba(7, 9, 7, 0.55);
+    }}
+
+    .toolbar .replay-playback-toggle button {{
+      position: relative;
+      display: grid;
+      place-items: center;
+      width: 28px;
+      min-height: 28px;
+      padding: 0;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+    }}
+
+    .replay-speed-button span {{
+      width: 0;
+      height: 0;
+      border-top: 6px solid transparent;
+      border-bottom: 6px solid transparent;
+      border-left: 9px solid #8d988a;
+      translate: 1px 0;
+    }}
+
+    .replay-speed-button.active span {{
+      border-left-color: #6fea8c;
+    }}
+
+    .replay-pause-button span,
+    .replay-pause-button span::after {{
+      width: 4px;
+      height: 13px;
+      background: #aeb7ac;
+      border-radius: 1px;
+    }}
+
+    .replay-pause-button span {{
+      position: relative;
+      translate: -3px 0;
+    }}
+
+    .replay-pause-button span::after {{
+      position: absolute;
+      left: 7px;
+      top: 0;
+      content: "";
+    }}
+
+    .replay-playback-toggle button.active {{
+      background: rgba(64, 196, 99, 0.14);
+      box-shadow: inset 0 0 0 1px rgba(64, 196, 99, 0.44);
+    }}
+
+    .replay-playback-setting {{
+      width: 46px;
+      flex: 0 0 46px;
+      color: #c9ffd5;
+      font-size: 0.74rem;
+      font-weight: 850;
+      text-align: left;
+      white-space: nowrap;
+    }}
+
+    .replay-progress {{
+      position: relative;
+      min-width: 180px;
+      height: 38px;
+      flex: 1 1 auto;
+    }}
+
+    .replay-progress-track {{
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 2px;
+      height: 18px;
+      overflow: hidden;
+      border: 1px solid rgba(122, 159, 126, 0.48);
+      border-radius: 3px;
+      background: #030503;
+      box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.9);
+    }}
+
+    .replay-progress-fill {{
+      width: 0;
+      height: 100%;
+      background: #32aa54;
+      box-shadow: 0 0 10px rgba(64, 196, 99, 0.48);
+    }}
+
+    #replay-progress-input {{
+      position: absolute;
+      inset: 8px 0 0;
+      z-index: 4;
+      width: 100%;
+      height: 30px;
+      margin: 0;
+      opacity: 0;
+      cursor: ew-resize;
+    }}
+
+    .replay-level-markers {{
+      position: absolute;
+      inset: 0 0 2px;
+      z-index: 3;
+      pointer-events: none;
+    }}
+
+    .replay-level-marker {{
+      position: absolute;
+      bottom: 0;
+      width: 1px;
+      height: 22px;
+      background: rgba(223, 247, 226, 0.72);
+    }}
+
+    .replay-level-marker-label {{
+      position: absolute;
+      bottom: 20px;
+      color: #bbd8bf;
+      font-size: 0.8rem;
+      font-weight: 900;
+      translate: -50% 0;
+      white-space: nowrap;
     }}
 
     .toolbar button,
@@ -3243,19 +3744,7 @@ def render_classic_html(records, chains, zones, continents):
     }}
 
     .toolbar button {{
-      padding: 0 12px;
-      cursor: pointer;
-    }}
-
-    .options-filter-button {{
-      min-height: 34px;
-      padding: 0 12px;
-      border: 1px solid rgba(255, 235, 196, 0.24);
-      border-radius: 7px;
-      background: rgba(255, 255, 255, 0.07);
-      color: #fff0ce;
-      font: inherit;
-      font-size: 0.88rem;
+      padding: 0 10px;
       cursor: pointer;
     }}
 
@@ -3263,20 +3752,24 @@ def render_classic_html(records, chains, zones, continents):
       min-width: 0;
       display: inline-flex;
       align-items: center;
-      gap: 5px;
-      flex: 1 1 auto;
-      justify-content: center;
+      gap: 4px;
+      flex: 0 1 auto;
+      justify-content: flex-start;
     }}
 
     .batch-navigator[hidden] {{
       display: none;
     }}
 
+    .batch-navigator[hidden] + .toolbar-separator {{
+      display: none;
+    }}
+
     .batch-nav-button {{
       display: grid;
       place-items: center;
-      width: 28px;
-      height: 28px;
+      width: 26px;
+      height: 26px;
       padding: 0;
       border: 1px solid rgba(255, 235, 196, 0.2);
       border-radius: 999px;
@@ -3296,12 +3789,13 @@ def render_classic_html(records, chains, zones, continents):
 
     .batch-nav-pill {{
       min-width: 0;
-      max-width: min(260px, 52vw);
+      width: min(190px, 16vw);
+      max-width: min(190px, 16vw);
       height: 30px;
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      padding: 0 10px;
+      padding: 0 8px;
       border: 1px solid rgba(255, 211, 79, 0.34);
       border-radius: 999px;
       background: rgba(255, 211, 79, 0.12);
@@ -3313,21 +3807,185 @@ def render_classic_html(records, chains, zones, continents):
       text-overflow: ellipsis;
     }}
 
+    .catalogue-batch-footer {{
+      grid-row: 1;
+      width: 100%;
+      min-height: 48px;
+      display: grid;
+      grid-template-columns: 46px minmax(0, 1fr) 46px;
+      align-items: stretch;
+      gap: 0;
+      border-bottom: 1px solid rgba(255, 235, 196, 0.18);
+      background: rgba(8, 11, 8, 0.76);
+      transition: background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+    }}
+
+    .catalogue-batch-footer[hidden],
+    body.replay-mode .catalogue-batch-footer {{
+      display: none;
+    }}
+
+    .catalogue-batch-footer .batch-nav-button {{
+      width: auto;
+      height: auto;
+      min-height: 48px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      font-size: 1.35rem;
+    }}
+
+    .catalogue-batch-footer .batch-nav-button:first-child {{
+      border-right: 1px solid rgba(255, 235, 196, 0.12);
+    }}
+
+    .catalogue-batch-footer .batch-nav-button:last-child {{
+      border-left: 1px solid rgba(255, 235, 196, 0.12);
+    }}
+
+    .catalogue-batch-footer .batch-nav-button:not(:disabled):hover,
+    .catalogue-batch-footer .batch-nav-button:not(:disabled):focus-visible {{
+      background: rgba(255, 211, 79, 0.1);
+      color: #fff4bd;
+      outline: none;
+    }}
+
+    .catalogue-batch-footer .batch-nav-pill {{
+      width: 100%;
+      max-width: none;
+      height: auto;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      padding: 5px 12px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+    }}
+
+    .batch-nav-name {{
+      max-width: 100%;
+      overflow: hidden;
+      color: #fff4d2;
+      font-size: 0.96rem;
+      font-weight: 850;
+      line-height: 1.15;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }}
+
+    .batch-nav-position {{
+      color: #ab9f89;
+      font-size: 0.7rem;
+      font-weight: 760;
+      line-height: 1.1;
+      white-space: nowrap;
+    }}
+
+    .catalogue-batch-footer.batch-drop-over {{
+      border-bottom-color: rgba(255, 211, 79, 0.68);
+      background: rgba(255, 211, 79, 0.1);
+      box-shadow: inset 0 -2px 0 rgba(255, 211, 79, 0.28);
+    }}
+
     .toolbar button.active {{
       border-color: var(--gold);
       background: rgba(255, 211, 79, 0.16);
       color: #fff8dc;
     }}
 
-    .options-filter-button.active {{
+    .catalogue-toggle-wrap {{
+      display: inline-flex;
+      align-items: center;
+    }}
+
+    .profile-import-button {{
+      min-height: 34px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      padding: 0 8px;
+      border: 1px solid rgba(255, 235, 196, 0.24);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.07);
+      color: #fff0ce;
+      font: inherit;
+      font-size: 0.8rem;
+      font-weight: 800;
+      white-space: nowrap;
+      cursor: pointer;
+    }}
+
+    .profile-import-button.active {{
+      border-color: rgba(64, 196, 99, 0.62);
+      background: rgba(64, 196, 99, 0.12);
+      color: #c9ffd5;
+    }}
+
+    .profile-import-button .filter-count {{
+      display: inline-grid;
+      place-items: center;
+      min-width: 18px;
+      height: 18px;
+      padding: 0 5px;
+      border-radius: 999px;
+      background: rgba(64, 196, 99, 0.18);
+      color: #75ef91;
+      font-size: 0.72rem;
+      line-height: 1;
+    }}
+
+    .profile-import-input {{
+      display: none;
+    }}
+
+    .catalogue-assigned-toggle {{
+      min-height: 34px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 10px;
+      border: 1px solid rgba(255, 235, 196, 0.24);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.07);
+      color: #fff0ce;
+      font-size: 0.8rem;
+      font-weight: 800;
+      white-space: nowrap;
+      cursor: pointer;
+      user-select: none;
+    }}
+
+    .catalogue-assigned-toggle.active {{
       border-color: var(--gold);
       background: rgba(255, 211, 79, 0.16);
       color: #fff8dc;
     }}
 
+    .catalogue-assigned-toggle input {{
+      width: 16px;
+      height: 16px;
+      margin: 0;
+      accent-color: var(--gold);
+    }}
+
     .toolbar select {{
       min-width: min(380px, 44vw);
       padding: 0 8px;
+    }}
+
+    #zone-select {{
+      width: min(190px, 22vw);
+      min-width: min(190px, 22vw);
+      max-width: min(190px, 22vw);
+    }}
+
+    #zone-select.active {{
+      border-color: var(--gold);
+      background: rgba(255, 211, 79, 0.16);
+      color: #fff8dc;
     }}
 
     .toolbar select.filter-select {{
@@ -3336,39 +3994,44 @@ def render_classic_html(records, chains, zones, continents):
     }}
 
     .toolbar select.level-select {{
-      min-width: 106px;
+      width: 118px;
+      min-width: 118px;
+      max-width: 118px;
     }}
 
     .toolbar-separator {{
       flex: 0 0 auto;
       width: 1px;
       height: 28px;
-      margin: 0 3px;
+      margin: 0 1px;
       border-radius: 999px;
       background: rgba(210, 202, 186, 0.34);
     }}
 
-    .quest-filter-wrap,
-    .zone-filter-wrap,
-    .display-filter-wrap,
-    .options-filter-wrap {{
+    .main-filter-wrap,
+    .display-filter-wrap {{
       position: relative;
     }}
 
-    .quest-filter-button,
-    .zone-filter-button,
-    .display-filter-button,
-    .options-filter-button {{
+    .main-filter-wrap[hidden] {{
+      display: none;
+    }}
+
+    .main-filter-button,
+    .display-filter-button {{
       display: inline-flex;
       align-items: center;
       gap: 8px;
       font-weight: 800;
     }}
 
-    .quest-filter-button .filter-count,
-    .zone-filter-button .filter-count,
-    .display-filter-button .filter-count,
-    .options-filter-button .filter-count {{
+    .main-filter-button {{
+      min-width: 108px;
+      justify-content: center;
+    }}
+
+    .main-filter-button .filter-count,
+    .display-filter-button .filter-count {{
       display: inline-grid;
       place-items: center;
       min-width: 18px;
@@ -3381,10 +4044,8 @@ def render_classic_html(records, chains, zones, continents):
       line-height: 1;
     }}
 
-    .quest-filter-menu,
-    .zone-filter-menu,
-    .display-filter-menu,
-    .options-filter-menu {{
+    .main-filter-menu,
+    .display-filter-menu {{
       position: absolute;
       z-index: 80;
       top: calc(100% + 7px);
@@ -3400,21 +4061,60 @@ def render_classic_html(records, chains, zones, continents):
       box-shadow: 0 18px 40px rgba(0, 0, 0, 0.42);
     }}
 
-    .quest-filter-menu[hidden],
-    .zone-filter-menu[hidden],
-    .display-filter-menu[hidden],
-    .options-filter-menu[hidden] {{
+    .main-filter-menu[hidden],
+    .display-filter-menu[hidden] {{
       display: none;
     }}
 
-    .zone-filter-menu {{
-      width: 340px;
+    .main-filter-menu {{
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      right: auto;
+      transform: translate(-50%, -50%);
+      width: min(900px, calc(100vw - 32px));
+      max-height: min(780px, calc(100vh - 58px));
+      overflow-x: hidden;
+      overflow-y: auto;
+      box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.42), 0 24px 64px rgba(0, 0, 0, 0.54);
     }}
 
-    .quest-filter-title,
-    .zone-filter-title,
-    .display-filter-title,
-    .options-filter-title {{
+    .combined-filter-grid {{
+      display: grid;
+      grid-template-columns: minmax(190px, 0.84fr) minmax(230px, 1fr) minmax(230px, 1fr);
+      gap: 0;
+      min-height: 0;
+      align-items: start;
+    }}
+
+    .filter-column {{
+      min-width: 0;
+      padding: 0 12px;
+    }}
+
+    .filter-column:first-child {{
+      padding-left: 0;
+    }}
+
+    .filter-column + .filter-column {{
+      border-left: 1px solid rgba(255, 235, 196, 0.16);
+    }}
+
+    .filter-column-title,
+    .filter-section-title {{
+      padding: 4px 6px 8px;
+      margin-bottom: 5px;
+      border-bottom: 1px solid rgba(255, 235, 196, 0.14);
+      color: #fff2cf;
+      font-size: 0.8rem;
+      font-weight: 850;
+    }}
+
+    .filter-section + .filter-section {{
+      margin-top: 12px;
+    }}
+
+    .display-filter-title {{
       padding: 4px 6px 8px;
       margin-bottom: 5px;
       border-bottom: 1px solid rgba(255, 235, 196, 0.14);
@@ -3477,7 +4177,7 @@ def render_classic_html(records, chains, zones, continents):
     .workbench {{
       min-height: 0;
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(380px, 25vw);
+      grid-template-columns: minmax(0, var(--map-pane-width, 1fr)) minmax(380px, var(--catalogue-pane-width, 25vw));
       gap: 10px;
     }}
 
@@ -3498,7 +4198,7 @@ def render_classic_html(records, chains, zones, continents):
     }}
 
     .map-mode-panel,
-    .sequencer-panel {{
+    .planner-panel {{
       position: absolute;
       inset: 0;
     }}
@@ -3509,11 +4209,11 @@ def render_classic_html(records, chains, zones, continents):
     }}
 
     .map-mode-panel[hidden],
-    .sequencer-panel[hidden] {{
+    .planner-panel[hidden] {{
       display: none;
     }}
 
-    .sequencer-panel {{
+    .planner-panel {{
       display: grid;
       min-height: 0;
       padding: 16px;
@@ -3526,9 +4226,11 @@ def render_classic_html(records, chains, zones, continents):
     .journey-setup {{
       place-self: center;
       width: min(520px, 92%);
+      max-height: 100%;
       display: grid;
       gap: 12px;
       padding: 18px;
+      overflow-y: auto;
       border: 1px solid rgba(255, 235, 196, 0.2);
       border-radius: 8px;
       background: rgba(7, 9, 7, 0.48);
@@ -3607,10 +4309,63 @@ def render_classic_html(records, chains, zones, continents):
       box-shadow: 0 0 0 2px rgba(255, 211, 79, 0.14);
     }}
 
+    .journey-setup-actions {{
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      padding: 4px 0;
+    }}
+
+    .journey-string-import {{
+      display: grid;
+      gap: 8px;
+      padding: 10px;
+      border: 1px solid rgba(255, 211, 79, 0.28);
+      border-radius: 6px;
+      background: rgba(0, 0, 0, 0.24);
+    }}
+
+    .journey-string-import[hidden] {{
+      display: none;
+    }}
+
+    .journey-string-import label {{
+      color: #e9d9b7;
+      font-size: 0.76rem;
+      font-weight: 750;
+      text-transform: uppercase;
+    }}
+
+    .journey-string-import textarea {{
+      width: 100%;
+      min-height: 112px;
+      resize: vertical;
+      padding: 8px;
+      border: 1px solid rgba(255, 235, 196, 0.2);
+      border-radius: 5px;
+      background: rgba(2, 4, 2, 0.8);
+      color: #fff3d4;
+      font: 0.78rem/1.35 Consolas, "Courier New", monospace;
+    }}
+
+    .journey-string-import textarea:focus {{
+      border-color: rgba(255, 211, 79, 0.62);
+      box-shadow: 0 0 0 2px rgba(255, 211, 79, 0.14);
+      outline: none;
+    }}
+
+    .journey-string-import-actions {{
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+    }}
+
     .journey-start-button,
     .journey-save-button,
     .journey-close-button,
-    .journey-import-button {{
+    .journey-import-button,
+    .journey-load-button {{
       justify-self: start;
       min-height: 34px;
       padding: 0 12px;
@@ -3627,7 +4382,8 @@ def render_classic_html(records, chains, zones, continents):
     .journey-start-button:disabled,
     .journey-save-button:disabled,
     .journey-close-button:disabled,
-    .journey-import-button:disabled {{
+    .journey-import-button:disabled,
+    .journey-load-button:disabled {{
       cursor: not-allowed;
       opacity: 0.48;
     }}
@@ -3636,6 +4392,14 @@ def render_classic_html(records, chains, zones, continents):
       border-color: rgba(255, 91, 91, 0.42);
       background: rgba(112, 20, 20, 0.34);
       color: #ffb0a8;
+    }}
+
+    .journey-setup .journey-import-button,
+    .journey-setup .journey-load-button {{
+      min-width: 132px;
+      min-height: 38px;
+      justify-self: center;
+      font-size: 0.9rem;
     }}
 
     .journey-import-input {{
@@ -3698,6 +4462,10 @@ def render_classic_html(records, chains, zones, continents):
 
     .journey-message {{
       min-height: 28px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
       padding: 7px 10px;
       border-radius: 7px;
       border: 1px solid rgba(255, 91, 91, 0.34);
@@ -3705,6 +4473,31 @@ def render_classic_html(records, chains, zones, continents):
       color: #ffb0a8;
       font-size: 0.8rem;
       font-weight: 750;
+    }}
+
+    .journey-message-text {{
+      min-width: 0;
+    }}
+
+    .journey-undo-button {{
+      flex: 0 0 auto;
+      min-height: 24px;
+      padding: 0 9px;
+      border: 1px solid rgba(255, 235, 196, 0.28);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.08);
+      color: #fff2cf;
+      font: inherit;
+      font-size: 0.74rem;
+      font-weight: 850;
+      cursor: pointer;
+    }}
+
+    .journey-undo-button:hover,
+    .journey-undo-button:focus-visible {{
+      outline: 2px solid rgba(255, 211, 79, 0.42);
+      outline-offset: 1px;
+      color: #ffe28a;
     }}
 
     .journey-message.ok {{
@@ -3717,20 +4510,21 @@ def render_classic_html(records, chains, zones, continents):
       display: none;
     }}
 
-    .sequencer-board {{
+    .planner-board {{
       min-height: 0;
       display: flex;
       align-items: stretch;
-      gap: 10px;
+      gap: 4px;
       overflow: auto;
-      padding: 2px 3px 8px;
+      padding: 2px 2px 8px;
       scrollbar-color: rgba(255, 255, 255, 0.24) transparent;
       scrollbar-width: thin;
     }}
 
     .journey-batch {{
-      flex: 0 0 min(286px, 38vw);
+      flex: 0 0 min(260px, 34vw);
       min-height: 0;
+      position: relative;
       display: grid;
       grid-template-rows: auto minmax(0, 1fr);
       border: 1px solid rgba(255, 235, 196, 0.2);
@@ -3738,6 +4532,16 @@ def render_classic_html(records, chains, zones, continents):
       background: rgba(6, 8, 6, 0.34);
       box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
       overflow: hidden;
+    }}
+
+    .batch-index-text {{
+      position: absolute;
+      right: 10px;
+      bottom: 8px;
+      color: #9d9585;
+      font-size: 0.74rem;
+      font-weight: 750;
+      pointer-events: none;
     }}
 
     .journey-batch.selected {{
@@ -3749,6 +4553,12 @@ def render_classic_html(records, chains, zones, continents):
       border-color: rgba(234, 83, 83, 0.68);
       background: rgba(76, 13, 13, 0.28);
       box-shadow: inset 0 0 0 1px rgba(255, 116, 116, 0.18);
+    }}
+
+    .journey-batch.completed {{
+      border-color: rgba(64, 196, 99, 0.68);
+      background: rgba(18, 74, 33, 0.3);
+      box-shadow: inset 0 0 0 1px rgba(117, 239, 145, 0.16);
     }}
 
     .journey-batch.unused.selected {{
@@ -3772,6 +4582,12 @@ def render_classic_html(records, chains, zones, continents):
     .journey-batch.unused .journey-batch-head {{
       border-bottom-color: rgba(255, 116, 116, 0.24);
       background: rgba(129, 24, 24, 0.34);
+    }}
+
+    .journey-batch.completed .journey-batch-head {{
+      border-bottom-color: rgba(117, 239, 145, 0.24);
+      background: rgba(27, 112, 51, 0.3);
+      cursor: default;
     }}
 
     .batch-title-row {{
@@ -3867,12 +4683,13 @@ def render_classic_html(records, chains, zones, continents):
       font-size: 0.58rem;
     }}
 
-    .journey-batch-drop {{
+    .journey-batch-drop,
+    .journey-completed-list {{
       min-height: 0;
       display: grid;
       align-content: start;
       gap: 8px;
-      padding: 10px;
+      padding: 10px 10px 28px;
       overflow: auto;
     }}
 
@@ -3899,22 +4716,23 @@ def render_classic_html(records, chains, zones, continents):
     }}
 
     .journey-insert-slot {{
-      flex: 0 0 62px;
+      flex: 0 0 24px;
       display: grid;
       place-items: center;
-      padding: 0 2px;
+      padding: 0;
     }}
 
     .journey-insert-target {{
       display: grid;
       place-items: center;
-      width: 54px;
-      height: 54px;
+      width: 20px;
+      height: 100%;
+      min-height: 180px;
       border: 1px dashed rgba(255, 235, 196, 0.34);
-      border-radius: 999px;
+      border-radius: 8px;
       background: rgba(255, 255, 255, 0.045);
       color: #ffd34f;
-      font-size: 1.6rem;
+      font-size: 1rem;
       font-weight: 850;
       cursor: pointer;
     }}
@@ -3944,6 +4762,13 @@ def render_classic_html(records, chains, zones, continents):
       background: rgba(255, 116, 116, 0.08);
     }}
 
+    .journey-quest.completed {{
+      grid-template-columns: 26px minmax(0, 1fr) auto;
+      border-color: rgba(117, 239, 145, 0.2);
+      background: rgba(64, 196, 99, 0.08);
+      cursor: pointer;
+    }}
+
     .journey-quest.dragging {{
       opacity: 0.55;
       cursor: grabbing;
@@ -3954,6 +4779,12 @@ def render_classic_html(records, chains, zones, continents):
       outline: 2px solid #fff6cf;
       outline-offset: 1px;
       background: color-mix(in srgb, var(--chain-color) 14%, rgba(255, 255, 255, 0.055));
+    }}
+
+    .journey-quest.prerequisite-highlight {{
+      border-color: rgba(210, 202, 186, 0.55);
+      background: rgba(210, 202, 186, 0.1);
+      box-shadow: inset 0 0 0 1px rgba(210, 202, 186, 0.22);
     }}
 
     .journey-quest-step {{
@@ -3968,6 +4799,55 @@ def render_classic_html(records, chains, zones, continents):
       color: #1f1606;
       font-size: 0.7rem;
       font-weight: 850;
+    }}
+
+    .journey-quest-step.prerequisite-warning {{
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: #241503;
+    }}
+
+    .journey-warning-mark {{
+      display: grid;
+      place-items: end center;
+      width: 24px;
+      height: 22px;
+      padding-bottom: 2px;
+      background: #ffbd3d;
+      clip-path: polygon(50% 0, 100% 100%, 0 100%);
+      color: #241503;
+      font-size: 0.76rem;
+      font-weight: 950;
+      line-height: 1;
+      filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.72));
+    }}
+
+    .quest-complete-check {{
+      flex: 0 0 auto;
+      color: #55dc76;
+      font-size: 0.9em;
+      font-weight: 950;
+      line-height: 1;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.72);
+    }}
+
+    .journey-quest-step .quest-complete-check.icon {{
+      position: absolute;
+      right: -6px;
+      bottom: -6px;
+      z-index: 4;
+      display: grid;
+      place-items: center;
+      width: 13px;
+      height: 13px;
+      border: 1px solid rgba(4, 42, 14, 0.9);
+      border-radius: 999px;
+      background: #40c463;
+      color: #071b0c;
+      font-size: 0.62rem;
+      text-shadow: none;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.65);
     }}
 
     .journey-quest-name {{
@@ -4038,6 +4918,10 @@ def render_classic_html(records, chains, zones, continents):
       box-shadow: 0 8px 20px rgba(0, 0, 0, 0.32);
     }}
 
+    .map-title[hidden] {{
+      display: none;
+    }}
+
     .map {{
       position: relative;
       width: 100%;
@@ -4068,11 +4952,9 @@ def render_classic_html(records, chains, zones, continents):
 
     .continent {{
       position: absolute;
-      border-radius: 8px;
-      border: 1px solid rgba(255, 235, 196, 0.16);
       overflow: hidden;
       background: rgba(0, 0, 0, 0.2);
-      box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.5), 0 16px 36px rgba(0, 0, 0, 0.26);
+      box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.38);
     }}
 
     .continent-map {{
@@ -4162,6 +5044,19 @@ def render_classic_html(records, chains, zones, continents):
       opacity: 0.95;
     }}
 
+    .objective-area.selection-emphasis {{
+      border-width: 3px;
+      background: color-mix(in srgb, var(--chain-color) 28%, transparent);
+      box-shadow: 0 0 42px color-mix(in srgb, var(--chain-color) 78%, transparent);
+    }}
+
+    .objective-dot.selection-emphasis {{
+      width: 12px;
+      height: 12px;
+      border-width: 2px;
+      z-index: 8;
+    }}
+
     .quest-pin {{
       position: absolute;
       z-index: 5;
@@ -4177,6 +5072,14 @@ def render_classic_html(records, chains, zones, continents):
       border: 2px solid rgba(255, 255, 255, 0.86);
       box-shadow: 0 4px 10px rgba(0, 0, 0, 0.62), 0 0 18px rgba(255, 224, 109, 0.48);
       text-shadow: 0 1px 0 rgba(255, 255, 255, 0.34);
+    }}
+
+    .quest-pin.selection-emphasis {{
+      width: 36px;
+      height: 36px;
+      font-size: 1.18rem;
+      border-width: 3px;
+      z-index: 12;
     }}
 
     .quest-pin.pickup {{
@@ -4201,6 +5104,13 @@ def render_classic_html(records, chains, zones, continents):
       border: 1px solid rgba(38, 24, 6, 0.72);
       box-shadow: 0 1px 4px rgba(0, 0, 0, 0.62), 0 0 8px rgba(255, 211, 79, 0.44);
       pointer-events: none;
+    }}
+
+    .pickup-dot.selection-emphasis {{
+      width: 14px;
+      height: 14px;
+      border-width: 2px;
+      z-index: 8;
     }}
 
     .map-marker {{
@@ -4395,8 +5305,10 @@ def render_classic_html(records, chains, zones, continents):
 
     .pickup-choice-item {{
       display: grid;
+      grid-template-columns: 27px minmax(0, 1fr);
+      align-items: center;
       width: 100%;
-      gap: 2px;
+      gap: 7px;
       min-height: 34px;
       padding: 6px 7px;
       border: 0;
@@ -4405,7 +5317,34 @@ def render_classic_html(records, chains, zones, continents):
       color: #eadfc9;
       font: inherit;
       text-align: left;
-      cursor: pointer;
+      cursor: grab;
+    }}
+
+    .pickup-choice-item:active {{
+      cursor: grabbing;
+    }}
+
+    .pickup-choice-chain-step {{
+      --chain-color: #ffd34f;
+      position: relative;
+      display: inline-grid;
+      place-items: center;
+      width: 24px;
+      height: 24px;
+      border: 2px solid var(--chain-color);
+      border-radius: 50%;
+      background: rgba(255, 245, 208, 0.94);
+      color: #17140d;
+      font-size: 0.72rem;
+      font-weight: 900;
+      line-height: 1;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45);
+    }}
+
+    .pickup-choice-copy {{
+      min-width: 0;
+      display: grid;
+      gap: 2px;
     }}
 
     .pickup-choice-item:hover,
@@ -4449,11 +5388,12 @@ def render_classic_html(records, chains, zones, continents):
 
     .inventory {{
       display: grid;
-      grid-template-rows: auto minmax(0, 1fr);
+      grid-template-rows: auto auto minmax(0, 1fr);
       overflow: hidden;
     }}
 
     .inventory-head {{
+      grid-row: 2;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -4461,6 +5401,76 @@ def render_classic_html(records, chains, zones, continents):
       padding: 10px 12px;
       border-bottom: 1px solid rgba(255, 235, 196, 0.14);
       background: rgba(12, 13, 10, 0.52);
+    }}
+
+    body:not(.replay-mode) .inventory.quest-search-mode {{
+      overflow: visible;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+    }}
+
+    body:not(.replay-mode) .inventory.quest-search-mode .catalogue-batch-footer {{
+      margin-bottom: 8px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: linear-gradient(180deg, rgba(35, 39, 31, 0.95), rgba(18, 21, 17, 0.98));
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
+    }}
+
+    body:not(.replay-mode) .inventory.quest-search-mode .catalogue-batch-footer[hidden] {{
+      margin-bottom: 0;
+    }}
+
+    body:not(.replay-mode) .inventory.quest-search-mode .inventory-head {{
+      border: 1px solid var(--line);
+      border-bottom-color: rgba(255, 235, 196, 0.14);
+      border-radius: 8px 8px 0 0;
+      background: rgba(12, 13, 10, 0.74);
+    }}
+
+    body:not(.replay-mode) .inventory.quest-search-mode .chain-list {{
+      border: 1px solid var(--line);
+      border-top: 0;
+      border-radius: 0 0 8px 8px;
+      background: linear-gradient(180deg, rgba(35, 39, 31, 0.95), rgba(18, 21, 17, 0.98));
+      box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+    }}
+
+    .inventory-mode-toggle {{
+      display: inline-flex;
+      align-items: center;
+      gap: 0;
+      min-width: 0;
+      padding: 3px;
+      border: 1px solid rgba(255, 235, 196, 0.24);
+      border-radius: 999px;
+      background: rgba(7, 9, 7, 0.48);
+      box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.34);
+    }}
+
+    .inventory-mode-toggle button {{
+      min-height: 28px;
+      min-width: 0;
+      padding: 0 9px;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: #c9baa0;
+      font-size: 0.74rem;
+      font-weight: 850;
+      white-space: nowrap;
+      box-shadow: none;
+      cursor: pointer;
+    }}
+
+    .inventory-mode-toggle button.active,
+    .inventory-mode-toggle button[aria-pressed="true"] {{
+      background: rgba(255, 211, 79, 0.18);
+      color: #fff8dc;
+      box-shadow: inset 0 0 0 1px rgba(255, 211, 79, 0.34), 0 0 14px rgba(255, 211, 79, 0.12);
     }}
 
     .inventory-subtitle {{
@@ -4493,6 +5503,50 @@ def render_classic_html(records, chains, zones, continents):
       flex: 1 1 auto;
       min-width: 0;
     }}
+
+    .inventory-search[hidden],
+    .catalogue-assigned-toggle[hidden] {{
+      display: none;
+    }}
+
+    .batch-summary-empty {{
+      margin: 4px;
+      padding: 18px 14px;
+      border: 1px dashed rgba(255, 235, 196, 0.2);
+      border-radius: 6px;
+      color: #a99b83;
+      font-size: 0.8rem;
+      line-height: 1.5;
+      text-align: center;
+    }}
+
+    .batch-chain-context-toggle {{
+      flex: 0 0 auto;
+      padding: 2px 6px;
+      border: 1px solid rgba(255, 235, 196, 0.2);
+      border-radius: 5px;
+      background: rgba(8, 10, 8, 0.42);
+      color: #aaa08d;
+      font-size: 0.64rem;
+      font-weight: 800;
+      cursor: pointer;
+    }}
+
+    .batch-chain-context-toggle.active {{
+      border-color: rgba(255, 211, 79, 0.5);
+      color: #ffd34f;
+    }}
+
+    .batch-summary-status {{
+      align-self: center;
+      justify-self: end;
+      color: #918775;
+      font-size: 0.64rem;
+      white-space: nowrap;
+    }}
+
+    .batch-summary-status.completed {{ color: #61d87b; }}
+    .batch-summary-status.hidden {{ color: #ff7770; }}
 
     .quest-search-input {{
       width: 100%;
@@ -4549,10 +5603,289 @@ def render_classic_html(records, chains, zones, continents):
     }}
 
     .chain-list {{
+      grid-row: 3;
+      min-height: 0;
       overflow: auto;
       padding: 8px;
       scrollbar-color: rgba(255, 255, 255, 0.24) transparent;
       scrollbar-width: thin;
+      transition: background-color 120ms ease, box-shadow 120ms ease;
+    }}
+
+    .chain-list.batch-drop-over {{
+      background: rgba(255, 211, 79, 0.055);
+      box-shadow: inset 0 0 0 2px rgba(255, 211, 79, 0.5);
+    }}
+
+    .batch-summary-target-divider {{
+      height: 1px;
+      margin: 4px 8px 10px;
+      background: linear-gradient(90deg, transparent, rgba(210, 202, 186, 0.52) 12%, rgba(210, 202, 186, 0.52) 88%, transparent);
+      box-shadow: 0 1px 0 rgba(0, 0, 0, 0.32);
+    }}
+
+    .inventory-head[hidden],
+    .chain-list[hidden] {{
+      display: none;
+    }}
+
+    .replay-event-log[hidden] {{
+      display: none;
+    }}
+
+    .replay-event-log {{
+      min-height: 0;
+      display: grid;
+      grid-row: 1 / -1;
+      grid-template-rows: auto minmax(0, 1fr);
+      overflow: hidden;
+    }}
+
+    body.replay-mode .inventory {{
+      grid-template-rows: minmax(0, 1fr);
+    }}
+
+    .replay-event-log-header {{
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(255, 235, 196, 0.14);
+      background: rgba(12, 13, 10, 0.64);
+    }}
+
+    .replay-panel-toggle {{
+      display: inline-flex;
+      padding: 3px;
+      border: 1px solid rgba(255, 235, 196, 0.2);
+      border-radius: 999px;
+      background: rgba(5, 7, 5, 0.68);
+    }}
+
+    .replay-panel-toggle button {{
+      min-height: 28px;
+      padding: 0 11px;
+      border: 0;
+      border-radius: 999px;
+      background: transparent;
+      color: #a99f8d;
+      font: inherit;
+      font-size: 0.72rem;
+      font-weight: 850;
+      cursor: pointer;
+    }}
+
+    .replay-panel-toggle button.active {{
+      background: rgba(64, 196, 99, 0.16);
+      color: #ddffe5;
+      box-shadow: inset 0 0 0 1px rgba(64, 196, 99, 0.38);
+    }}
+
+    .replay-event-log-header span {{
+      color: #8fa892;
+      font-size: 0.72rem;
+    }}
+
+    .replay-event-log-viewport {{
+      position: relative;
+      min-height: 0;
+      overflow: auto;
+      scrollbar-color: rgba(255, 255, 255, 0.24) transparent;
+      scrollbar-width: thin;
+    }}
+
+    .replay-event-log-content {{
+      position: relative;
+      min-height: 100%;
+    }}
+
+    .replay-event-log.quest-progress-mode .replay-event-log-content {{
+      position: static;
+      min-height: 100%;
+      padding: 8px;
+    }}
+
+    .replay-quest-progress-list {{
+      display: grid;
+      align-content: start;
+      gap: 8px;
+    }}
+
+    .replay-progress-quest {{
+      padding: 9px 10px;
+      border: 1px solid rgba(255, 235, 196, 0.13);
+      border-left: 3px solid var(--chain-color, #8abf91);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.045);
+    }}
+
+    .replay-progress-quest-header {{
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      color: #fff0ca;
+      font-size: 0.79rem;
+      font-weight: 850;
+    }}
+
+    .replay-progress-quest-level {{
+      flex: 0 0 auto;
+      color: #9c998e;
+      font-size: 0.67rem;
+      font-weight: 750;
+    }}
+
+    .replay-progress-objectives {{
+      display: grid;
+      gap: 7px;
+      margin-top: 8px;
+    }}
+
+    .replay-progress-objective {{
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 3px 8px;
+      color: #cbc3b2;
+      font-size: 0.69rem;
+      line-height: 1.25;
+    }}
+
+    .replay-progress-objective-count {{
+      color: #a5b4a6;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }}
+
+    .replay-progress-objective-track {{
+      grid-column: 1 / -1;
+      height: 4px;
+      overflow: hidden;
+      border-radius: 2px;
+      background: rgba(0, 0, 0, 0.62);
+    }}
+
+    .replay-progress-objective-fill {{
+      height: 100%;
+      background: #42bf64;
+    }}
+
+    .replay-progress-complete {{
+      margin-top: 7px;
+      color: #55dc76;
+      font-size: 0.76rem;
+      font-weight: 900;
+    }}
+
+    .replay-event-row {{
+      position: absolute;
+      left: 8px;
+      right: 8px;
+      height: 62px;
+      display: grid;
+      grid-template-columns: 32px minmax(0, 1fr);
+      align-items: center;
+      gap: 9px;
+      padding: 7px 9px;
+      border: 1px solid rgba(255, 235, 196, 0.1);
+      border-left: 3px solid var(--event-color, #8abf91);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.045);
+    }}
+
+    .replay-event-row.current {{
+      border-color: rgba(111, 234, 140, 0.48);
+      background: rgba(64, 196, 99, 0.11);
+      box-shadow: inset 0 0 0 1px rgba(64, 196, 99, 0.14);
+    }}
+
+    .replay-event-icon {{
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border: 1px solid color-mix(in srgb, var(--event-color, #8abf91) 70%, #fff 8%);
+      border-radius: 999px;
+      background: rgba(5, 7, 5, 0.86);
+      color: var(--event-color, #8abf91);
+      font-size: 1rem;
+      font-weight: 950;
+      line-height: 1;
+    }}
+
+    .replay-event-description {{
+      min-width: 0;
+      color: #f0e7d3;
+      font-size: 0.78rem;
+      font-weight: 760;
+      line-height: 1.22;
+    }}
+
+    .replay-event-meta {{
+      margin-top: 3px;
+      color: #9d998e;
+      font-size: 0.68rem;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }}
+
+    .replay-empty {{
+      display: grid;
+      place-items: center;
+      gap: 10px;
+      min-height: 220px;
+      padding: 24px;
+      color: #b5aa96;
+      text-align: center;
+    }}
+
+    .replay-empty button {{
+      min-height: 34px;
+      padding: 0 12px;
+      border: 1px solid rgba(64, 196, 99, 0.46);
+      border-radius: 6px;
+      background: rgba(64, 196, 99, 0.12);
+      color: #c9ffd5;
+      font: inherit;
+      font-weight: 800;
+      cursor: pointer;
+    }}
+
+    .replay-event-marker {{
+      --event-color: #66d77f;
+      position: absolute;
+      z-index: 70;
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border: 2px solid rgba(255, 255, 255, 0.82);
+      border-radius: 999px;
+      translate: -50% -50%;
+      background: color-mix(in srgb, var(--event-color) 36%, #050705);
+      color: #fff;
+      font-size: 1.15rem;
+      font-weight: 950;
+      line-height: 1;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.92);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--event-color) 28%, transparent), 0 3px 12px rgba(0, 0, 0, 0.72);
+      animation: replay-event-life 4s ease-out forwards;
+      pointer-events: auto;
+    }}
+
+    body.replay-paused .replay-event-marker {{
+      animation-play-state: paused;
+    }}
+
+    @keyframes replay-event-life {{
+      0% {{ opacity: 1; scale: 1.85; }}
+      18% {{ opacity: 1; scale: 1; }}
+      68% {{ opacity: 0.76; scale: 0.92; }}
+      100% {{ opacity: 0; scale: 0.78; }}
     }}
 
     .chain-row {{
@@ -4567,16 +5900,16 @@ def render_classic_html(records, chains, zones, continents):
       cursor: pointer;
     }}
 
-    .chain-row.active,
-    .chain-row.expanded {{
-      background: color-mix(in srgb, var(--chain-color) 13%, rgba(255, 255, 255, 0.055));
+    .chain-row.active {{
+      background: rgba(255, 255, 255, 0.06);
       box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--chain-color) 42%, transparent);
     }}
 
     .chain-row.selected {{
       outline: 2px solid #ffd34f;
       outline-offset: 1px;
-      background: color-mix(in srgb, var(--chain-color) 18%, rgba(255, 255, 255, 0.06));
+      background: rgba(255, 255, 255, 0.06);
+      box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--chain-color) 52%, transparent);
     }}
 
     .chain-meta {{
@@ -4659,6 +5992,7 @@ def render_classic_html(records, chains, zones, continents):
       color: #a99b83;
       font-size: 0.7rem;
       font-weight: 750;
+      cursor: pointer;
     }}
 
     .chain-track {{
@@ -4724,22 +6058,24 @@ def render_classic_html(records, chains, zones, continents):
       box-shadow: inset 0 0 0 1px rgba(255, 211, 79, 0.5), 0 0 16px color-mix(in srgb, var(--chain-color) 34%, transparent);
     }}
 
+    .chain-quest-item.hidden-search-match {{
+      border-color: rgba(255, 116, 116, 0.45);
+      background: rgba(126, 22, 22, 0.18);
+    }}
+
     .chain-quest-item.outside-zone {{
       opacity: 0.48;
     }}
 
-    .chain-quest-item.assignment-locked {{
-      opacity: 0.58;
-      filter: grayscale(0.72) saturate(0.38);
-    }}
-
-    .chain-quest-item.assignment-locked:hover,
-    .chain-quest-item.assignment-locked:focus-visible {{
-      opacity: 0.76;
-    }}
-
     .chain-quest-item.has-detail {{
       align-items: start;
+    }}
+
+    .chain-quest-item.has-detail,
+    .chain-quest-item.has-detail:hover,
+    .chain-quest-item.has-detail:focus-visible,
+    .chain-quest-item.has-detail.active {{
+      background: transparent;
     }}
 
     .chain-quest-step {{
@@ -4754,6 +6090,49 @@ def render_classic_html(records, chains, zones, continents):
       color: #1f1606;
       font-size: 0.72rem;
       font-weight: 850;
+    }}
+
+    .chain-quest-step::after,
+    .quest-icon-step::after {{
+      content: "";
+      position: absolute;
+      right: -4px;
+      bottom: -4px;
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      border: 1px solid rgba(0, 0, 0, 0.86);
+      background: transparent;
+      box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.24);
+      opacity: 0;
+    }}
+
+    .quest-icon.assignment-available {{
+      --size: 33px;
+    }}
+
+    .chain-quest-item.assignment-available .chain-quest-step {{
+      width: 28px;
+      height: 28px;
+      font-size: 0.78rem;
+    }}
+
+    .quest-icon.assignment-assigned .quest-icon-step::after,
+    .chain-quest-item.assignment-assigned .chain-quest-step::after {{
+      background: #40c463;
+      opacity: 1;
+    }}
+
+    .quest-icon.assignment-unavailable .quest-icon-step::after,
+    .chain-quest-item.assignment-unavailable .chain-quest-step::after {{
+      background: #9b9b9b;
+      opacity: 1;
+    }}
+
+    .quest-icon.assignment-hidden .quest-icon-step::after,
+    .chain-quest-item.assignment-hidden .chain-quest-step::after {{
+      background: #e04444;
+      opacity: 1;
     }}
 
     .chain-quest-main {{
@@ -4844,6 +6223,10 @@ def render_classic_html(records, chains, zones, continents):
       white-space: nowrap;
     }}
 
+    .catalogue-detail-row .muted {{
+      color: #a99b83;
+    }}
+
     .catalogue-objectives {{
       display: grid;
       gap: 4px;
@@ -4854,6 +6237,21 @@ def render_classic_html(records, chains, zones, continents):
 
     .catalogue-objectives li {{
       min-width: 0;
+    }}
+
+    .catalogue-reward-list {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 3px 10px;
+      min-width: 0;
+    }}
+
+    .catalogue-reputation-gain {{
+      color: #8edc9b;
+    }}
+
+    .catalogue-reputation-loss {{
+      color: #ef8b7c;
     }}
 
     .zone-link {{
@@ -4935,6 +6333,15 @@ def render_classic_html(records, chains, zones, continents):
       box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.72), 0 0 20px rgba(255, 211, 79, 0.52);
     }}
 
+    .quest-icon.hidden-search-match {{
+      border-color: rgba(255, 116, 116, 0.9);
+      background:
+        linear-gradient(rgba(126, 22, 22, 0.18), rgba(126, 22, 22, 0.34)),
+        url("Questie/Icons/available.png") center / 92% 92% no-repeat,
+        #211909;
+      box-shadow: 0 0 0 1px rgba(90, 12, 12, 0.85), 0 0 16px rgba(255, 116, 116, 0.22);
+    }}
+
     .quest-icon.outside-zone {{
       opacity: 0.38;
       filter: grayscale(0.45);
@@ -4942,17 +6349,6 @@ def render_classic_html(records, chains, zones, continents):
 
     .quest-icon.no-map {{
       border-style: dashed;
-    }}
-
-    .quest-icon.assignment-locked {{
-      opacity: 0.56;
-      filter: grayscale(0.72) saturate(0.36);
-    }}
-
-    .quest-icon.assignment-locked:hover,
-    .quest-icon.assignment-locked:focus-visible,
-    .quest-icon.assignment-locked.active {{
-      opacity: 0.78;
     }}
 
     .chain-row[draggable="true"],
@@ -5099,9 +6495,43 @@ def render_classic_html(records, chains, zones, continents):
       font-weight: 720;
     }}
 
+    @media (max-width: 1900px) {{
+      header {{
+        grid-template-columns: minmax(0, 1fr);
+        align-items: start;
+      }}
+
+      .header-side {{
+        min-height: 40px;
+        padding-top: 6px;
+        border-top: 1px solid rgba(255, 235, 196, 0.12);
+      }}
+    }}
+
+    @media (max-width: 1450px) {{
+      .header-main {{
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+      }}
+
+      .normal-toolbar-controls {{
+        overflow-x: auto;
+        overflow-y: hidden;
+        padding-bottom: 3px;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 211, 79, 0.35) transparent;
+        overscroll-behavior-inline: contain;
+      }}
+
+      .normal-toolbar-controls > * {{
+        flex: 0 0 auto;
+      }}
+    }}
+
     @media (max-width: 1100px) {{
       body {{
-        overflow: auto;
+        overflow-x: hidden;
+        overflow-y: auto;
       }}
 
       main {{
@@ -5112,6 +6542,28 @@ def render_classic_html(records, chains, zones, continents):
 
       header {{
         grid-template-columns: 1fr;
+      }}
+
+      .header-main {{
+        grid-template-columns: minmax(0, 1fr);
+      }}
+
+      .toolbar {{
+        width: 100%;
+        overflow-x: auto;
+        overflow-y: hidden;
+        padding-bottom: 3px;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 211, 79, 0.35) transparent;
+      }}
+
+      .toolbar > * {{
+        flex: 0 0 auto;
+      }}
+
+      .normal-toolbar-controls {{
+        overflow: visible;
+        padding-bottom: 0;
       }}
 
       .workbench {{
@@ -5128,52 +6580,74 @@ def render_classic_html(records, chains, zones, continents):
   <main>
     <header>
       <div class="header-main">
-        <h1 class="brand"><span class="brand-questie">Questie</span><span class="brand-plus">Plus</span></h1>
+        <div class="brand-lockup">
+          <img class="brand-icon" src="assets/branding/questieplus-icon-400.png" alt="" aria-hidden="true">
+          <h1 class="brand"><span class="brand-questie">Questie</span><span class="brand-plus">Plus</span></h1>
+        </div>
         <div class="toolbar">
           <div class="view-toggle" role="group" aria-label="Workspace view">
             <button type="button" id="map-view-button" class="active" aria-pressed="true">Map</button>
-            <button type="button" id="sequencer-view-button" aria-pressed="false">Sequencer</button>
+            <button type="button" id="planner-view-button" aria-pressed="false">Planner</button>
+            <button type="button" id="replay-view-button" aria-pressed="false">Replay</button>
           </div>
-          <button type="button" id="world-button">World</button>
-          <select id="zone-select" aria-label="Zone"></select>
-          <span class="toolbar-separator" aria-hidden="true"></span>
-          <select id="race-filter" class="filter-select" aria-label="Race"></select>
-          <select id="class-filter" class="filter-select" aria-label="Class"></select>
-          <select id="level-filter" class="filter-select level-select" aria-label="Current level"></select>
-          <span class="toolbar-separator" aria-hidden="true"></span>
-          <div class="quest-filter-wrap" id="quest-filter-wrap">
-            <button type="button" id="quest-filter-button" class="quest-filter-button" aria-expanded="false" aria-controls="quest-filter-menu">
-              Quest filter <span class="filter-count" id="quest-filter-count"></span>
-            </button>
-            <div class="quest-filter-menu" id="quest-filter-menu" hidden></div>
+          <div class="replay-toolbar" id="replay-toolbar" hidden>
+            <div class="replay-scope-toggle" role="group" aria-label="Replay map scope">
+              <button type="button" id="replay-local-button" class="active" aria-pressed="true">Local</button>
+              <button type="button" id="replay-world-button" aria-pressed="false">World</button>
+            </div>
+            <div class="replay-playback-controls" aria-label="Replay playback controls">
+              <div class="replay-playback-toggle" role="group" aria-label="Replay playback setting">
+                <button type="button" class="replay-pause-button active" id="replay-pause-button" aria-label="Pause replay" title="Pause"><span aria-hidden="true"></span></button>
+                <button type="button" class="replay-speed-button" data-replay-speed="1" aria-label="Play at 1x" title="1x"><span aria-hidden="true"></span></button>
+                <button type="button" class="replay-speed-button" data-replay-speed="10" aria-label="Play at 10x" title="10x"><span aria-hidden="true"></span></button>
+                <button type="button" class="replay-speed-button" data-replay-speed="60" aria-label="Play at 60x" title="60x"><span aria-hidden="true"></span></button>
+                <button type="button" class="replay-speed-button" data-replay-speed="600" aria-label="Play at 600x" title="600x"><span aria-hidden="true"></span></button>
+                <button type="button" class="replay-speed-button" data-replay-speed="6000" aria-label="Play at 6000x" title="6000x"><span aria-hidden="true"></span></button>
+              </div>
+              <span class="replay-playback-setting" id="replay-playback-setting">Pause</span>
+            </div>
+            <div class="replay-progress" id="replay-progress">
+              <div class="replay-level-markers" id="replay-level-markers" aria-hidden="true"></div>
+              <div class="replay-progress-track"><div class="replay-progress-fill" id="replay-progress-fill"></div></div>
+              <input id="replay-progress-input" type="range" min="0" max="100000" step="1" value="0" aria-label="Replay progress">
+            </div>
           </div>
-          <div class="zone-filter-wrap" id="zone-filter-wrap">
-            <button type="button" id="zone-filter-button" class="zone-filter-button" aria-expanded="false" aria-controls="zone-filter-menu">
-              Zone filter <span class="filter-count" id="zone-filter-count"></span>
+          <div class="normal-toolbar-controls" id="normal-toolbar-controls">
+            <button type="button" class="profile-import-button" id="profile-import-button">
+              Import Profile <span class="filter-count" id="profile-import-count" hidden></span>
             </button>
-            <div class="zone-filter-menu" id="zone-filter-menu" hidden></div>
-          </div>
-          <div class="display-filter-wrap" id="display-filter-wrap">
-            <button type="button" id="display-filter-button" class="display-filter-button" aria-expanded="false" aria-controls="display-filter-menu">
-              Display <span class="filter-count" id="display-filter-count"></span>
-            </button>
-            <div class="display-filter-menu" id="display-filter-menu" hidden></div>
+            <input class="profile-import-input" id="profile-import-input" type="file" accept=".lua,.json,application/json,text/plain">
+            <span class="toolbar-separator" aria-hidden="true"></span>
+            <button type="button" id="world-button">World</button>
+            <select id="zone-select" aria-label="Zone"></select>
+            <div class="display-filter-wrap" id="display-filter-wrap">
+              <button type="button" id="display-filter-button" class="display-filter-button" aria-expanded="false" aria-controls="display-filter-menu">
+                Show <span class="filter-count" id="display-filter-count"></span>
+              </button>
+              <div class="display-filter-menu" id="display-filter-menu" hidden></div>
+            </div>
+            <span class="toolbar-separator" aria-hidden="true"></span>
+            <div class="main-filter-wrap" id="main-filter-wrap">
+              <button type="button" id="main-filter-button" class="main-filter-button" aria-expanded="false" aria-controls="main-filter-menu">
+                Search filters
+              </button>
+              <div class="main-filter-menu" id="main-filter-menu" hidden></div>
+            </div>
+            <div class="catalogue-toggle-wrap">
+              <label class="catalogue-assigned-toggle" id="catalogue-assigned-toggle">
+                <input type="checkbox" id="show-assigned-catalogue">
+                <span>Show assigned quests</span>
+              </label>
+            </div>
+            <select id="level-filter" class="filter-select level-select" aria-label="Current level"></select>
           </div>
         </div>
       </div>
       <div class="header-side">
-        <div class="options-filter-wrap" id="options-filter-wrap">
-          <button type="button" id="options-filter-button" class="options-filter-button" aria-expanded="false" aria-controls="options-filter-menu">
-            Options <span class="filter-count" id="options-filter-count"></span>
-          </button>
-          <div class="options-filter-menu" id="options-filter-menu" hidden></div>
+        <div class="inventory-mode-toggle" role="group" aria-label="Quest catalogue mode">
+          <button type="button" class="active" id="inventory-search-mode" aria-pressed="true">Quest Search</button>
+          <button type="button" id="inventory-batch-mode" aria-pressed="false">Batch Summary</button>
         </div>
-        <div class="batch-navigator" id="batch-navigator" hidden>
-          <button type="button" class="batch-nav-button" id="batch-nav-prev" aria-label="Previous batch">&lsaquo;</button>
-          <span class="batch-nav-pill" id="batch-nav-label">No batch</span>
-          <button type="button" class="batch-nav-button" id="batch-nav-next" aria-label="Next batch">&rsaquo;</button>
-        </div>
-        <div class="count">{quest_count} quests - {zone_count} zone maps</div>
       </div>
     </header>
     <section class="workbench">
@@ -5189,14 +6663,24 @@ def render_classic_html(records, chains, zones, continents):
             <div class="world-zone-tooltip" id="world-zone-tooltip" hidden></div>
           </div>
         </div>
-        <div class="sequencer-panel" id="sequencer-panel" hidden>
-          <div class="journey-global-actions">
-            <button class="journey-import-button" id="journey-import-button" type="button">Import Journey</button>
-            <input class="journey-import-input" id="journey-import-input" type="file" accept="application/json,.json">
-          </div>
+        <div class="planner-panel" id="planner-panel" hidden>
           <form class="journey-setup" id="journey-setup">
             <h2>Create a Journey</h2>
-            <p>Name the plan and lock in the character race and class before sequencing quests.</p>
+            <p>Name the plan and lock in the character race and class before planning quests.</p>
+            <div class="journey-setup-actions">
+              <button class="journey-import-button" id="journey-import-button" type="button">Import Journey</button>
+              <button class="journey-load-button" id="journey-load-button" type="button">Load Journey</button>
+              <input class="journey-import-input" id="journey-load-input" type="file" accept="application/json,.json">
+            </div>
+            <div class="journey-string-import" id="journey-string-import" hidden>
+              <label for="journey-string-input">Journey string</label>
+              <textarea id="journey-string-input" spellcheck="false" autocomplete="off"></textarea>
+              <div class="journey-string-import-actions">
+                <button class="journey-load-button" id="journey-string-cancel" type="button">Cancel</button>
+                <button class="journey-import-button" id="journey-string-submit" type="button">Import String</button>
+              </div>
+            </div>
+            <div class="journey-message" id="journey-setup-message" hidden></div>
             <div class="journey-setup-grid">
               <div class="journey-field full">
                 <label for="journey-name-input">Journey name</label>
@@ -5214,22 +6698,33 @@ def render_classic_html(records, chains, zones, continents):
             <button class="journey-start-button" id="journey-start-button" type="submit" disabled>Start Journey</button>
           </form>
           <div class="journey-workspace" id="journey-workspace" hidden>
+            <div class="journey-global-actions">
+              <button class="journey-close-button" id="journey-close-button" type="button">Close Journey</button>
+            </div>
             <div class="journey-head">
               <div class="journey-title-tools">
                 <input class="journey-name-editor" id="journey-name-editor" type="text" aria-label="Journey name">
                 <button class="journey-save-button" id="journey-save-button" type="button">Save Journey</button>
-                <button class="journey-close-button" id="journey-close-button" type="button">Close Journey</button>
+                <button class="journey-save-button" id="journey-copy-addon-button" type="button">Copy Addon String</button>
                 <span class="journey-character-summary" id="journey-character-summary"></span>
               </div>
             </div>
             <div class="journey-message" id="journey-message" hidden></div>
-            <div class="sequencer-board" id="sequencer-board" aria-label="Journey batches"></div>
+            <div class="planner-board" id="planner-board" aria-label="Journey batches"></div>
           </div>
         </div>
       </section>
       <aside class="inventory" aria-label="Quest chain inventory">
+        <div class="batch-navigator catalogue-batch-footer" id="batch-navigator" hidden>
+          <button type="button" class="batch-nav-button" id="batch-nav-prev" aria-label="Previous batch">&lsaquo;</button>
+          <span class="batch-nav-pill" id="batch-nav-label">
+            <span class="batch-nav-name" id="batch-nav-name">No batch selected</span>
+            <span class="batch-nav-position" id="batch-nav-position"></span>
+          </span>
+          <button type="button" class="batch-nav-button" id="batch-nav-next" aria-label="Next batch">&rsaquo;</button>
+        </div>
         <div class="inventory-head">
-          <div class="inventory-search">
+          <div class="inventory-search" id="inventory-search-wrap">
             <input class="quest-search-input" id="quest-search" type="search" placeholder="Search quests" aria-label="Search quests">
             <button class="quest-search-clear" id="quest-search-clear" type="button" aria-label="Clear quest search" hidden>x</button>
           </div>
@@ -5239,6 +6734,18 @@ def render_classic_html(records, chains, zones, continents):
           </div>
         </div>
         <div class="chain-list" id="chain-list"></div>
+        <div class="replay-event-log" id="replay-event-log" hidden>
+          <div class="replay-event-log-header">
+            <div class="replay-panel-toggle" role="group" aria-label="Replay side panel view">
+              <button type="button" class="active" id="replay-log-view-button" aria-pressed="true">Event Log</button>
+              <button type="button" id="replay-progress-view-button" aria-pressed="false">Quest Progress</button>
+            </div>
+            <span id="replay-event-log-count">0 events</span>
+          </div>
+          <div class="replay-event-log-viewport" id="replay-event-log-viewport">
+            <div class="replay-event-log-content" id="replay-event-log-content"></div>
+          </div>
+        </div>
       </aside>
     </section>
   </main>
@@ -5268,28 +6775,47 @@ def render_classic_html(records, chains, zones, continents):
       {{ label: "Warlock", mask: 256, color: "#9482C9" }},
       {{ label: "Druid", mask: 1024, color: "#FF7D0A" }},
     ];
+    const UNKNOWN_ZONE_ID = 0;
+    const REPLAY_EVENT_TYPES = {{
+      1: {{ id: "pickup", icon: "!", color: "#ffd34f", label: "Quest pickup" }},
+      2: {{ id: "turnin", icon: "?", color: "#ffd34f", label: "Quest hand-in" }},
+      3: {{ id: "kill", icon: "&#9876;", color: "#ef826c", label: "Mob killed" }},
+      4: {{ id: "death", icon: "&#9760;", color: "#d7d7d7", label: "Player death" }},
+      5: {{ id: "objective", icon: "&#10003;", color: "#66d77f", label: "Quest objective progress" }},
+      6: {{ id: "complete", icon: "&#9733;", color: "#8be8ff", label: "Quest objectives complete" }},
+      7: {{ id: "level", icon: "&#127880;", color: "#e99cff", label: "Level gained" }},
+      8: {{ id: "login", icon: "&#9654;", color: "#71d98a", label: "Logged in" }},
+      9: {{ id: "logout", icon: "&#9632;", color: "#a9b0a9", label: "Logged out" }},
+    }};
+    const REPLAY_SPEEDS = [1, 10, 60, 600, 6000];
+    const EMPTY_REPLAY_EVENTS = [];
+    const REPLAY_EVENT_ROW_HEIGHT = 66;
+    const REPLAY_LONG_GAP_SECONDS = 30 * 60;
+    const REPLAY_COMPRESSED_GAP_SECONDS = 5 * 60;
     const filters = {{
-      raceMask: null,
-      classMask: null,
+      factions: new Set(["Alliance", "Horde"]),
+      raceMasks: new Set(RACES.filter((race) => race.mask != null).map((race) => race.mask)),
+      classMasks: new Set(CLASSES.filter((klass) => klass.mask != null).map((klass) => klass.mask)),
       level: null,
       search: "",
       typeIds: new Set(QUEST_TYPE_FILTERS.filter((filter) => filter.defaultEnabled).map((filter) => filter.id)),
-      zoneIds: new Set(DATA.zones.filter((zone) => zone.questCount > 0).map((zone) => zone.id)),
+      zoneIds: new Set(),
+      useCurrentMapZone: true,
     }};
     const DISPLAY_FILTERS = [
-      {{ id: "available-pickups", label: "Available quest pickups", defaultEnabled: true }},
-      {{ id: "quest-objectives", label: "All quest objectives", defaultEnabled: false }},
-      {{ id: "quest-handins", label: "All quest hand-ins", defaultEnabled: false }},
+      {{ id: "available-pickups", label: "Pickups", defaultEnabled: true }},
+      {{ id: "quest-objectives", label: "Objectives", defaultEnabled: false }},
+      {{ id: "quest-handins", label: "Hand ins", defaultEnabled: false }},
     ];
     const displayFilters = new Set(DISPLAY_FILTERS.filter((filter) => filter.defaultEnabled).map((filter) => filter.id));
-    const CATALOGUE_OPTIONS = [
-      {{ id: "show-unused", label: "Show Unused quests", defaultEnabled: false }},
-      {{ id: "show-assigned", label: "Show Assigned quests", defaultEnabled: false }},
-    ];
-    const catalogueOptions = new Set(CATALOGUE_OPTIONS.filter((option) => option.defaultEnabled).map((option) => option.id));
+    const CATALOGUE_SHOW_ASSIGNED_OPTION = "show-assigned";
+    const catalogueOptions = new Set();
     const questsById = new Map(DATA.quests.map((quest) => [quest.id, quest]));
     const zonesById = new Map(DATA.zones.map((zone) => [zone.id, zone]));
     const zonesByName = new Map(DATA.zones.map((zone) => [zone.name, zone]));
+    const zonesByUiMapId = new Map(DATA.zones.filter((zone) => zone.uiMapId != null).map((zone) => [Number(zone.uiMapId), zone]));
+    const continentsById = new Map(DATA.continents.map((continent) => [Number(continent.id), continent]));
+    const npcNamesById = new Map(Object.entries(DATA.npcNames || {{}}).map(([npcId, name]) => [Number(npcId), name]));
     const chainsById = new Map(DATA.chains.map((chain) => [chain.id, {{ ...chain, quests: [] }}]));
     DATA.quests.forEach((quest) => {{
       if (!chainsById.has(quest.chainId)) {{
@@ -5311,34 +6837,42 @@ def render_classic_html(records, chains, zones, continents):
 
     const worldButton = document.querySelector("#world-button");
     const zoneSelect = document.querySelector("#zone-select");
-    const raceFilter = document.querySelector("#race-filter");
-    const classFilter = document.querySelector("#class-filter");
     const levelFilter = document.querySelector("#level-filter");
-    const questFilterWrap = document.querySelector("#quest-filter-wrap");
-    const questFilterButton = document.querySelector("#quest-filter-button");
-    const questFilterCount = document.querySelector("#quest-filter-count");
-    const questFilterMenu = document.querySelector("#quest-filter-menu");
-    const zoneFilterWrap = document.querySelector("#zone-filter-wrap");
-    const zoneFilterButton = document.querySelector("#zone-filter-button");
-    const zoneFilterCount = document.querySelector("#zone-filter-count");
-    const zoneFilterMenu = document.querySelector("#zone-filter-menu");
+    const mainFilterWrap = document.querySelector("#main-filter-wrap");
+    const mainFilterButton = document.querySelector("#main-filter-button");
+    const mainFilterMenu = document.querySelector("#main-filter-menu");
     const displayFilterWrap = document.querySelector("#display-filter-wrap");
     const displayFilterButton = document.querySelector("#display-filter-button");
     const displayFilterCount = document.querySelector("#display-filter-count");
     const displayFilterMenu = document.querySelector("#display-filter-menu");
-    const optionsFilterWrap = document.querySelector("#options-filter-wrap");
-    const optionsFilterButton = document.querySelector("#options-filter-button");
-    const optionsFilterCount = document.querySelector("#options-filter-count");
-    const optionsFilterMenu = document.querySelector("#options-filter-menu");
+    const catalogueAssignedToggle = document.querySelector("#catalogue-assigned-toggle");
+    const showAssignedCatalogueCheckbox = document.querySelector("#show-assigned-catalogue");
+    const profileImportButton = document.querySelector("#profile-import-button");
+    const profileImportInput = document.querySelector("#profile-import-input");
+    const profileImportCount = document.querySelector("#profile-import-count");
     const batchNavigator = document.querySelector("#batch-navigator");
     const batchNavPrev = document.querySelector("#batch-nav-prev");
     const batchNavNext = document.querySelector("#batch-nav-next");
     const batchNavLabel = document.querySelector("#batch-nav-label");
+    const batchNavName = document.querySelector("#batch-nav-name");
+    const batchNavPosition = document.querySelector("#batch-nav-position");
     const mapViewButton = document.querySelector("#map-view-button");
-    const sequencerViewButton = document.querySelector("#sequencer-view-button");
+    const plannerViewButton = document.querySelector("#planner-view-button");
+    const replayViewButton = document.querySelector("#replay-view-button");
+    const replayToolbar = document.querySelector("#replay-toolbar");
+    const replayLocalButton = document.querySelector("#replay-local-button");
+    const replayWorldButton = document.querySelector("#replay-world-button");
+    const replayPauseButton = document.querySelector("#replay-pause-button");
+    const replaySpeedButtons = [...document.querySelectorAll(".replay-speed-button")];
+    const replayPlaybackSetting = document.querySelector("#replay-playback-setting");
+    const replayProgressInput = document.querySelector("#replay-progress-input");
+    const replayProgressFill = document.querySelector("#replay-progress-fill");
+    const replayLevelMarkers = document.querySelector("#replay-level-markers");
+    const workbench = document.querySelector(".workbench");
     const mapFrame = document.querySelector(".map-frame");
+    const inventoryPane = document.querySelector(".inventory");
     const mapModePanel = document.querySelector("#map-mode-panel");
-    const sequencerPanel = document.querySelector("#sequencer-panel");
+    const plannerPanel = document.querySelector("#planner-panel");
     const journeySetup = document.querySelector("#journey-setup");
     const journeyNameInput = document.querySelector("#journey-name-input");
     const journeyRaceSelect = document.querySelector("#journey-race-select");
@@ -5347,12 +6881,19 @@ def render_classic_html(records, chains, zones, continents):
     const journeyWorkspace = document.querySelector("#journey-workspace");
     const journeyNameEditor = document.querySelector("#journey-name-editor");
     const journeySaveButton = document.querySelector("#journey-save-button");
+    const journeyCopyAddonButton = document.querySelector("#journey-copy-addon-button");
     const journeyCloseButton = document.querySelector("#journey-close-button");
     const journeyImportButton = document.querySelector("#journey-import-button");
-    const journeyImportInput = document.querySelector("#journey-import-input");
+    const journeyLoadButton = document.querySelector("#journey-load-button");
+    const journeyLoadInput = document.querySelector("#journey-load-input");
+    const journeyStringImport = document.querySelector("#journey-string-import");
+    const journeyStringInput = document.querySelector("#journey-string-input");
+    const journeyStringSubmit = document.querySelector("#journey-string-submit");
+    const journeyStringCancel = document.querySelector("#journey-string-cancel");
     const journeyCharacterSummary = document.querySelector("#journey-character-summary");
+    const journeySetupMessage = document.querySelector("#journey-setup-message");
     const journeyMessage = document.querySelector("#journey-message");
-    const sequencerBoard = document.querySelector("#sequencer-board");
+    const plannerBoard = document.querySelector("#planner-board");
     const mapEl = document.querySelector("#map");
     const worldLayer = document.querySelector("#world-layer");
     const zoneImage = document.querySelector("#zone-image");
@@ -5361,7 +6902,17 @@ def render_classic_html(records, chains, zones, continents):
     const highlightLayer = document.querySelector("#highlight-layer");
     const worldZoneTooltip = document.querySelector("#world-zone-tooltip");
     const chainList = document.querySelector("#chain-list");
+    const inventoryHead = document.querySelector(".inventory-head");
+    const replayEventLog = document.querySelector("#replay-event-log");
+    const replayLogViewButton = document.querySelector("#replay-log-view-button");
+    const replayProgressViewButton = document.querySelector("#replay-progress-view-button");
+    const replayEventLogCount = document.querySelector("#replay-event-log-count");
+    const replayEventLogViewport = document.querySelector("#replay-event-log-viewport");
+    const replayEventLogContent = document.querySelector("#replay-event-log-content");
     const inventoryTitle = document.querySelector("#inventory-title");
+    const inventorySearchModeButton = document.querySelector("#inventory-search-mode");
+    const inventoryBatchModeButton = document.querySelector("#inventory-batch-mode");
+    const inventorySearchWrap = document.querySelector("#inventory-search-wrap");
     const questSearch = document.querySelector("#quest-search");
     const questSearchClear = document.querySelector("#quest-search-clear");
     const collapseAllChainsButton = document.querySelector("#collapse-all-chains");
@@ -5374,21 +6925,70 @@ def render_classic_html(records, chains, zones, continents):
     let selectedId = null;
     let selectedChainId = null;
     let mapFitFrame = 0;
+    let mapMarkerRenderTimer = 0;
     let pickupPopoverCloseTimer = 0;
     let preDragAppMode = "map";
     let draggingQuestId = null;
     let draggingQuestIds = [];
     let draggingChainId = null;
     let draggingJourneyQuestId = null;
-    const expandedChainIds = new Set();
+    const collapsedChainIds = new Set();
+    let inventoryMode = "search";
+    let batchSummaryContextChainId = null;
+    let questSearchContextChainId = null;
+    const inventoryScrollTop = {{ search: 0, batch: 0 }};
+    const inventorySearchValues = {{ search: "", batch: "" }};
     let activeJourney = null;
     let journeyBatchCounter = 0;
     let selectedBatchId = null;
     let preBatchLevelValue = null;
     let forcedCatalogueChainId = null;
+    let journeyUndoState = null;
+    let activeCharacterProfile = null;
+    const completedProfileQuestIds = new Set();
+    const replayState = {{
+      events: EMPTY_REPLAY_EVENTS,
+      currentTime: 0,
+      startTime: 0,
+      endTime: 0,
+      nextEventIndex: 0,
+      speed: 60,
+      paused: true,
+      scope: "local",
+      frame: 0,
+      lastFrameTime: 0,
+      lastLogRenderTime: 0,
+      scrubbing: false,
+      resumeAfterScrub: false,
+      visibleLogEvents: [],
+      panelMode: "events",
+    }};
+
+    function updateWorkbenchColumns() {{
+      if (!workbench) return;
+      if (window.matchMedia("(max-width: 1100px)").matches) {{
+        document.documentElement.style.removeProperty("--map-pane-width");
+        document.documentElement.style.removeProperty("--catalogue-pane-width");
+        scheduleMapFit();
+        return;
+      }}
+      const styles = getComputedStyle(workbench);
+      const gap = Number.parseFloat(styles.columnGap) || 10;
+      const availableWidth = workbench.clientWidth;
+      const availableHeight = workbench.clientHeight;
+      if (!availableWidth || !availableHeight) return;
+      const frameBorder = Math.max(0, mapFrame.offsetWidth - mapFrame.clientWidth) || 2;
+      const idealMapWidth = ((availableHeight - frameBorder) * 1.5) + frameBorder;
+      const minimumCatalogueWidth = 380;
+      const mapPaneWidth = Math.max(320, Math.min(idealMapWidth, availableWidth - gap - minimumCatalogueWidth));
+      const cataloguePaneWidth = Math.max(minimumCatalogueWidth, availableWidth - gap - mapPaneWidth);
+      document.documentElement.style.setProperty("--map-pane-width", `${{Math.round(mapPaneWidth)}}px`);
+      document.documentElement.style.setProperty("--catalogue-pane-width", `${{Math.round(cataloguePaneWidth)}}px`);
+      scheduleMapFit();
+    }}
 
     function fitMapToFrame() {{
-      if (currentAppMode !== "map" || mapModePanel.hidden) return;
+      if ((currentAppMode !== "map" && currentAppMode !== "replay") || mapModePanel.hidden) return;
       const frame = mapFrame.getBoundingClientRect();
       const aspect = 3 / 2;
       if (!frame.width || !frame.height) return;
@@ -5400,8 +7000,7 @@ def render_classic_html(records, chains, zones, continents):
       }}
       mapEl.style.width = `${{Math.floor(width)}}px`;
       mapEl.style.height = `${{Math.floor(height)}}px`;
-      renderAvailablePickupMarkers();
-      renderSelectionOverlays();
+      scheduleMapMarkerRender();
     }}
 
     function scheduleMapFit() {{
@@ -5409,23 +7008,103 @@ def render_classic_html(records, chains, zones, continents):
       mapFitFrame = requestAnimationFrame(fitMapToFrame);
     }}
 
+    function scheduleMapMarkerRender() {{
+      window.clearTimeout(mapMarkerRenderTimer);
+      mapMarkerRenderTimer = window.setTimeout(() => {{
+        mapMarkerRenderTimer = 0;
+        if (currentAppMode !== "map" || mapModePanel.hidden) return;
+        renderAvailablePickupMarkers();
+        renderSelectionOverlays();
+      }}, 0);
+    }}
+
+    function focusAppSurface() {{
+      const target = currentAppMode === "planner" ? plannerPanel : mapFrame;
+      if (!target) return;
+      target.tabIndex = -1;
+      requestAnimationFrame(() => {{
+        try {{
+          target.focus({{ preventScroll: true }});
+        }} catch {{
+          target.focus();
+        }}
+      }});
+    }}
+
     function setAppMode(mode) {{
-      const normalized = mode === "sequencer" ? "sequencer" : "map";
+      const previousMode = currentAppMode;
+      const normalized = mode === "planner" ? "planner" : mode === "replay" ? "replay" : "map";
+      const preserveCatalogueForDrag = previousMode === "map"
+        && normalized === "planner"
+        && document.body.classList.contains("dragging-quest");
       currentAppMode = normalized;
       const isMap = normalized === "map";
+      const isPlanner = normalized === "planner";
+      const isReplay = normalized === "replay";
       mapViewButton.classList.toggle("active", isMap);
-      sequencerViewButton.classList.toggle("active", !isMap);
+      plannerViewButton.classList.toggle("active", isPlanner);
+      replayViewButton.classList.toggle("active", isReplay);
       mapViewButton.setAttribute("aria-pressed", String(isMap));
-      sequencerViewButton.setAttribute("aria-pressed", String(!isMap));
-      mapModePanel.hidden = !isMap;
-      sequencerPanel.hidden = isMap;
-      mapFrame.setAttribute("aria-label", isMap ? "Quest map" : "Quest sequencer");
-      if (isMap) {{
-        scheduleMapFit();
-      }} else {{
+      plannerViewButton.setAttribute("aria-pressed", String(isPlanner));
+      replayViewButton.setAttribute("aria-pressed", String(isReplay));
+      replayToolbar.hidden = !isReplay;
+      document.body.classList.toggle("replay-mode", isReplay);
+      mapModePanel.hidden = isPlanner;
+      plannerPanel.hidden = !isPlanner;
+      inventoryHead.hidden = isReplay;
+      chainList.hidden = isReplay;
+      replayEventLog.hidden = !isReplay;
+      updateInventoryModeControls();
+      mapFrame.setAttribute("aria-label", isPlanner ? "Quest planner" : isReplay ? "Quest replay" : "Quest map");
+      if (isReplay) {{
         closePickupQuestList();
         hideWorldZoneTooltip();
+        initializeReplay({{ preserveTime: previousMode === "replay" }});
+        scheduleMapFit();
+      }} else if (isMap) {{
+        if (previousMode === "replay") stopReplay();
+        scheduleMapFit();
+      }} else {{
+        if (previousMode === "replay") stopReplay();
+        if (!document.body.classList.contains("dragging-map-tooltip")) closePickupQuestList();
+        hideWorldZoneTooltip();
+        centerSelectedPlannerBatch();
       }}
+      if (!isReplay && filters.useCurrentMapZone && !preserveCatalogueForDrag) {{
+        updateMainFilterButton();
+        renderCurrentView({{ scrollTargetChainToTop: true }});
+      }}
+    }}
+
+    function updateInventoryModeControls() {{
+      const isBatchSummary = inventoryMode === "batch";
+      inventoryPane.classList.toggle("quest-search-mode", !isBatchSummary);
+      inventoryPane.classList.toggle("batch-summary-mode", isBatchSummary);
+      inventorySearchModeButton.classList.toggle("active", !isBatchSummary);
+      inventoryBatchModeButton.classList.toggle("active", isBatchSummary);
+      inventorySearchModeButton.setAttribute("aria-pressed", String(!isBatchSummary));
+      inventoryBatchModeButton.setAttribute("aria-pressed", String(isBatchSummary));
+      inventorySearchWrap.hidden = false;
+      questSearch.placeholder = isBatchSummary ? "Search batch" : "Search quests";
+      questSearch.setAttribute("aria-label", isBatchSummary ? "Search batch" : "Search quests");
+      catalogueAssignedToggle.hidden = currentAppMode === "replay";
+      mainFilterWrap.hidden = currentAppMode === "replay";
+      if (!isBatchSummary) clearBatchSummaryDragTarget();
+    }}
+
+    function setInventoryMode(mode) {{
+      const nextMode = mode === "batch" ? "batch" : "search";
+      if (nextMode === inventoryMode) return;
+      inventoryScrollTop[inventoryMode] = chainList.scrollTop;
+      inventorySearchValues[inventoryMode] = questSearch.value;
+      inventoryMode = nextMode;
+      questSearch.value = inventorySearchValues[inventoryMode] || "";
+      filters.search = questSearch.value.trim().toLowerCase();
+      updateInventoryModeControls();
+      updateSearchClearButton();
+      renderInventory();
+      chainList.scrollTop = inventoryScrollTop[inventoryMode] || 0;
+      refreshSelectionState();
     }}
 
     function journeyRaceOptions() {{
@@ -5453,11 +7132,13 @@ def render_classic_html(records, chains, zones, continents):
     function newBatch(name = null, questIds = [], options = {{}}) {{
       journeyBatchCounter += 1;
       const override = options.expectedLevelOverride ?? options.levelOverride ?? null;
+      const autoName = options.autoName ?? (name == null || looksLikeAutoBatchName(name));
       return {{
         id: options.id || `batch-${{Date.now().toString(36)}}-${{journeyBatchCounter.toString(36)}}`,
         name: name ?? String(journeyBatchCounter),
-        questIds: [...questIds],
+        questIds: sortedBatchQuestIds(questIds),
         expectedLevelOverride: override == null || override === "" ? null : Number(override),
+        autoName,
       }};
     }}
 
@@ -5467,6 +7148,13 @@ def render_classic_html(records, chains, zones, continents):
 
     function selectedJourneyClass() {{
       return journeyClassOptions().find((klass) => String(klass.mask) === String(activeJourney?.classMask));
+    }}
+
+    function applyJourneyIdentityToFilters(race, klass) {{
+      if (race?.faction) filters.factions = new Set([race.faction]);
+      if (race?.mask != null) filters.raceMasks = new Set([race.mask]);
+      if (klass?.mask != null) filters.classMasks = new Set([klass.mask]);
+      populateMainFilterMenu();
     }}
 
     function createJourneyFromSetup() {{
@@ -5484,17 +7172,18 @@ def render_classic_html(records, chains, zones, continents):
         faction: race.faction,
         class: klass.label,
         classMask: klass.mask,
-        batches: [newBatch("1")],
+        batches: [newBatch(null)],
         unusedQuestIds: [],
       }};
+      renumberNumericBatches(activeJourney.batches);
       selectedBatchId = null;
       preBatchLevelValue = null;
       forcedCatalogueChainId = null;
       selectedChainId = null;
       selectedId = null;
       activeId = null;
-      raceFilter.value = String(race.mask);
-      classFilter.value = String(klass.mask);
+      clearJourneyUndo();
+      applyJourneyIdentityToFilters(race, klass);
       updateFiltersFromControls();
       renderJourney();
       showJourneyMessage("Journey created. Drag quests into Batch 1 to begin.", "ok");
@@ -5510,8 +7199,9 @@ def render_classic_html(records, chains, zones, continents):
     function cloneBatches(batches = activeJourney?.batches || []) {{
       return batches.map((batch) => ({{
         ...batch,
-        questIds: [...batch.questIds],
+        questIds: sortedBatchQuestIds(batch.questIds),
         expectedLevelOverride: batch.expectedLevelOverride == null ? null : Number(batch.expectedLevelOverride),
+        autoName: batch.autoName === false ? false : (batch.autoName === true || looksLikeAutoBatchName(batch.name)),
       }}));
     }}
 
@@ -5521,8 +7211,87 @@ def render_classic_html(records, chains, zones, continents):
         .filter((id) => Number.isFinite(id) && questsById.has(id)))];
     }}
 
+    function cloneJourneyForUndo(journey = activeJourney) {{
+      if (!journey) return null;
+      return {{
+        ...journey,
+        batches: cloneBatches(journey.batches || []),
+        unusedQuestIds: cloneUnusedQuestIds(journey.unusedQuestIds || []),
+      }};
+    }}
+
+    function captureJourneyUndo(label) {{
+      if (!activeJourney) return;
+      journeyUndoState = {{
+        label,
+        journey: cloneJourneyForUndo(activeJourney),
+        selectedBatchId,
+        preBatchLevelValue,
+        pending: true,
+      }};
+    }}
+
+    function clearJourneyUndo() {{
+      journeyUndoState = null;
+    }}
+
+    function undoLastJourneyAction() {{
+      if (!journeyUndoState?.journey) return;
+      activeJourney = cloneJourneyForUndo(journeyUndoState.journey);
+      selectedBatchId = journeyUndoState.selectedBatchId;
+      preBatchLevelValue = journeyUndoState.preBatchLevelValue;
+      const label = journeyUndoState.label || "action";
+      clearJourneyUndo();
+      renumberNumericBatches(activeJourney.batches);
+      renderJourneyWithEffectiveLevel();
+      showJourneyMessage(`Undid ${{label}}.`, "ok");
+    }}
+
+    function compareQuestChainOrder(a, b) {{
+      return (a?.startLevel ?? Number.MAX_SAFE_INTEGER) - (b?.startLevel ?? Number.MAX_SAFE_INTEGER) ||
+        (a?.firstQuest?.questLevel ?? Number.MAX_SAFE_INTEGER) - (b?.firstQuest?.questLevel ?? Number.MAX_SAFE_INTEGER) ||
+        String(a?.name || "").localeCompare(String(b?.name || "")) ||
+        Number(a?.id ?? Number.MAX_SAFE_INTEGER) - Number(b?.id ?? Number.MAX_SAFE_INTEGER);
+    }}
+
+    function sortedBatchQuestIds(questIds = []) {{
+      const ids = [...new Set((questIds || [])
+        .map((id) => Number(id))
+        .filter((id) => Number.isFinite(id) && questsById.has(id)))];
+      const idSet = new Set(ids);
+      const chainIds = new Set(ids
+        .map((id) => questsById.get(id)?.chainId)
+        .filter((chainId) => chainId != null));
+      const sortedIds = [...chainIds]
+        .map((chainId) => chainsById.get(Number(chainId)))
+        .filter(Boolean)
+        .sort(compareQuestChainOrder)
+        .flatMap((chain) => chain.quests
+          .filter((quest) => idSet.has(Number(quest.id)))
+          .map((quest) => Number(quest.id)));
+      const sortedSet = new Set(sortedIds);
+      ids.filter((id) => !sortedSet.has(id))
+        .sort((a, b) => {{
+          const questA = questsById.get(a);
+          const questB = questsById.get(b);
+          return (questA?.requiredLevel ?? Number.MAX_SAFE_INTEGER) - (questB?.requiredLevel ?? Number.MAX_SAFE_INTEGER) ||
+            (questA?.questLevel ?? Number.MAX_SAFE_INTEGER) - (questB?.questLevel ?? Number.MAX_SAFE_INTEGER) ||
+            String(questA?.name || "").localeCompare(String(questB?.name || "")) ||
+            a - b;
+        }})
+        .forEach((id) => sortedIds.push(id));
+      return sortedIds;
+    }}
+
+    function sortJourneyBatchQuestIds(batches = activeJourney?.batches || []) {{
+      batches.forEach((batch) => {{
+        batch.questIds = sortedBatchQuestIds(batch.questIds);
+      }});
+      return batches;
+    }}
+
     function batchQuests(batch) {{
-      return (batch?.questIds || []).map((id) => questsById.get(Number(id))).filter(Boolean);
+      return sortedBatchQuestIds(batch?.questIds || []).map((id) => questsById.get(id)).filter(Boolean);
     }}
 
     function computedBatchExpectedLevel(batch) {{
@@ -5556,9 +7325,52 @@ def render_classic_html(records, chains, zones, continents):
       return Math.max(1, Math.min(60, Math.round(level)));
     }}
 
+    function looksLikeAutoBatchName(value) {{
+      const name = String(value || "").trim();
+      if (!name) return true;
+      if (/^\\d+$/.test(name)) return true;
+      if (/^Batch\\s+\\d+$/i.test(name)) return true;
+      if (/^.+\\s+#\\d+$/.test(name)) return true;
+      return false;
+    }}
+
+    function batchAutoBaseName(batch) {{
+      const zones = batchZoneNames(batch);
+      if (!zones.length) return null;
+      if (zones.length === 1) return zones[0];
+      if (zones.length === 2) return `${{zones[0]}} + ${{zones[1]}}`;
+      return `${{zones[0]}} + ${{zones[1]}} + ${{zones.length - 2}} more`;
+    }}
+
     function renumberNumericBatches(batches) {{
-      batches.forEach((batch, index) => {{
-        if (!batch.name || /^\\d+$/.test(String(batch.name))) batch.name = String(index + 1);
+      const autoRows = batches
+        .map((batch, index) => ({{
+          batch,
+          index,
+          base: batchAutoBaseName(batch),
+          auto: batch.autoName === true || (batch.autoName !== false && looksLikeAutoBatchName(batch.name)),
+          zones: batchZoneNames(batch),
+        }}))
+        .filter((row) => row.auto);
+
+      const baseCounts = new Map();
+      autoRows.forEach((row) => {{
+        const key = row.base || "Batch";
+        baseCounts.set(key, (baseCounts.get(key) || 0) + 1);
+      }});
+
+      const seen = new Map();
+      autoRows.forEach((row) => {{
+        row.batch.autoName = true;
+        if (!row.base) {{
+          row.batch.name = `Batch ${{row.index + 1}}`;
+          return;
+        }}
+        const key = row.base;
+        const count = (seen.get(key) || 0) + 1;
+        seen.set(key, count);
+        const needsNumber = row.zones.length === 1 || (baseCounts.get(key) || 0) > 1;
+        row.batch.name = needsNumber ? `${{key}} #${{count}}` : key;
       }});
     }}
 
@@ -5572,8 +7384,18 @@ def render_classic_html(records, chains, zones, continents):
       return allJourneyQuestIds();
     }}
 
+    function assignedOrCompletedQuestIds() {{
+      const ids = new Set(completedProfileQuestIds);
+      assignedJourneyQuestIds().forEach((questId) => ids.add(Number(questId)));
+      return ids;
+    }}
+
     function unusedJourneyQuestIds() {{
       return new Set(cloneUnusedQuestIds(activeJourney?.unusedQuestIds || []));
+    }}
+
+    function hiddenJourneyQuestIds() {{
+      return unusedJourneyQuestIds();
     }}
 
     function findQuestBatchIndex(questId, batches = activeJourney?.batches || []) {{
@@ -5591,6 +7413,10 @@ def render_classic_html(records, chains, zones, continents):
     function removeQuestFromUnusedCopies(unusedQuestIds, questId) {{
       const id = Number(questId);
       return cloneUnusedQuestIds(unusedQuestIds).filter((item) => Number(item) !== id);
+    }}
+
+    function removeQuestFromHiddenCopies(hiddenQuestIds, questId) {{
+      return removeQuestFromUnusedCopies(hiddenQuestIds, questId);
     }}
 
     function questAllowedForJourney(quest) {{
@@ -5630,7 +7456,22 @@ def render_classic_html(records, chains, zones, continents):
       return "";
     }}
 
-    function validateJourneyBatches(batches) {{
+    function journeyPrerequisiteWarnings(batches = activeJourney?.batches || []) {{
+      const warnings = new Map();
+      const availableIds = new Set(completedProfileQuestIds);
+      for (const batch of batches) {{
+        batch.questIds.forEach((questId) => availableIds.add(Number(questId)));
+        for (const questId of batch.questIds) {{
+          const quest = questsById.get(Number(questId));
+          if (!quest) continue;
+          const message = questPrerequisiteFailure(quest, availableIds);
+          if (message) warnings.set(Number(questId), message);
+        }}
+      }}
+      return warnings;
+    }}
+
+    function validateJourneyBatches(batches, options = {{}}) {{
       for (const batch of batches) {{
         const seen = new Set();
         for (const questId of batch.questIds) {{
@@ -5645,20 +7486,27 @@ def render_classic_html(records, chains, zones, continents):
         return {{ ok: false, message: "That quest is already in this Journey. Drag it from its current batch to move it." }};
       }}
       for (let index = 0; index < batches.length; index += 1) {{
-        const availableIds = new Set();
-        for (let batchIndex = 0; batchIndex <= index; batchIndex += 1) {{
-          batches[batchIndex].questIds.forEach((questId) => availableIds.add(Number(questId)));
-        }}
         for (const questId of batches[index].questIds) {{
           const quest = questsById.get(Number(questId));
           if (!quest) return {{ ok: false, message: `Unknown quest #${{questId}} in Batch ${{index + 1}}.` }};
           const availability = questAllowedForJourney(quest);
           if (!availability.ok) return availability;
-          const prerequisiteMessage = questPrerequisiteFailure(quest, availableIds);
-          if (prerequisiteMessage) return {{ ok: false, message: prerequisiteMessage }};
         }}
       }}
-      return {{ ok: true }};
+      const warnings = journeyPrerequisiteWarnings(batches);
+      if (options.checkPrerequisites !== false && warnings.size) {{
+        const baselineWarnings = options.baselineBatches
+          ? journeyPrerequisiteWarnings(options.baselineBatches)
+          : new Map();
+        for (const [questId, message] of warnings) {{
+          if (!baselineWarnings.has(questId)) return {{ ok: false, message, warnings }};
+        }}
+      }}
+      return {{ ok: true, warnings }};
+    }}
+
+    function validateJourneyCandidateBatches(batches) {{
+      return validateJourneyBatches(batches, {{ baselineBatches: activeJourney?.batches || [] }});
     }}
 
     function renderJourney() {{
@@ -5666,27 +7514,32 @@ def render_classic_html(records, chains, zones, continents):
       journeySetup.hidden = hasJourney;
       journeyWorkspace.hidden = !hasJourney;
       journeySaveButton.disabled = !hasJourney;
+      journeyCopyAddonButton.disabled = !hasJourney;
       journeyCloseButton.disabled = !hasJourney;
       journeyImportButton.disabled = false;
       updateBatchNavigator();
       if (!hasJourney) {{
-        sequencerBoard.innerHTML = "";
+        plannerBoard.innerHTML = "";
         return;
       }}
+      sortJourneyBatchQuestIds(activeJourney.batches);
+      renumberNumericBatches(activeJourney.batches);
       journeyNameEditor.value = activeJourney.name;
       const race = selectedJourneyRace();
       const klass = selectedJourneyClass();
       journeyCharacterSummary.textContent = [race?.label, klass?.label].filter(Boolean).join(" ");
-      sequencerBoard.innerHTML = "";
+      plannerBoard.innerHTML = "";
+      if (activeCharacterProfile) plannerBoard.append(createCompletedColumnElement());
+      const prerequisiteWarnings = journeyPrerequisiteWarnings(activeJourney.batches);
       activeJourney.batches.forEach((batch, index) => {{
-        sequencerBoard.append(createJourneyBatchElement(batch, index));
-        sequencerBoard.append(createJourneyInsertElement(index + 1));
+        plannerBoard.append(createJourneyBatchElement(batch, index, prerequisiteWarnings));
+        plannerBoard.append(createJourneyInsertElement(index + 1));
       }});
-      sequencerBoard.append(createUnusedColumnElement());
+      plannerBoard.append(createHiddenColumnElement());
       updateBatchNavigator();
     }}
 
-    function createJourneyBatchElement(batch, index) {{
+    function createJourneyBatchElement(batch, index, prerequisiteWarnings = new Map()) {{
       const batchEl = document.createElement("section");
       batchEl.className = "journey-batch";
       if (selectedBatchId === batch.id) batchEl.classList.add("selected");
@@ -5709,10 +7562,18 @@ def render_classic_html(records, chains, zones, continents):
           </div>
         </div>
         <div class="journey-batch-drop" data-batch-index="${{index}}" aria-label="Batch ${{index + 1}} quest drop area"></div>
+        <div class="batch-index-text">[${{index + 1}}/${{activeJourney.batches.length}}]</div>
       `;
       const input = batchEl.querySelector(".batch-name-input");
       input.addEventListener("input", () => {{
-        batch.name = input.value || String(index + 1);
+        const value = input.value.trim();
+        if (value) {{
+          batch.name = value;
+          batch.autoName = false;
+        }} else {{
+          batch.autoName = true;
+          renumberNumericBatches(activeJourney.batches);
+        }}
         updateBatchNavigator();
       }});
       const levelInput = batchEl.querySelector(".batch-level-input");
@@ -5729,41 +7590,91 @@ def render_classic_html(records, chains, zones, continents):
       }} else {{
         batch.questIds.forEach((questId) => {{
           const quest = questsById.get(Number(questId));
-          if (quest) drop.append(createJourneyQuestElement(quest, batch.id));
+          if (quest) drop.append(createJourneyQuestElement(quest, batch.id, {{
+            prerequisiteWarning: prerequisiteWarnings.get(Number(questId)) || "",
+          }}));
         }});
       }}
       return batchEl;
     }}
 
-    function createUnusedColumnElement() {{
+    function completedProfileQuests() {{
+      if (!activeCharacterProfile) return [];
+      return activeCharacterProfile.completedQuestIds
+        .map((questId) => questsById.get(Number(questId)) || {{
+          id: Number(questId),
+          name: `Quest #${{questId}}`,
+          chainStep: "?",
+          chainColor: "#40c463",
+          requiredLevel: null,
+          questLevel: null,
+          typeIds: [],
+        }})
+        .sort((a, b) =>
+          (a.requiredLevel ?? Number.MAX_SAFE_INTEGER) - (b.requiredLevel ?? Number.MAX_SAFE_INTEGER) ||
+          (a.questLevel ?? Number.MAX_SAFE_INTEGER) - (b.questLevel ?? Number.MAX_SAFE_INTEGER) ||
+          String(a.chainName || a.name).localeCompare(String(b.chainName || b.name)) ||
+          (a.chainStep ?? 0) - (b.chainStep ?? 0) ||
+          a.id - b.id
+        );
+    }}
+
+    function createCompletedColumnElement() {{
+      const quests = completedProfileQuests();
+      const batchEl = document.createElement("section");
+      batchEl.className = "journey-batch completed";
+      batchEl.dataset.batchId = "completed";
+      batchEl.dataset.readonly = "true";
+      batchEl.innerHTML = `
+        <div class="journey-batch-head">
+          <div class="batch-title-row">
+            <div class="batch-name-input" role="heading" aria-level="3">Completed</div>
+          </div>
+          <div class="batch-zones-row">
+            <div class="batch-zone-summary">${{quests.length}} completed quest${{quests.length === 1 ? "" : "s"}}</div>
+          </div>
+        </div>
+        <div class="journey-completed-list" aria-label="Completed quests"></div>
+      `;
+      const list = batchEl.querySelector(".journey-completed-list");
+      if (!quests.length) {{
+        const empty = document.createElement("div");
+        empty.className = "batch-empty";
+        empty.textContent = "No completed quests in this profile.";
+        list.append(empty);
+      }} else {{
+        quests.forEach((quest) => list.append(createJourneyQuestElement(quest, "completed", {{ completed: true }})));
+      }}
+      return batchEl;
+    }}
+
+    function createHiddenColumnElement() {{
       const unusedIds = cloneUnusedQuestIds(activeJourney?.unusedQuestIds || []);
       const batchEl = document.createElement("section");
       batchEl.className = "journey-batch unused";
-      if (selectedBatchId === "unused") batchEl.classList.add("selected");
-      batchEl.dataset.batchId = "unused";
-      const unusedBatch = {{ id: "unused", name: "Unused", questIds: unusedIds }};
+      if (selectedBatchId === "hidden" || selectedBatchId === "unused") batchEl.classList.add("selected");
+      batchEl.dataset.batchId = "hidden";
       batchEl.innerHTML = `
-        <div class="journey-batch-head" data-batch-id="unused">
+        <div class="journey-batch-head" data-batch-id="hidden">
           <div class="batch-title-row">
-            <div class="batch-name-input" role="heading" aria-level="3">Unused</div>
+            <div class="batch-name-input" role="heading" aria-level="3">Hidden</div>
           </div>
           <div class="batch-zones-row">
-            <div class="batch-zone-summary" title="${{escapeHtml(batchZoneSummary(unusedBatch))}}">${{escapeHtml(batchZoneSummary(unusedBatch))}}</div>
-            <div class="batch-type-badges">${{questTypeBadgesHtml(batchQuests(unusedBatch))}}</div>
+            <div class="batch-zone-summary">${{unusedIds.length}} hidden quest${{unusedIds.length === 1 ? "" : "s"}}</div>
           </div>
         </div>
-        <div class="journey-batch-drop journey-unused-drop" aria-label="Unused quest drop area"></div>
+        <div class="journey-batch-drop journey-unused-drop" aria-label="Hidden quest drop area"></div>
       `;
       const drop = batchEl.querySelector(".journey-unused-drop");
       if (!unusedIds.length) {{
         const empty = document.createElement("div");
         empty.className = "batch-empty";
-        empty.textContent = "Drop quests here to mark them Unused.";
+        empty.textContent = "Drop quests here to mark them Hidden.";
         drop.append(empty);
       }} else {{
         unusedIds.forEach((questId) => {{
           const quest = questsById.get(Number(questId));
-          if (quest) drop.append(createJourneyQuestElement(quest, "unused", {{ unused: true }}));
+          if (quest) drop.append(createJourneyQuestElement(quest, "hidden", {{ hidden: true }}));
         }});
       }}
       return batchEl;
@@ -5781,18 +7692,26 @@ def render_classic_html(records, chains, zones, continents):
     function createJourneyQuestElement(quest, batchId, options = {{}}) {{
       const item = document.createElement("div");
       item.className = "journey-quest";
-      if (options.unused) item.classList.add("unused");
+      if (options.unused || options.hidden) item.classList.add("unused");
+      if (options.completed) item.classList.add("completed");
       if (selectedId === quest.id) item.classList.add("selected");
       if (activeId === quest.id) item.classList.add("active");
-      item.draggable = true;
+      item.draggable = !options.completed;
       item.dataset.questId = quest.id;
       item.dataset.batchId = batchId;
       item.style.setProperty("--chain-color", quest.chainColor);
+      const prerequisiteWarning = String(options.prerequisiteWarning || "");
+      const stepClass = prerequisiteWarning ? "journey-quest-step prerequisite-warning" : "journey-quest-step";
+      const stepContent = prerequisiteWarning
+        ? '<span class="journey-warning-mark" aria-hidden="true">!</span>'
+        : `<span>${{quest.chainStep ?? "?"}}</span>`;
       item.innerHTML = `
-        <span class="journey-quest-step"><span>${{quest.chainStep}}</span>${{questTypeBadgesHtml(quest)}}</span>
+        <span class="${{stepClass}}" ${{prerequisiteWarning ? `title="${{escapeHtml(prerequisiteWarning)}}" aria-label="Prerequisite warning: ${{escapeHtml(prerequisiteWarning)}}"` : ""}}>${{stepContent}}${{questTypeBadgesHtml(quest)}}${{questCompletionMarkHtml(quest, "icon")}}</span>
         <span class="journey-quest-name" ${{questDifficultyAttrs(quest)}}>${{escapeHtml(quest.name)}}</span>
         <span class="journey-quest-level">${{quest.requiredLevel ?? "?"}} / ${{quest.questLevel ?? "?"}}</span>
-        ${{options.unused
+        ${{options.completed
+          ? ""
+          : options.unused || options.hidden
           ? `<button class="journey-quest-unhide" type="button" aria-label="Unhide ${{escapeHtml(quest.name)}}">Unhide</button>`
           : `<button class="journey-quest-remove" type="button" aria-label="Remove ${{escapeHtml(quest.name)}} from Journey">x</button>`}}
       `;
@@ -5801,45 +7720,72 @@ def render_classic_html(records, chains, zones, continents):
 
     function selectedBatch() {{
       if (!activeJourney || !selectedBatchId) return null;
-      if (selectedBatchId === "unused") return {{ id: "unused", name: "Unused", questIds: cloneUnusedQuestIds(activeJourney.unusedQuestIds || []) }};
+      if (selectedBatchId === "hidden" || selectedBatchId === "unused") return {{ id: "hidden", name: "Hidden", questIds: cloneUnusedQuestIds(activeJourney.unusedQuestIds || []) }};
       return activeJourney.batches.find((batch) => batch.id === selectedBatchId) || null;
     }}
 
-    function selectedBatchNavigatorText() {{
-      if (!activeJourney) return "No Journey";
-      if (selectedBatchId === "unused") return "Unused";
+    function selectedBatchNavigatorState() {{
+      if (!activeJourney) return {{ name: "No Journey", position: "", text: "No Journey" }};
+      if (selectedBatchId === "hidden" || selectedBatchId === "unused") return {{ name: "Hidden", position: "", text: "Hidden" }};
       const index = activeJourney.batches.findIndex((batch) => batch.id === selectedBatchId);
-      if (index < 0) return "No batch selected";
+      if (index < 0) return {{ name: "No batch selected", position: "", text: "No batch selected" }};
       const batch = activeJourney.batches[index];
       const name = String(batch.name || index + 1).trim() || String(index + 1);
-      return `${{name}} [${{index + 1}}/${{activeJourney.batches.length}}]`;
+      const position = `[${{index + 1}}/${{activeJourney.batches.length}}]`;
+      return {{ name, position, text: `${{name}} ${{position}}` }};
     }}
 
     function updateBatchNavigator() {{
       if (!batchNavigator) return;
       const hasJourney = Boolean(activeJourney);
+      const state = selectedBatchNavigatorState();
       batchNavigator.hidden = !hasJourney;
       batchNavPrev.disabled = !hasJourney;
       batchNavNext.disabled = !hasJourney;
-      batchNavLabel.textContent = selectedBatchNavigatorText();
-      batchNavLabel.title = selectedBatchNavigatorText();
+      batchNavName.textContent = state.name;
+      batchNavPosition.textContent = state.position;
+      batchNavLabel.title = state.text;
     }}
 
-    function applyLevelFilterValue(value) {{
+    function applyLevelFilterValue(value, options = {{}}) {{
       levelFilter.value = value == null ? "all" : String(value);
-      filters.level = levelFilter.value === "all" ? null : Number(levelFilter.value);
-      updateFilterSelectColors();
-      renderCurrentView();
+      if (!levelFilter.value) levelFilter.value = "all";
+      syncLevelFilterFromControl(options);
     }}
 
-    function applySelectedBatchLevel() {{
-      const batch = selectedBatch();
-      if (!batch || batch.id === "unused") {{
-        renderCurrentView();
+    function applySelectedBatchLevel(options = {{}}) {{
+      syncLevelFilterFromControl(options);
+    }}
+
+    function renderJourneyWithEffectiveLevel() {{
+      syncLevelFilterFromControl({{ render: false }});
+      renderJourney();
+      renderCurrentView({{ scrollTargetChainToTop: true }});
+    }}
+
+    function updatePlannerBatchSelectionState() {{
+      plannerBoard.querySelectorAll(".journey-batch").forEach((element) => {{
+        element.classList.toggle("selected", element.dataset.batchId === selectedBatchId);
+      }});
+      updateBatchNavigator();
+    }}
+
+    function renderBatchSelectionChange(options = {{}}) {{
+      const previousLevel = filters.level;
+      syncLevelFilterFromControl({{ render: false }});
+      if (filters.level !== previousLevel) {{
+        renderJourney();
+        if (options.render !== false) renderCurrentView({{ scrollTargetChainToTop: true }});
+        else updateMapMarkerSelectionState();
         return;
       }}
-      const level = computedBatchExpectedLevel(batch);
-      applyLevelFilterValue(level ?? "all");
+
+      updatePlannerBatchSelectionState();
+      if (options.render !== false && inventoryMode === "batch") {{
+        renderCurrentView({{ scrollTargetChainToTop: true }});
+      }} else {{
+        updateMapMarkerSelectionState();
+      }}
     }}
 
     function selectJourneyBatch(batchId, options = {{}}) {{
@@ -5848,42 +7794,74 @@ def render_classic_html(records, chains, zones, continents):
         deselectJourneyBatch();
         return;
       }}
-      const batch = batchId === "unused"
-        ? {{ id: "unused", name: "Unused" }}
+      const batch = batchId === "hidden" || batchId === "unused"
+        ? {{ id: "hidden", name: "Hidden" }}
         : activeJourney.batches.find((item) => item.id === batchId);
       if (!batch) return;
-      if (selectedBatchId == null) preBatchLevelValue = levelFilter.value;
       selectedBatchId = batch.id;
-      renderJourney();
-      applySelectedBatchLevel();
-      renderSelectionOverlays();
+      batchSummaryContextChainId = null;
+      renderBatchSelectionChange();
     }}
 
     function deselectJourneyBatch(options = {{}}) {{
       if (selectedBatchId == null) return;
-      const restoreLevel = options.restoreLevel !== false;
-      const previousLevel = preBatchLevelValue;
       selectedBatchId = null;
+      batchSummaryContextChainId = null;
       preBatchLevelValue = null;
-      renderJourney();
-      if (restoreLevel) applyLevelFilterValue(previousLevel || "all");
-      else renderSelectionOverlays();
+      renderBatchSelectionChange(options);
     }}
 
-    function sequencerTargetOrder() {{
+    function plannerTargetOrder() {{
       if (!activeJourney) return [];
-      return [...activeJourney.batches.map((batch) => batch.id), "unused"];
+      return [...activeJourney.batches.map((batch) => batch.id), "hidden"];
     }}
 
-    function moveSequencerSelection(delta) {{
-      const order = sequencerTargetOrder();
+    function centerSelectedPlannerBatch() {{
+      if (currentAppMode !== "planner" || selectedBatchId == null) return;
+      requestAnimationFrame(() => {{
+        const target = plannerBoard.querySelector(`.journey-batch[data-batch-id="${{selectedBatchId}}"]`);
+        if (!target) return;
+        const centeredLeft = target.offsetLeft - ((plannerBoard.clientWidth - target.offsetWidth) / 2);
+        plannerBoard.scrollTo({{ left: Math.max(0, centeredLeft), behavior: "auto" }});
+      }});
+    }}
+
+    function nestedPlannerScrollerCanConsumeWheel(target, deltaY) {{
+      let element = target instanceof Element ? target : null;
+      while (element && element !== plannerBoard) {{
+        const overflowY = getComputedStyle(element).overflowY;
+        if ((overflowY === "auto" || overflowY === "scroll") && element.scrollHeight > element.clientHeight + 1) {{
+          const atTop = element.scrollTop <= 0;
+          const atBottom = element.scrollTop + element.clientHeight >= element.scrollHeight - 1;
+          if ((deltaY < 0 && !atTop) || (deltaY > 0 && !atBottom)) return true;
+        }}
+        element = element.parentElement;
+      }}
+      return false;
+    }}
+
+    function handlePlannerWheel(event) {{
+      if (currentAppMode !== "planner" || plannerPanel.hidden || event.ctrlKey || event.shiftKey) return;
+      if (Math.abs(event.deltaX) > Math.abs(event.deltaY) || event.deltaY === 0) return;
+      if (nestedPlannerScrollerCanConsumeWheel(event.target, event.deltaY)) return;
+      const maxScrollLeft = Math.max(0, plannerBoard.scrollWidth - plannerBoard.clientWidth);
+      if (!maxScrollLeft) return;
+      const scale = event.deltaMode === 1 ? 18 : event.deltaMode === 2 ? plannerBoard.clientWidth : 1;
+      const nextScrollLeft = clampNumber(plannerBoard.scrollLeft + event.deltaY * scale, 0, maxScrollLeft);
+      if (nextScrollLeft === plannerBoard.scrollLeft) return;
+      plannerBoard.scrollLeft = nextScrollLeft;
+      event.preventDefault();
+    }}
+
+    function movePlannerSelection(delta) {{
+      const order = plannerTargetOrder();
       if (!order.length) return false;
       let index = selectedBatchId == null ? -1 : order.findIndex((id) => id === selectedBatchId);
       if (index < 0) index = delta > 0 ? -1 : order.length;
       const nextIndex = Math.max(0, Math.min(order.length - 1, index + delta));
       if (nextIndex === index) return false;
       selectJourneyBatch(order[nextIndex], {{ toggle: false }});
-      const target = sequencerBoard.querySelector(`.journey-batch[data-batch-id="${{order[nextIndex]}}"]`);
+      const target = plannerBoard.querySelector(`.journey-batch[data-batch-id="${{order[nextIndex]}}"]`);
       target?.scrollIntoView({{ block: "nearest", inline: "center" }});
       return true;
     }}
@@ -5902,7 +7880,7 @@ def render_classic_html(records, chains, zones, continents):
         return false;
       }}
       if (selectedBatchId == null) {{
-        showJourneyMessage("Select a batch or the Unused column first.");
+        showJourneyMessage("Select a batch or Hidden first.");
         return false;
       }}
       const questIds = selectedCatalogueQuestIds();
@@ -5910,7 +7888,7 @@ def render_classic_html(records, chains, zones, continents):
         showJourneyMessage("Select a quest or quest chain first.");
         return false;
       }}
-      if (selectedBatchId === "unused") return moveQuestIdsToUnused(questIds);
+      if (selectedBatchId === "hidden" || selectedBatchId === "unused") return moveQuestIdsToHidden(questIds);
       const targetIndex = activeJourney.batches.findIndex((batch) => batch.id === selectedBatchId);
       if (targetIndex < 0) {{
         showJourneyMessage("Select a valid batch first.");
@@ -5920,28 +7898,37 @@ def render_classic_html(records, chains, zones, continents):
     }}
 
     function showJourneyMessage(message, type = "error") {{
+      [journeySetupMessage, journeyMessage].forEach((element) => {{
+        element.hidden = true;
+        element.innerHTML = "";
+        element.className = "journey-message";
+      }});
       if (!message) {{
-        journeyMessage.hidden = true;
-        journeyMessage.textContent = "";
-        journeyMessage.className = "journey-message";
         return;
       }}
-      journeyMessage.hidden = false;
-      journeyMessage.textContent = message;
-      journeyMessage.className = `journey-message ${{type === "ok" ? "ok" : ""}}`;
+      const target = activeJourney ? journeyMessage : journeySetupMessage;
+      target.hidden = false;
+      target.className = `journey-message ${{type === "ok" ? "ok" : ""}}`;
+      const showUndo = type === "ok" && journeyUndoState?.pending;
+      target.innerHTML = `
+        <span class="journey-message-text">${{escapeHtml(message)}}</span>
+        ${{showUndo ? '<button type="button" class="journey-undo-button">Undo</button>' : ""}}
+      `;
+      if (showUndo) journeyUndoState.pending = false;
+      target.querySelector(".journey-undo-button")?.addEventListener("click", undoLastJourneyAction);
     }}
 
     function commitJourneyBatches(candidateBatches, successMessage = "") {{
-      const validation = validateJourneyBatches(candidateBatches);
+      sortJourneyBatchQuestIds(candidateBatches);
+      const validation = validateJourneyCandidateBatches(candidateBatches);
       if (!validation.ok) {{
         showJourneyMessage(validation.message);
         return false;
       }}
+      if (successMessage) captureJourneyUndo(successMessage);
       activeJourney.batches = candidateBatches;
       renumberNumericBatches(activeJourney.batches);
-      renderJourney();
-      if (selectedBatchId != null) applySelectedBatchLevel();
-      else renderCurrentView();
+      renderJourneyWithEffectiveLevel();
       showJourneyMessage(successMessage, successMessage ? "ok" : "error");
       if (!successMessage) showJourneyMessage("");
       return true;
@@ -5989,8 +7976,7 @@ def render_classic_html(records, chains, zones, continents):
         ids.forEach((questId) => {{
           activeJourney.unusedQuestIds = removeQuestFromUnusedCopies(activeJourney.unusedQuestIds, questId);
         }});
-        renderJourney();
-        renderCurrentView();
+        renderJourneyWithEffectiveLevel();
       }}
       return moved;
     }}
@@ -6005,7 +7991,7 @@ def render_classic_html(records, chains, zones, continents):
         return false;
       }}
       const candidate = cloneBatches();
-      const batch = newBatch(String(insertIndex + 1), []);
+      const batch = newBatch(null, []);
       const ids = questIds == null ? [] : normalizeQuestIdList(questIds);
       if (ids.length) {{
         for (const questId of ids) {{
@@ -6032,8 +8018,7 @@ def render_classic_html(records, chains, zones, continents):
         ids.forEach((questId) => {{
           activeJourney.unusedQuestIds = removeQuestFromUnusedCopies(activeJourney.unusedQuestIds, questId);
         }});
-        renderJourney();
-        renderCurrentView();
+        renderJourneyWithEffectiveLevel();
       }}
       return inserted;
     }}
@@ -6043,42 +8028,42 @@ def render_classic_html(records, chains, zones, continents):
       const quest = questsById.get(Number(questId));
       const candidate = cloneBatches();
       removeQuestFromBatchCopies(candidate, questId);
-      const validation = validateJourneyBatches(candidate);
+      const validation = validateJourneyCandidateBatches(candidate);
       if (!validation.ok) {{
         showJourneyMessage(`Cannot remove ${{questName(questId)}}. ${{validation.message}}`);
         return;
       }}
+      captureJourneyUndo(`removing ${{quest?.name || questName(questId)}}`);
       activeJourney.batches = candidate;
-      renderJourney();
-      if (selectedBatchId != null) applySelectedBatchLevel();
-      else renderCurrentView();
+      renumberNumericBatches(activeJourney.batches);
+      renderJourneyWithEffectiveLevel();
       showJourneyMessage(`${{quest?.name || questName(questId)}} removed from Journey.`, "ok");
     }}
 
     function deleteJourneyBatch(batchId) {{
-      if (!activeJourney || batchId === "unused") return false;
+      if (!activeJourney || batchId === "unused" || batchId === "hidden") return false;
       const index = activeJourney.batches.findIndex((batch) => batch.id === batchId);
       if (index < 0) return false;
       const candidate = cloneBatches();
       const [removedBatch] = candidate.splice(index, 1);
-      if (!candidate.length) candidate.push(newBatch("1"));
-      const validation = validateJourneyBatches(candidate);
+      if (!candidate.length) candidate.push(newBatch(null));
+      const validation = validateJourneyCandidateBatches(candidate);
       if (!validation.ok) {{
         showJourneyMessage(`Cannot delete ${{removedBatch?.name || `Batch ${{index + 1}}`}}. ${{validation.message}}`);
         return false;
       }}
+      captureJourneyUndo(`deleting ${{removedBatch?.name || `Batch ${{index + 1}}`}}`);
       const wasSelected = selectedBatchId === batchId;
-      const previousLevel = preBatchLevelValue;
       activeJourney.batches = candidate;
       renumberNumericBatches(activeJourney.batches);
       if (wasSelected) {{
         selectedBatchId = null;
         preBatchLevelValue = null;
       }}
+      syncLevelFilterFromControl({{ render: false }});
       renderJourney();
-      if (wasSelected) applyLevelFilterValue(previousLevel || "all");
-      else renderCurrentView();
-      showJourneyMessage(`${{removedBatch?.name || `Batch ${{index + 1}}`}} deleted. Quests from that batch are now unassigned.`, "ok");
+      renderCurrentView({{ scrollTargetChainToTop: true }});
+      showJourneyMessage(`${{removedBatch?.name || `Batch ${{index + 1}}`}} deleted. Quests from that batch returned to the catalogue.`, "ok");
       return true;
     }}
 
@@ -6093,19 +8078,21 @@ def render_classic_html(records, chains, zones, continents):
       selectedChainId = null;
       selectedId = null;
       activeId = null;
+      clearJourneyUndo();
       journeyNameInput.value = "";
       journeyRaceSelect.value = "";
       journeyClassSelect.value = "";
       updateJourneyStartButton();
+      syncLevelFilterFromControl({{ render: false }});
       showJourneyMessage("");
-      setAppMode("sequencer");
+      setAppMode("planner");
       renderJourney();
       renderCurrentView();
     }}
 
-    function moveQuestIdsToUnused(questIds) {{
+    function moveQuestIdsToHidden(questIds) {{
       if (!activeJourney) {{
-        showJourneyMessage("Create a Journey before marking quests Unused.");
+        showJourneyMessage("Create a Journey before marking quests Hidden.");
         return false;
       }}
       const ids = normalizeQuestIdList(questIds);
@@ -6115,11 +8102,12 @@ def render_classic_html(records, chains, zones, continents):
       }}
       const candidate = cloneBatches();
       ids.forEach((questId) => removeQuestFromBatchCopies(candidate, questId));
-      const validation = validateJourneyBatches(candidate);
+      const validation = validateJourneyCandidateBatches(candidate);
       if (!validation.ok) {{
-        showJourneyMessage(`Cannot mark selected quests Unused. ${{validation.message}}`);
+        showJourneyMessage(`Cannot mark selected quests Hidden. ${{validation.message}}`);
         return false;
       }}
+      captureJourneyUndo(`marking ${{ids.length === 1 ? questsById.get(ids[0])?.name : `${{ids.length}} quests`}} Hidden`);
       activeJourney.batches = candidate;
       let unused = cloneUnusedQuestIds(activeJourney.unusedQuestIds || []);
       ids.forEach((questId) => {{
@@ -6127,28 +8115,52 @@ def render_classic_html(records, chains, zones, continents):
       }});
       activeJourney.unusedQuestIds = [...ids, ...unused];
       renumberNumericBatches(activeJourney.batches);
-      renderJourney();
-      if (selectedBatchId != null) applySelectedBatchLevel();
-      else renderCurrentView();
-      showJourneyMessage(`${{ids.length === 1 ? questsById.get(ids[0])?.name : `${{ids.length}} quests`}} marked Unused.`, "ok");
+      renderJourneyWithEffectiveLevel();
+      showJourneyMessage(`${{ids.length === 1 ? questsById.get(ids[0])?.name : `${{ids.length}} quests`}} marked Hidden.`, "ok");
       return true;
     }}
 
     function moveQuestToUnused(questId) {{
-      return moveQuestIdsToUnused([questId]);
+      return moveQuestIdsToHidden([questId]);
+    }}
+
+    function moveQuestIdsToUnused(questIds) {{
+      return moveQuestIdsToHidden(questIds);
     }}
 
     function restoreUnusedQuest(questId) {{
       if (!activeJourney) return;
       const quest = questsById.get(Number(questId));
+      captureJourneyUndo(`unhiding ${{quest?.name || questName(questId)}}`);
       activeJourney.unusedQuestIds = removeQuestFromUnusedCopies(activeJourney.unusedQuestIds, questId);
-      renderJourney();
-      renderCurrentView();
-      showJourneyMessage(`${{quest?.name || questName(questId)}} restored to the catalogue.`, "ok");
+      renderJourneyWithEffectiveLevel();
+      showJourneyMessage(`${{quest?.name || questName(questId)}} unhidden.`, "ok");
+    }}
+
+    function questJourneyExportRow(questId, extra = {{}}) {{
+      const quest = questsById.get(Number(questId));
+      return {{
+        id: Number(questId),
+        name: quest?.name || "",
+        requiredLevel: quest?.requiredLevel ?? null,
+        questLevel: quest?.questLevel ?? null,
+        preQuestSingle: (quest?.preQuestSingle || []).map(Number),
+        preQuestGroup: (quest?.preQuestGroup || []).map(Number),
+        startZoneIds: (quest?.startZoneIds || []).map(Number),
+        objectiveZoneIds: (quest?.objectiveZoneIds || []).map(Number),
+        endZoneIds: (quest?.endZoneIds || []).map(Number),
+        zoneIds: (quest?.zones || []).map(Number),
+        zones: quest ? questInvolvedZoneNames(quest) : [],
+        ...extra,
+      }};
     }}
 
     function journeyExportData() {{
       if (!activeJourney) return null;
+      sortJourneyBatchQuestIds(activeJourney.batches);
+      renumberNumericBatches(activeJourney.batches);
+      const hiddenIds = cloneUnusedQuestIds(activeJourney.unusedQuestIds);
+      const hiddenQuests = hiddenIds.map((questId) => questJourneyExportRow(questId, {{ hidden: true, unused: true }}));
       return {{
         schemaVersion: 1,
         app: "QuestiePlus",
@@ -6163,34 +8175,20 @@ def render_classic_html(records, chains, zones, continents):
           class: activeJourney.class,
           classMask: activeJourney.classMask,
         }},
-        unusedQuestIds: cloneUnusedQuestIds(activeJourney.unusedQuestIds),
-        unusedQuests: cloneUnusedQuestIds(activeJourney.unusedQuestIds).map((questId) => {{
-          const quest = questsById.get(Number(questId));
-          return {{
-            id: Number(questId),
-            name: quest?.name || "",
-            requiredLevel: quest?.requiredLevel ?? null,
-            questLevel: quest?.questLevel ?? null,
-            unused: true,
-          }};
-        }}),
+        hiddenQuestIds: hiddenIds,
+        hiddenQuests,
+        unusedQuestIds: hiddenIds,
+        unusedQuests: hiddenQuests,
         batches: activeJourney.batches.map((batch, index) => ({{
           id: batch.id,
           name: batch.name || String(index + 1),
+          autoName: batch.autoName !== false,
           expectedLevel: computedBatchExpectedLevel(batch),
           expectedLevelManual: batch.expectedLevelOverride != null,
           expectedLevelOverride: batch.expectedLevelOverride ?? null,
           zones: batchZoneNames(batch),
           questIds: batch.questIds.map(Number),
-          quests: batch.questIds.map((questId) => {{
-            const quest = questsById.get(Number(questId));
-            return {{
-              id: Number(questId),
-              name: quest?.name || "",
-              requiredLevel: quest?.requiredLevel ?? null,
-              questLevel: quest?.questLevel ?? null,
-            }};
-          }}),
+          quests: batch.questIds.map((questId) => questJourneyExportRow(questId)),
         }})),
       }};
     }}
@@ -6210,6 +8208,134 @@ def render_classic_html(records, chains, zones, continents):
       link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       showJourneyMessage("Journey JSON exported.", "ok");
+    }}
+
+    function copyTextToClipboard(text) {{
+      if (navigator.clipboard?.writeText) {{
+        return navigator.clipboard.writeText(text);
+      }}
+      const textArea = document.createElement("textarea");
+      textArea.value = text;
+      textArea.setAttribute("readonly", "");
+      textArea.style.position = "fixed";
+      textArea.style.left = "-9999px";
+      document.body.append(textArea);
+      textArea.select();
+      const copied = document.execCommand("copy");
+      textArea.remove();
+      return copied ? Promise.resolve() : Promise.reject(new Error("Clipboard copy was blocked."));
+    }}
+
+    function encodeJourneyTransportText(value) {{
+      return encodeURIComponent(String(value || "")).replace(/~/g, "%7E");
+    }}
+
+    function decodeJourneyTransportText(value) {{
+      return decodeURIComponent(String(value || ""));
+    }}
+
+    function journeyTransportNumberList(values) {{
+      return (values || []).map(Number).filter(Number.isFinite).join(",");
+    }}
+
+    function journeyTransportString(journey = activeJourney) {{
+      if (!journey) return "";
+      sortJourneyBatchQuestIds(journey.batches);
+      const batches = journey.batches.map((batch) => {{
+        const storedName = batch.autoName === false ? String(batch.name || "") : "";
+        const levelOverride = normalizeExpectedLevel(batch.expectedLevelOverride) || 0;
+        return [
+          encodeJourneyTransportText(storedName),
+          levelOverride,
+          journeyTransportNumberList(batch.questIds),
+        ].join("~");
+      }}).join(";");
+      return [
+        "QPJ2",
+        encodeJourneyTransportText(journey.id || slugify(journey.name) || `journey-${{Date.now().toString(36)}}`),
+        encodeJourneyTransportText(journey.name || "QuestiePlus Journey"),
+        Number(journey.raceMask) || 0,
+        Number(journey.classMask) || 0,
+        batches,
+        journeyTransportNumberList(cloneUnusedQuestIds(journey.unusedQuestIds)),
+      ].join(":");
+    }}
+
+    function parseJourneyTransportNumberList(value, label) {{
+      const text = String(value || "").trim();
+      if (!text) return [];
+      if (!/^\\d+(?:,\\d+)*$/.test(text)) throw new Error(`Invalid ${{label}} list.`);
+      return [...new Set(text.split(",").map(Number).filter((id) => Number.isFinite(id) && id > 0))];
+    }}
+
+    function parseJourneyTransportString(text) {{
+      const source = String(text || "").trim();
+      const separator = source.startsWith("QPJ2:") ? ":" : "|";
+      const fields = source.split(separator);
+      if (fields[0] !== "QPJ2" || fields.length !== 7) throw new Error("This is not a valid QPJ2 Journey string.");
+      const name = decodeJourneyTransportText(fields[2]).trim();
+      const raceMask = Number(fields[3]);
+      const classMask = Number(fields[4]);
+      if (!name || !Number.isFinite(raceMask) || !Number.isFinite(classMask)) {{
+        throw new Error("The Journey string is missing its name, race, or class.");
+      }}
+      const batchTokens = fields[5] ? fields[5].split(";") : [];
+      if (!batchTokens.length) throw new Error("The Journey string contains no batches.");
+      const batches = batchTokens.map((token, index) => {{
+        const parts = token.split("~");
+        if (parts.length !== 3) throw new Error(`Batch ${{index + 1}} is malformed.`);
+        const storedName = decodeJourneyTransportText(parts[0]).trim();
+        const rawLevelOverride = Number(parts[1]);
+        if (!Number.isFinite(rawLevelOverride) || rawLevelOverride < 0) throw new Error(`Batch ${{index + 1}} has an invalid level.`);
+        const levelOverride = normalizeExpectedLevel(rawLevelOverride);
+        return {{
+          name: storedName || String(index + 1),
+          autoName: !storedName,
+          expectedLevelManual: levelOverride != null,
+          expectedLevelOverride: levelOverride,
+          questIds: parseJourneyTransportNumberList(parts[2], `Batch ${{index + 1}} quest`),
+        }};
+      }});
+      return {{
+        schemaVersion: 2,
+        id: decodeJourneyTransportText(fields[1]) || slugify(name),
+        name,
+        character: {{ raceMask, classMask }},
+        batches,
+        hiddenQuestIds: parseJourneyTransportNumberList(fields[6], "Hidden quest"),
+      }};
+    }}
+
+    function importJourneyString(text) {{
+      try {{
+        const source = String(text || "").trim();
+        if (!source) throw new Error("Paste a Journey string first.");
+        const data = source.startsWith("QPJ2|") || source.startsWith("QPJ2:")
+          ? parseJourneyTransportString(source)
+          : JSON.parse(source);
+        return importJourneyData(data);
+      }} catch (error) {{
+        showJourneyMessage(`Import failed: ${{error.message}}`);
+        return false;
+      }}
+    }}
+
+    function setJourneyStringImportOpen(open) {{
+      journeyStringImport.hidden = !open;
+      journeyImportButton.setAttribute("aria-expanded", String(open));
+      if (open) requestAnimationFrame(() => journeyStringInput.focus());
+    }}
+
+    async function copyJourneyAddonString() {{
+      if (!activeJourney) return;
+      activeJourney.name = journeyNameEditor.value.trim() || activeJourney.name;
+      renderJourney();
+      try {{
+        await copyTextToClipboard(journeyTransportString());
+        showJourneyMessage("Addon import string copied.", "ok");
+      }} catch (error) {{
+        showJourneyMessage(`Could not copy addon string: ${{error.message}}`);
+      }}
     }}
 
     function raceFromImportedJourney(data) {{
@@ -6242,13 +8368,19 @@ def render_classic_html(records, chains, zones, continents):
     }}
 
     function questIdsFromImportedUnused(data) {{
-      const ids = Array.isArray(data.unusedQuestIds)
-        ? data.unusedQuestIds
-        : Array.isArray(data.unused?.questIds)
-          ? data.unused.questIds
-          : Array.isArray(data.unusedQuests)
-            ? data.unusedQuests.map((quest) => typeof quest === "number" ? quest : quest?.id)
-            : [];
+      const ids = Array.isArray(data.hiddenQuestIds)
+        ? data.hiddenQuestIds
+        : Array.isArray(data.hidden?.questIds)
+          ? data.hidden.questIds
+          : Array.isArray(data.hiddenQuests)
+            ? data.hiddenQuests.map((quest) => typeof quest === "number" ? quest : quest?.id)
+            : Array.isArray(data.unusedQuestIds)
+              ? data.unusedQuestIds
+              : Array.isArray(data.unused?.questIds)
+                ? data.unused.questIds
+                : Array.isArray(data.unusedQuests)
+                  ? data.unusedQuests.map((quest) => typeof quest === "number" ? quest : quest?.id)
+                  : [];
       return ids
         .map((id) => Number(id))
         .filter((id, index, list) => Number.isFinite(id) && questsById.has(id) && list.indexOf(id) === index);
@@ -6288,6 +8420,7 @@ def render_classic_html(records, chains, zones, continents):
           questIdsFromImportedBatch(batch).filter((questId) => !unusedQuestIds.includes(Number(questId))),
           {{
             id: batch.id ? String(batch.id) : null,
+            autoName: batch.autoName === true || (batch.autoName !== false && looksLikeAutoBatchName(batch.name || index + 1)),
             expectedLevelOverride: importedBatchLevelOverride(batch),
           }},
         )),
@@ -6295,7 +8428,8 @@ def render_classic_html(records, chains, zones, continents):
       }};
       const previousJourney = activeJourney;
       activeJourney = importedJourney;
-      const validation = validateJourneyBatches(importedJourney.batches);
+      renumberNumericBatches(activeJourney.batches);
+      const validation = validateJourneyBatches(importedJourney.batches, {{ checkPrerequisites: false }});
       if (!validation.ok) {{
         activeJourney = previousJourney;
         renderJourney();
@@ -6308,11 +8442,15 @@ def render_classic_html(records, chains, zones, continents):
       selectedChainId = null;
       selectedId = null;
       activeId = null;
-      raceFilter.value = String(race.mask);
-      classFilter.value = String(klass.mask);
+      clearJourneyUndo();
+      applyJourneyIdentityToFilters(race, klass);
       updateFiltersFromControls();
       renderJourney();
-      showJourneyMessage(`Imported Journey "${{name}}".`, "ok");
+      const warningCount = journeyPrerequisiteWarnings(importedJourney.batches).size;
+      const warningText = warningCount
+        ? ` with ${{warningCount}} prerequisite warning${{warningCount === 1 ? "" : "s"}}`
+        : "";
+      showJourneyMessage(`Imported Journey "${{name}}"${{warningText}}.`, "ok");
       return true;
     }}
 
@@ -6326,8 +8464,795 @@ def render_classic_html(records, chains, zones, continents):
       }}
     }}
 
+    function normalizeCompletedProfileQuestIds(value) {{
+      const source = Array.isArray(value)
+        ? value
+        : value && typeof value === "object"
+          ? Object.entries(value).filter(([, isComplete]) => Boolean(isComplete)).map(([questId]) => questId)
+          : [];
+      return [...new Set(source
+        .map((questId) => Number(questId))
+        .filter((questId) => Number.isFinite(questId) && questId > 0))]
+        .sort((a, b) => a - b);
+    }}
+
+    function normalizeProfileEvents(value) {{
+      if (!Array.isArray(value)) return [];
+      const events = value.map((raw, sourceIndex) => {{
+        const fields = Array.isArray(raw)
+          ? raw
+          : raw && typeof raw === "object"
+            ? [raw.timestamp ?? raw.t, raw.type ?? raw.k, raw.mapId ?? raw.m, raw.x, raw.y, raw.a, raw.b, raw.c, raw.d]
+            : [];
+        const timestamp = Number(fields[0]);
+        const type = Number(fields[1]);
+        const mapId = Number(fields[2]);
+        const rawX = Number(fields[3]);
+        const rawY = Number(fields[4]);
+        if (!Number.isFinite(timestamp) || !REPLAY_EVENT_TYPES[type]) return null;
+        return {{
+          timestamp,
+          type,
+          mapId: Number.isFinite(mapId) ? mapId : 0,
+          x: Number.isFinite(rawX) ? clampNumber(rawX > 1 ? rawX / 10000 : rawX, 0, 1) : 0,
+          y: Number.isFinite(rawY) ? clampNumber(rawY > 1 ? rawY / 10000 : rawY, 0, 1) : 0,
+          a: Number(fields[5]) || 0,
+          b: Number(fields[6]) || 0,
+          c: Number(fields[7]) || 0,
+          d: Number(fields[8]) || 0,
+          sourceIndex,
+        }};
+      }})
+        .filter(Boolean)
+        .sort((a, b) => a.timestamp - b.timestamp || a.sourceIndex - b.sourceIndex);
+      events.forEach((event, index) => {{
+        if (index === 0) {{
+          event.replayTime = event.timestamp;
+          event.compressedGap = 0;
+          return;
+        }}
+        const previous = events[index - 1];
+        const rawGap = Math.max(0, event.timestamp - previous.timestamp);
+        const replayGap = rawGap > REPLAY_LONG_GAP_SECONDS ? REPLAY_COMPRESSED_GAP_SECONDS : rawGap;
+        event.replayTime = previous.replayTime + replayGap;
+        event.compressedGap = rawGap > REPLAY_LONG_GAP_SECONDS ? rawGap : 0;
+      }});
+      return events;
+    }}
+
+    function luaTableBodyForField(text, fieldName) {{
+      const markers = [`["${{fieldName}}"]`, `${{fieldName}} =`];
+      const indexes = markers.map((marker) => text.indexOf(marker)).filter((index) => index >= 0);
+      if (!indexes.length) return null;
+      const markerIndex = Math.min(...indexes);
+      const equalsIndex = text.indexOf("=", markerIndex);
+      const openIndex = text.indexOf("{{", equalsIndex);
+      if (equalsIndex < 0 || openIndex < 0) return null;
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+      for (let index = openIndex; index < text.length; index += 1) {{
+        const character = text[index];
+        if (inString) {{
+          if (escaped) escaped = false;
+          else if (character === "\\\\") escaped = true;
+          else if (character === '"') inString = false;
+          continue;
+        }}
+        if (character === '"') {{
+          inString = true;
+          continue;
+        }}
+        if (character === "{{") depth += 1;
+        else if (character === "}}") {{
+          depth -= 1;
+          if (depth === 0) return text.slice(openIndex + 1, index);
+        }}
+      }}
+      return null;
+    }}
+
+    function luaStringField(text, fieldName) {{
+      const markers = [`["${{fieldName}}"]`, `${{fieldName}} =`];
+      for (const marker of markers) {{
+        const markerIndex = text.indexOf(marker);
+        if (markerIndex < 0) continue;
+        const equalsIndex = text.indexOf("=", markerIndex);
+        const quoteIndex = text.indexOf('"', equalsIndex);
+        if (equalsIndex < 0 || quoteIndex < 0) continue;
+        let value = "";
+        let escaped = false;
+        for (let index = quoteIndex + 1; index < text.length; index += 1) {{
+          const character = text[index];
+          if (escaped) {{
+            value += character === "n" ? "\\n" : character;
+            escaped = false;
+          }} else if (character === "\\\\") {{
+            escaped = true;
+          }} else if (character === '"') {{
+            return value;
+          }} else {{
+            value += character;
+          }}
+        }}
+      }}
+      return "";
+    }}
+
+    function luaNumberField(text, fieldName) {{
+      const markers = [`["${{fieldName}}"]`, `${{fieldName}} =`];
+      for (const marker of markers) {{
+        const markerIndex = text.indexOf(marker);
+        if (markerIndex < 0) continue;
+        const equalsIndex = text.indexOf("=", markerIndex);
+        if (equalsIndex < 0) continue;
+        const value = Number.parseInt(text.slice(equalsIndex + 1), 10);
+        if (Number.isFinite(value)) return value;
+      }}
+      return null;
+    }}
+
+    function luaDirectTableBodies(body) {{
+      const source = String(body || "").replace(/--[^\\n\\r]*/g, "");
+      const tables = [];
+      let depth = 0;
+      let start = -1;
+      let inString = false;
+      let escaped = false;
+      for (let index = 0; index < source.length; index += 1) {{
+        const character = source[index];
+        if (inString) {{
+          if (escaped) escaped = false;
+          else if (character === "\\\\") escaped = true;
+          else if (character === '"') inString = false;
+          continue;
+        }}
+        if (character === '"') {{
+          inString = true;
+          continue;
+        }}
+        if (character === "{{") {{
+          if (depth === 0) start = index + 1;
+          depth += 1;
+        }} else if (character === "}}" && depth > 0) {{
+          depth -= 1;
+          if (depth === 0 && start >= 0) {{
+            tables.push(source.slice(start, index));
+            start = -1;
+          }}
+        }}
+      }}
+      return tables;
+    }}
+
+    function luaNumericArray(body) {{
+      const source = String(body || "").replace(/--[^\\n\\r]*/g, "");
+      const keyed = [...source.matchAll(/\\[\\s*(\\d+)\\s*\\]\\s*=\\s*(-?\\d+(?:\\.\\d+)?)/g)]
+        .map((match) => [Number(match[1]), Number(match[2])])
+        .sort((a, b) => a[0] - b[0]);
+      if (keyed.length) return keyed.map((entry) => entry[1]);
+      return [...source.matchAll(/(?:^|,)\\s*(-?\\d+(?:\\.\\d+)?)\\s*(?=,|$)/gm)].map((match) => Number(match[1]));
+    }}
+
+    function profileEventsFromLua(text) {{
+      const eventsBody = luaTableBodyForField(text, "events");
+      if (eventsBody == null) return [];
+      return normalizeProfileEvents(luaDirectTableBodies(eventsBody).map(luaNumericArray));
+    }}
+
+    function characterProfileFromObject(data) {{
+      const profile = data?.QuestiePlusProfile || data?.profile || data;
+      if (!profile || typeof profile !== "object" || !("completedQuestIds" in profile)) {{
+        throw new Error("This file does not contain a QuestiePlus character profile.");
+      }}
+      return {{
+        schemaVersion: Number(profile.schemaVersion) || 1,
+        eventSchemaVersion: Number(profile.eventSchemaVersion) || 1,
+        app: String(profile.app || "QuestiePlus"),
+        kind: String(profile.kind || "CharacterProfile"),
+        character: profile.character && typeof profile.character === "object" ? {{ ...profile.character }} : {{}},
+        updatedAt: String(profile.updatedAt || ""),
+        completedQuestIds: normalizeCompletedProfileQuestIds(profile.completedQuestIds),
+        events: normalizeProfileEvents(profile.events || profile.eventLog),
+      }};
+    }}
+
+    function characterProfileFromLua(text) {{
+      const completedBody = luaTableBodyForField(text, "completedQuestIds");
+      if (completedBody == null) {{
+        throw new Error("This Lua file does not contain completedQuestIds.");
+      }}
+      const completedQuestIds = [];
+      const keyedEntry = /\\[\\s*\\d+\\s*\\]\\s*=\\s*(\\d+)/g;
+      let match;
+      while ((match = keyedEntry.exec(completedBody)) !== null) completedQuestIds.push(Number(match[1]));
+      if (!completedQuestIds.length) {{
+        const bareEntry = /^\\s*(\\d+)\\s*,?\\s*$/gm;
+        while ((match = bareEntry.exec(completedBody)) !== null) completedQuestIds.push(Number(match[1]));
+      }}
+      const characterBody = luaTableBodyForField(text, "character") || "";
+      return {{
+        schemaVersion: luaNumberField(text, "schemaVersion") || 1,
+        eventSchemaVersion: luaNumberField(text, "eventSchemaVersion") || 1,
+        app: "QuestiePlus",
+        kind: "CharacterProfile",
+        character: {{
+          name: luaStringField(characterBody, "name"),
+          realm: luaStringField(characterBody, "realm"),
+          race: luaStringField(characterBody, "race"),
+          class: luaStringField(characterBody, "class"),
+          faction: luaStringField(characterBody, "faction"),
+        }},
+        updatedAt: luaStringField(text, "updatedAt"),
+        completedQuestIds: normalizeCompletedProfileQuestIds(completedQuestIds),
+        events: profileEventsFromLua(text),
+      }};
+    }}
+
+    function updateProfileImportButton() {{
+      const hasProfile = Boolean(activeCharacterProfile);
+      profileImportButton.classList.toggle("active", hasProfile);
+      profileImportCount.hidden = !hasProfile;
+      profileImportCount.textContent = hasProfile ? String(activeCharacterProfile.completedQuestIds.length) : "";
+      if (!hasProfile) {{
+        profileImportButton.title = "Import a QuestiePlus character profile";
+        return;
+      }}
+      const character = activeCharacterProfile.character || {{}};
+      const identity = [character.name, character.realm].filter(Boolean).join(" - ") || "Imported character";
+      profileImportButton.title = `${{identity}}: ${{activeCharacterProfile.completedQuestIds.length}} completed quests, ${{activeCharacterProfile.events.length}} replay events`;
+    }}
+
+    function importCharacterProfileData(profile) {{
+      const normalized = characterProfileFromObject(profile);
+      activeCharacterProfile = normalized;
+      completedProfileQuestIds.clear();
+      normalized.completedQuestIds.forEach((questId) => completedProfileQuestIds.add(questId));
+      updateProfileImportButton();
+      renderJourney();
+      renderCurrentView({{ scrollTargetChainToTop: true }});
+      if (currentAppMode === "replay") initializeReplay();
+      return true;
+    }}
+
+    async function importCharacterProfileFile(file) {{
+      if (!file) return;
+      try {{
+        const text = await file.text();
+        let profile;
+        try {{
+          profile = characterProfileFromObject(JSON.parse(text));
+        }} catch (jsonError) {{
+          profile = characterProfileFromLua(text);
+        }}
+        importCharacterProfileData(profile);
+      }} catch (error) {{
+        window.alert(`Profile import failed: ${{error.message}}`);
+      }}
+    }}
+
+    function replayEventType(event) {{
+      return REPLAY_EVENT_TYPES[Number(event?.type)] || REPLAY_EVENT_TYPES[5];
+    }}
+
+    function replayEventZone(event) {{
+      return zonesByUiMapId.get(Number(event?.mapId)) || null;
+    }}
+
+    function replayQuest(event) {{
+      return questsById.get(Number(event?.a)) || null;
+    }}
+
+    function replayQuestName(event) {{
+      const quest = replayQuest(event);
+      return quest?.name || `Quest #${{Number(event?.a) || "?"}}`;
+    }}
+
+    function replayEventDescription(event) {{
+      const type = Number(event?.type);
+      if (type === 1) return `Picked up ${{replayQuestName(event)}}`;
+      if (type === 2) return `Turned in ${{replayQuestName(event)}}`;
+      if (type === 3) return `Killed ${{npcNamesById.get(Number(event.a)) || `NPC #${{Number(event.a) || "?"}}`}}`;
+      if (type === 4) return "Died";
+      if (type === 5) {{
+        const quest = replayQuest(event);
+        const objectiveIndex = Math.max(1, Number(event.b) || 1);
+        const objectiveDetail = (quest?.objectiveDetails || []).find((item) => Number(item.index) === objectiveIndex)
+          || quest?.objectiveDetails?.[objectiveIndex - 1];
+        const objective = objectiveDetail?.label
+          || objectiveDetail?.name
+          || quest?.objectiveSummary?.[objectiveIndex - 1]
+          || quest?.objectiveText?.[objectiveIndex - 1]
+          || `Objective ${{objectiveIndex}}`;
+        const count = Number(event.d) > 0 ? ` (${{Number(event.c)}}/${{Number(event.d)}})` : "";
+        return `${{replayQuestName(event)}}: ${{objective}}${{count}}`;
+      }}
+      if (type === 6) return `All objectives complete: ${{replayQuestName(event)}}`;
+      if (type === 7) return `Reached level ${{Number(event.a) || "?"}}`;
+      if (type === 8) return "Logged in";
+      if (type === 9) return "Logged out";
+      return replayEventType(event).label;
+    }}
+
+    const replayDateFormatter = new Intl.DateTimeFormat(undefined, {{
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+    }});
+
+    function replayEventMeta(event) {{
+      const timestamp = replayDateFormatter.format(new Date(Number(event.timestamp) * 1000));
+      const zone = replayEventZone(event);
+      return zone ? `${{timestamp}} - ${{zone.name}}` : `${{timestamp}} - Map ${{event.mapId || "unknown"}}`;
+    }}
+
+    function replayEventIndexAtTime(replayTime) {{
+      let low = 0;
+      let high = replayState.events.length;
+      while (low < high) {{
+        const middle = Math.floor((low + high) / 2);
+        if (replayState.events[middle].replayTime <= replayTime) low = middle + 1;
+        else high = middle;
+      }}
+      return low;
+    }}
+
+    function replayWallTimestampAtTime(replayTime) {{
+      if (!replayState.events.length) return 0;
+      const nextIndex = replayEventIndexAtTime(replayTime);
+      if (nextIndex <= 0) return replayState.events[0].timestamp;
+      if (nextIndex >= replayState.events.length) return replayState.events[replayState.events.length - 1].timestamp;
+      const previous = replayState.events[nextIndex - 1];
+      const next = replayState.events[nextIndex];
+      const replaySpan = next.replayTime - previous.replayTime;
+      if (replaySpan <= 0) return next.timestamp;
+      const ratio = clampNumber((replayTime - previous.replayTime) / replaySpan, 0, 1);
+      return previous.timestamp + (next.timestamp - previous.timestamp) * ratio;
+    }}
+
+    function renderReplayEventLogWindow() {{
+      if (replayState.panelMode !== "events") return;
+      const rows = replayState.visibleLogEvents;
+      replayEventLogContent.style.height = `${{Math.max(replayEventLogViewport.clientHeight, rows.length * REPLAY_EVENT_ROW_HEIGHT)}}px`;
+      replayEventLogContent.innerHTML = "";
+      if (!rows.length) return;
+      const start = Math.max(0, Math.floor(replayEventLogViewport.scrollTop / REPLAY_EVENT_ROW_HEIGHT) - 3);
+      const visibleCount = Math.ceil(replayEventLogViewport.clientHeight / REPLAY_EVENT_ROW_HEIGHT) + 7;
+      const end = Math.min(rows.length, start + visibleCount);
+      for (let index = start; index < end; index += 1) {{
+        const event = rows[index];
+        const type = replayEventType(event);
+        const row = document.createElement("article");
+        row.className = `replay-event-row${{index === 0 ? " current" : ""}}`;
+        row.style.top = `${{index * REPLAY_EVENT_ROW_HEIGHT + 2}}px`;
+        row.style.setProperty("--event-color", type.color);
+        row.innerHTML = `
+          <span class="replay-event-icon" aria-hidden="true">${{type.icon}}</span>
+          <div>
+            <div class="replay-event-description">${{escapeHtml(replayEventDescription(event))}}</div>
+            <div class="replay-event-meta">${{escapeHtml(replayEventMeta(event))}}</div>
+          </div>
+        `;
+        replayEventLogContent.append(row);
+      }}
+    }}
+
+    function renderReplayEmptyState(message) {{
+      replayState.visibleLogEvents = [];
+      replayEventLogCount.textContent = replayState.panelMode === "progress" ? "0 active" : "0 events";
+      replayEventLogContent.style.height = "100%";
+      replayEventLogContent.innerHTML = `
+        <div class="replay-empty">
+          <span>${{escapeHtml(message)}}</span>
+          <button type="button" id="replay-import-profile-button">Import Profile</button>
+        </div>
+      `;
+      replayEventLogContent.querySelector("#replay-import-profile-button")?.addEventListener("click", () => profileImportInput.click());
+    }}
+
+    function renderReplayEventLog(options = {{}}) {{
+      replayEventLog.classList.remove("quest-progress-mode");
+      if (!activeCharacterProfile) {{
+        renderReplayEmptyState("Import a QuestiePlus character profile to replay its recorded journey.");
+        return;
+      }}
+      if (!replayState.events.length) {{
+        renderReplayEmptyState("This profile does not contain replay events yet.");
+        return;
+      }}
+      const count = replayEventIndexAtTime(replayState.currentTime);
+      replayState.visibleLogEvents = replayState.events.slice(0, count).reverse();
+      replayEventLogCount.textContent = `${{replayState.visibleLogEvents.length}} / ${{replayState.events.length}} events`;
+      if (options.preserveScroll !== true) replayEventLogViewport.scrollTop = 0;
+      renderReplayEventLogWindow();
+    }}
+
+    function replayActiveQuestStates() {{
+      const states = new Map();
+      const count = replayEventIndexAtTime(replayState.currentTime);
+
+      function ensureQuest(questId) {{
+        questId = Number(questId);
+        if (!(questId > 0)) return null;
+        if (!states.has(questId)) {{
+          const quest = questsById.get(questId) || null;
+          states.set(questId, {{
+            questId,
+            quest,
+            complete: false,
+            objectives: new Map(),
+          }});
+        }}
+        return states.get(questId);
+      }}
+
+      for (const event of replayState.events.slice(0, count)) {{
+        const type = Number(event.type);
+        const questId = Number(event.a);
+        if (type === 1 && questId > 0) {{
+          states.delete(questId);
+          ensureQuest(questId);
+        }} else if (type === 2 && questId > 0) {{
+          states.delete(questId);
+        }} else if (type === 5 && questId > 0) {{
+          const state = ensureQuest(questId);
+          if (!state) continue;
+          const objectiveIndex = Math.max(1, Number(event.b) || 1);
+          state.objectives.set(objectiveIndex, {{
+            current: Math.max(0, Number(event.c) || 0),
+            total: Math.max(0, Number(event.d) || 0),
+          }});
+        }} else if (type === 6 && questId > 0) {{
+          const state = ensureQuest(questId);
+          if (state) state.complete = true;
+        }}
+      }}
+      return [...states.values()];
+    }}
+
+    function replayQuestProgressObjectiveRows(state) {{
+      const details = state.quest?.objectiveDetails || [];
+      const indexes = new Set([
+        ...details.map((detail, index) => Number(detail.index) || index + 1),
+        ...state.objectives.keys(),
+      ]);
+      return [...indexes].sort((a, b) => a - b).map((objectiveIndex) => {{
+        const detail = details.find((item) => Number(item.index) === objectiveIndex) || details[objectiveIndex - 1];
+        const progress = state.objectives.get(objectiveIndex) || {{ current: 0, total: 0 }};
+        return {{
+          index: objectiveIndex,
+          label: detail?.label || detail?.name || `Objective ${{objectiveIndex}}`,
+          current: progress.current,
+          total: progress.total,
+        }};
+      }});
+    }}
+
+    function renderReplayQuestProgress() {{
+      replayEventLog.classList.add("quest-progress-mode");
+      if (!activeCharacterProfile) {{
+        renderReplayEmptyState("Import a QuestiePlus character profile to reconstruct active quests.");
+        return;
+      }}
+      if (!replayState.events.length) {{
+        renderReplayEmptyState("This profile does not contain replay events yet.");
+        return;
+      }}
+
+      const states = replayActiveQuestStates();
+      replayEventLogCount.textContent = `${{states.length}} active`;
+      replayEventLogViewport.scrollTop = 0;
+      replayEventLogContent.style.height = "auto";
+      if (!states.length) {{
+        replayEventLogContent.innerHTML = '<div class="replay-empty"><span>No active quests at this point in the replay.</span></div>';
+        return;
+      }}
+
+      replayEventLogContent.innerHTML = `<div class="replay-quest-progress-list">${{states.map((state) => {{
+        const quest = state.quest;
+        const objectiveRows = replayQuestProgressObjectiveRows(state);
+        const allKnownComplete = objectiveRows.length > 0
+          && objectiveRows.every((objective) => objective.total > 0 && objective.current >= objective.total);
+        const complete = state.complete || allKnownComplete;
+        const objectiveHtml = complete
+          ? '<div class="replay-progress-complete">Complete</div>'
+          : objectiveRows.length
+            ? `<div class="replay-progress-objectives">${{objectiveRows.map((objective) => {{
+                const ratio = objective.total > 0 ? clampNumber(objective.current / objective.total, 0, 1) : 0;
+                const countText = objective.total > 0 ? `${{objective.current}} / ${{objective.total}}` : `${{objective.current}} / ?`;
+                return `<div class="replay-progress-objective">
+                  <span>${{escapeHtml(objective.label)}}</span>
+                  <span class="replay-progress-objective-count">${{escapeHtml(countText)}}</span>
+                  <span class="replay-progress-objective-track"><span class="replay-progress-objective-fill" style="width:${{ratio * 100}}%"></span></span>
+                </div>`;
+              }}).join("")}}</div>`
+            : '<div class="replay-progress-objectives">No objective progress recorded yet.</div>';
+        return `<article class="replay-progress-quest" style="--chain-color:${{escapeHtml(quest?.chainColor || "#8abf91")}}">
+          <div class="replay-progress-quest-header">
+            <span>${{escapeHtml(quest?.name || `Quest #${{state.questId}}`)}}</span>
+            <span class="replay-progress-quest-level">Lv ${{quest?.questLevel ?? "?"}}</span>
+          </div>
+          ${{objectiveHtml}}
+        </article>`;
+      }}).join("")}}</div>`;
+    }}
+
+    function renderReplaySidePanel(options = {{}}) {{
+      if (replayState.panelMode === "progress") renderReplayQuestProgress();
+      else renderReplayEventLog(options);
+    }}
+
+    function setReplayPanelMode(mode) {{
+      replayState.panelMode = mode === "progress" ? "progress" : "events";
+      const showProgress = replayState.panelMode === "progress";
+      replayLogViewButton.classList.toggle("active", !showProgress);
+      replayProgressViewButton.classList.toggle("active", showProgress);
+      replayLogViewButton.setAttribute("aria-pressed", String(!showProgress));
+      replayProgressViewButton.setAttribute("aria-pressed", String(showProgress));
+      renderReplaySidePanel();
+    }}
+
+    function replayProgressRatio() {{
+      const duration = replayState.endTime - replayState.startTime;
+      if (duration <= 0) return replayState.events.length ? 1 : 0;
+      return clampNumber((replayState.currentTime - replayState.startTime) / duration, 0, 1);
+    }}
+
+    function updateReplayProgress() {{
+      const ratio = replayProgressRatio();
+      replayProgressInput.value = String(Math.round(ratio * 100000));
+      replayProgressFill.style.width = `${{ratio * 100}}%`;
+      if (replayState.events.length) {{
+        const wallTimestamp = replayWallTimestampAtTime(replayState.currentTime);
+        replayProgressInput.setAttribute("aria-valuetext", replayDateFormatter.format(new Date(wallTimestamp * 1000)));
+      }}
+    }}
+
+    function renderReplayLevelMarkers() {{
+      replayLevelMarkers.innerHTML = "";
+      const duration = replayState.endTime - replayState.startTime;
+      if (duration <= 0) return;
+      replayState.events.filter((event) => event.type === 7).forEach((event) => {{
+        const ratio = clampNumber((event.replayTime - replayState.startTime) / duration, 0, 1);
+        const marker = document.createElement("span");
+        marker.className = "replay-level-marker";
+        marker.style.left = `${{ratio * 100}}%`;
+        replayLevelMarkers.append(marker);
+        const level = Number(event.a);
+        if (level > 0 && level % 5 === 0) {{
+          const label = document.createElement("span");
+          label.className = "replay-level-marker-label";
+          label.style.left = `${{ratio * 100}}%`;
+          label.textContent = String(level);
+          replayLevelMarkers.append(label);
+        }}
+      }});
+    }}
+
+    function replayWorldPoint(event) {{
+      const zone = replayEventZone(event);
+      const rect = zone?.worldRect;
+      const continent = zone ? continentsById.get(Number(zone.continentId)) : null;
+      if (!rect || !continent) return null;
+      const localX = Number(rect.left) + event.x * Number(rect.width);
+      const localY = Number(rect.top) + event.y * Number(rect.height);
+      return {{
+        x: Number(continent.x) + localX * Number(continent.width) / 100,
+        y: Number(continent.y) + localY * Number(continent.height) / 100,
+      }};
+    }}
+
+    function replayPointForCurrentView(event) {{
+      if (!(event.x > 0 || event.y > 0)) return null;
+      if (replayState.scope === "world") return replayWorldPoint(event);
+      const zone = replayEventZone(event);
+      if (!zone || currentView.type !== "zone" || currentView.zoneId !== zone.id) return null;
+      return {{ x: event.x * 100, y: event.y * 100 }};
+    }}
+
+    function clearReplayMarkers() {{
+      markerLayer.querySelectorAll(".replay-event-marker").forEach((marker) => marker.remove());
+    }}
+
+    function setReplayMapForEvent(event, options = {{}}) {{
+      if (replayState.scope === "world") {{
+        if (currentView.type !== "world") {{
+          clearReplayMarkers();
+          setWorldView();
+        }}
+        return;
+      }}
+      const zone = replayEventZone(event);
+      if (!zone) return;
+      if (currentView.type !== "zone" || currentView.zoneId !== zone.id) {{
+        clearReplayMarkers();
+        setZoneView(zone.id);
+      }} else if (options.render !== false) {{
+        scheduleMapFit();
+      }}
+    }}
+
+    function spawnReplayMarker(event) {{
+      setReplayMapForEvent(event);
+      const point = replayPointForCurrentView(event);
+      if (!point) return;
+      const type = replayEventType(event);
+      const marker = document.createElement("div");
+      marker.className = `replay-event-marker ${{type.id}}`;
+      marker.style.left = `${{point.x}}%`;
+      marker.style.top = `${{point.y}}%`;
+      marker.style.setProperty("--event-color", type.color);
+      marker.innerHTML = type.icon;
+      marker.title = `${{replayEventDescription(event)}}\n${{replayEventMeta(event)}}`;
+      marker.setAttribute("aria-label", `${{replayEventDescription(event)}}, ${{replayEventMeta(event)}}`);
+      marker.addEventListener("animationend", () => marker.remove(), {{ once: true }});
+      markerLayer.append(marker);
+      const markers = markerLayer.querySelectorAll(".replay-event-marker");
+      if (markers.length > 500) markers[0].remove();
+    }}
+
+    function updateReplayPauseState() {{
+      replayPauseButton.classList.toggle("active", replayState.paused);
+      replaySpeedButtons.forEach((button) => {{
+        button.classList.toggle("active", !replayState.paused && Number(button.dataset.replaySpeed) === replayState.speed);
+      }});
+      replayPlaybackSetting.textContent = replayState.paused ? "Pause" : `${{replayState.speed}}x`;
+      document.body.classList.toggle("replay-paused", currentAppMode === "replay" && replayState.paused);
+    }}
+
+    function cancelReplayFrame() {{
+      cancelAnimationFrame(replayState.frame);
+      replayState.frame = 0;
+      replayState.lastFrameTime = 0;
+    }}
+
+    function setReplayPaused(paused) {{
+      replayState.paused = Boolean(paused);
+      updateReplayPauseState();
+      if (replayState.paused) {{
+        cancelReplayFrame();
+      }} else if (!replayState.frame) {{
+        replayState.lastFrameTime = performance.now();
+        replayState.frame = requestAnimationFrame(replayAnimationFrame);
+      }}
+    }}
+
+    function setReplaySpeed(speed) {{
+      const normalized = REPLAY_SPEEDS.includes(Number(speed)) ? Number(speed) : 60;
+      replayState.speed = normalized;
+      if (replayState.events.length && replayState.currentTime >= replayState.endTime) {{
+        seekReplay(replayState.startTime);
+        replayState.nextEventIndex = 0;
+      }}
+      setReplayPaused(false);
+    }}
+
+    function processReplayEventsTo(targetTime) {{
+      while (replayState.nextEventIndex < replayState.events.length) {{
+        const event = replayState.events[replayState.nextEventIndex];
+        if (event.replayTime > targetTime) break;
+        spawnReplayMarker(event);
+        replayState.nextEventIndex += 1;
+      }}
+    }}
+
+    function replayAnimationFrame(now) {{
+      replayState.frame = 0;
+      if (replayState.paused || currentAppMode !== "replay" || !replayState.events.length) return;
+      const elapsed = Math.max(0, (now - replayState.lastFrameTime) / 1000);
+      replayState.lastFrameTime = now;
+      const targetTime = Math.min(replayState.endTime, replayState.currentTime + elapsed * replayState.speed);
+      processReplayEventsTo(targetTime);
+      replayState.currentTime = targetTime;
+      updateReplayProgress();
+      if (now - replayState.lastLogRenderTime > 120 || targetTime >= replayState.endTime) {{
+        replayState.lastLogRenderTime = now;
+        renderReplaySidePanel();
+      }}
+      if (targetTime >= replayState.endTime) {{
+        setReplayPaused(true);
+        return;
+      }}
+      replayState.frame = requestAnimationFrame(replayAnimationFrame);
+    }}
+
+    function seekReplay(timestamp, options = {{}}) {{
+      if (!replayState.events.length) return;
+      replayState.currentTime = clampNumber(Number(timestamp), replayState.startTime, replayState.endTime);
+      replayState.nextEventIndex = replayEventIndexAtTime(replayState.currentTime);
+      clearReplayMarkers();
+      const currentEvent = replayState.events[Math.max(0, replayState.nextEventIndex - 1)];
+      if (currentEvent) setReplayMapForEvent(currentEvent, {{ render: false }});
+      updateReplayProgress();
+      if (options.renderLog !== false) renderReplaySidePanel();
+    }}
+
+    function setReplayScope(scope) {{
+      replayState.scope = scope === "world" ? "world" : "local";
+      replayLocalButton.classList.toggle("active", replayState.scope === "local");
+      replayWorldButton.classList.toggle("active", replayState.scope === "world");
+      replayLocalButton.setAttribute("aria-pressed", String(replayState.scope === "local"));
+      replayWorldButton.setAttribute("aria-pressed", String(replayState.scope === "world"));
+      clearReplayMarkers();
+      if (replayState.scope === "world") setWorldView();
+      else if (replayState.events.length) {{
+        const index = Math.max(0, replayEventIndexAtTime(replayState.currentTime) - 1);
+        setReplayMapForEvent(replayState.events[index], {{ render: false }});
+      }}
+      scheduleMapFit();
+    }}
+
+    function initializeReplay(options = {{}}) {{
+      cancelReplayFrame();
+      markerLayer.innerHTML = "";
+      highlightLayer.innerHTML = "";
+      const nextEvents = activeCharacterProfile?.events || EMPTY_REPLAY_EVENTS;
+      const eventsChanged = replayState.events !== nextEvents;
+      replayState.events = nextEvents;
+      replayState.startTime = replayState.events[0]?.replayTime || 0;
+      replayState.endTime = replayState.events[replayState.events.length - 1]?.replayTime || replayState.startTime;
+      const resetTime = eventsChanged || replayState.currentTime < replayState.startTime || replayState.currentTime > replayState.endTime;
+      if (resetTime) {{
+        replayState.currentTime = replayState.startTime;
+        replayState.paused = true;
+      }}
+      replayState.nextEventIndex = resetTime ? 0 : replayEventIndexAtTime(replayState.currentTime);
+      updateReplayPauseState();
+      renderReplayLevelMarkers();
+      updateReplayProgress();
+      renderReplaySidePanel();
+      if (replayState.events.length) {{
+        const index = Math.max(0, replayState.nextEventIndex - 1);
+        if (replayState.scope === "world") setWorldView();
+        else setReplayMapForEvent(replayState.events[index], {{ render: false }});
+      }}
+      if (!replayState.paused) setReplayPaused(false);
+    }}
+
+    function stopReplay() {{
+      cancelReplayFrame();
+      document.body.classList.remove("replay-paused");
+      markerLayer.innerHTML = "";
+      highlightLayer.innerHTML = "";
+    }}
+
+    function replayTimestampFromInput() {{
+      const ratio = Number(replayProgressInput.value) / 100000;
+      return replayState.startTime + ratio * (replayState.endTime - replayState.startTime);
+    }}
+
+    function beginReplayScrub() {{
+      replayState.scrubbing = true;
+      replayState.resumeAfterScrub = !replayState.paused;
+      setReplayPaused(true);
+    }}
+
+    function updateReplayScrub() {{
+      if (!replayState.events.length) return;
+      if (!replayState.scrubbing) beginReplayScrub();
+      replayState.currentTime = replayTimestampFromInput();
+      replayProgressFill.style.width = `${{Number(replayProgressInput.value) / 1000}}%`;
+      const wallTimestamp = replayWallTimestampAtTime(replayState.currentTime);
+      replayProgressInput.setAttribute("aria-valuetext", replayDateFormatter.format(new Date(wallTimestamp * 1000)));
+    }}
+
+    function finishReplayScrub() {{
+      if (!replayState.scrubbing) return;
+      const resume = replayState.resumeAfterScrub;
+      replayState.scrubbing = false;
+      seekReplay(replayTimestampFromInput());
+      if (resume) setReplayPaused(false);
+    }}
+
+    function batchSummaryDropAvailable() {{
+      return inventoryMode === "batch" && activeJourney != null && selectedBatch() != null;
+    }}
+
     function handleCatalogueDragStart(event) {{
-      const questNode = event.target.closest(".quest-icon, .chain-quest-item");
+      const questNode = event.target.closest(".quest-icon, .chain-quest-item, .pickup-choice-item");
       const chainNode = event.target.closest(".chain-row");
       if (!questNode && (!chainNode || !chainList.contains(chainNode))) return;
       if (event.target.closest(".zone-link, .quest-wowhead-link")) {{
@@ -6335,15 +9260,19 @@ def render_classic_html(records, chains, zones, continents):
         return;
       }}
       if (!event.dataTransfer) return;
+      const keepMapForBatchSummaryDrop = currentAppMode === "map" && batchSummaryDropAvailable();
       if (!activeJourney) {{
-        if (currentAppMode === "map") setAppMode("sequencer");
+        if (currentAppMode === "map" && !keepMapForBatchSummaryDrop) setAppMode("planner");
         showJourneyMessage("Create a Journey before adding quests.");
         event.preventDefault();
         return;
       }}
       if (!questNode && chainNode) {{
-        const chain = currentChains().find((item) => Number(item.id) === Number(chainNode.dataset.chainId));
-        const ids = (chain?.visibleQuests || []).map((quest) => quest.id);
+        const chain = inventoryChains().find((item) => Number(item.id) === Number(chainNode.dataset.chainId));
+        const ids = String(chainNode.dataset.questIds || "")
+          .split(",")
+          .map(Number)
+          .filter((id) => Number.isFinite(id) && questsById.has(id));
         if (!ids.length) {{
           event.preventDefault();
           return;
@@ -6360,11 +9289,12 @@ def render_classic_html(records, chains, zones, continents):
         event.dataTransfer.setData("application/x-questieplus-source", "catalogue-chain");
         chainNode.classList.add("dragging");
         document.body.classList.add("dragging-quest");
-        if (currentAppMode === "map") setAppMode("sequencer");
+        if (currentAppMode === "map" && !keepMapForBatchSummaryDrop) setAppMode("planner");
         return;
       }}
       const quest = questsById.get(Number(questNode.dataset.questId));
       if (!quest) return;
+      const isMapTooltipQuest = questNode.classList.contains("pickup-choice-item");
       preDragAppMode = currentAppMode;
       draggingQuestId = quest.id;
       draggingQuestIds = [quest.id];
@@ -6374,15 +9304,28 @@ def render_classic_html(records, chains, zones, continents):
       event.dataTransfer.setData("text/plain", String(quest.id));
       event.dataTransfer.setData("application/x-questieplus-quest", String(quest.id));
       event.dataTransfer.setData("application/x-questieplus-quests", JSON.stringify([quest.id]));
-      event.dataTransfer.setData("application/x-questieplus-source", "catalogue");
+      event.dataTransfer.setData("application/x-questieplus-source", isMapTooltipQuest ? "map-tooltip" : "catalogue");
       questNode.classList.add("dragging");
       document.body.classList.add("dragging-quest");
-      if (currentAppMode === "map") setAppMode("sequencer");
+      if (isMapTooltipQuest) document.body.classList.add("dragging-map-tooltip");
+      if (currentAppMode === "map" && !keepMapForBatchSummaryDrop) {{
+        if (isMapTooltipQuest) {{
+          requestAnimationFrame(() => {{
+            if (draggingQuestId === quest.id) setAppMode("planner");
+          }});
+        }} else {{
+          setAppMode("planner");
+        }}
+      }}
     }}
 
     function handleJourneyDragStart(event) {{
       const questNode = event.target.closest(".journey-quest");
-      if (!questNode || !sequencerBoard.contains(questNode)) return;
+      if (!questNode || !plannerBoard.contains(questNode)) return;
+      if (questNode.classList.contains("completed")) {{
+        event.preventDefault();
+        return;
+      }}
       if (event.target.closest(".journey-quest-remove, .journey-quest-unhide")) {{
         event.preventDefault();
         return;
@@ -6404,64 +9347,133 @@ def render_classic_html(records, chains, zones, continents):
     }}
 
     function handleCatalogueDragEnd() {{
-      document.querySelectorAll(".chain-row.dragging, .quest-icon.dragging, .chain-quest-item.dragging, .journey-quest.dragging").forEach((element) => element.classList.remove("dragging"));
+      const wasMapTooltipDrag = document.body.classList.contains("dragging-map-tooltip");
+      document.querySelectorAll(".chain-row.dragging, .quest-icon.dragging, .chain-quest-item.dragging, .pickup-choice-item.dragging, .journey-quest.dragging").forEach((element) => element.classList.remove("dragging"));
       document.body.classList.remove("dragging-quest");
-      clearSequencerDragTargets();
+      document.body.classList.remove("dragging-map-tooltip");
+      clearPlannerDragTargets();
+      clearBatchSummaryDragTarget();
       const shouldRestoreMap = preDragAppMode === "map";
       draggingQuestId = null;
       draggingQuestIds = [];
       draggingChainId = null;
       draggingJourneyQuestId = null;
       preDragAppMode = currentAppMode;
-      if (shouldRestoreMap) setAppMode("map");
+      if (shouldRestoreMap) {{
+        setAppMode("map");
+        requestAnimationFrame(() => {{
+          if (currentAppMode !== "map" || mapModePanel.hidden) return;
+          window.clearTimeout(mapMarkerRenderTimer);
+          mapMarkerRenderTimer = 0;
+          renderAvailablePickupMarkers();
+          renderSelectionOverlays();
+        }});
+      }}
+      if (wasMapTooltipDrag) closePickupQuestList();
     }}
 
-    function activeSequencerDropTarget(event) {{
+    function restorePreDragModeAfterDrop() {{
+      if (preDragAppMode !== "map") return;
+      requestAnimationFrame(() => {{
+        if (draggingJourneyQuestId == null && currentAppMode !== "map") setAppMode("map");
+      }});
+    }}
+
+    function activePlannerDropTarget(event) {{
       return event.target.closest(".journey-batch-drop, .journey-insert-target, .journey-unused-drop");
     }}
 
-    function clearSequencerDragTargets() {{
-      sequencerBoard.querySelectorAll(".drag-over").forEach((element) => element.classList.remove("drag-over"));
+    function clearPlannerDragTargets() {{
+      plannerBoard.querySelectorAll(".drag-over").forEach((element) => element.classList.remove("drag-over"));
     }}
 
-    function handleSequencerDragOver(event) {{
+    function clearBatchSummaryDragTarget() {{
+      chainList.classList.remove("batch-drop-over");
+      batchNavigator.classList.remove("batch-drop-over");
+    }}
+
+    function droppedQuestIds(event) {{
+      const rawQuestIds = event.dataTransfer?.getData("application/x-questieplus-quests");
+      let parsedQuestIds = [];
+      if (rawQuestIds) {{
+        try {{
+          parsedQuestIds = JSON.parse(rawQuestIds);
+        }} catch {{
+          parsedQuestIds = [];
+        }}
+      }}
+      const rawQuestId = event.dataTransfer?.getData("application/x-questieplus-quest")
+        || event.dataTransfer?.getData("text/plain")
+        || String(draggingQuestId ?? "");
+      return parsedQuestIds.length
+        ? normalizeQuestIdList(parsedQuestIds)
+        : normalizeQuestIdList(rawQuestId.split ? rawQuestId.split(",") : rawQuestId);
+    }}
+
+    function handlePlannerDragOver(event) {{
       if (draggingQuestId == null && !draggingQuestIds.length) return;
-      const target = activeSequencerDropTarget(event);
+      const target = activePlannerDropTarget(event);
       if (!target) return;
       event.preventDefault();
-      clearSequencerDragTargets();
+      clearPlannerDragTargets();
       if (event.dataTransfer) event.dataTransfer.dropEffect = draggingJourneyQuestId == null ? "copy" : "move";
       target.classList.add("drag-over");
     }}
 
-    function handleSequencerDragLeave(event) {{
-      const target = activeSequencerDropTarget(event);
+    function handlePlannerDragLeave(event) {{
+      const target = activePlannerDropTarget(event);
       if (!target) return;
       if (event.relatedTarget && target.contains(event.relatedTarget)) return;
       target.classList.remove("drag-over");
     }}
 
-    function handleSequencerDrop(event) {{
+    function handlePlannerDrop(event) {{
       if (draggingQuestId == null && !draggingQuestIds.length && !event.dataTransfer) return;
-      const target = activeSequencerDropTarget(event);
+      const target = activePlannerDropTarget(event);
       if (!target) return;
       event.preventDefault();
-      const rawQuestIds = event.dataTransfer?.getData("application/x-questieplus-quests");
-      const parsedQuestIds = rawQuestIds
-        ? JSON.parse(rawQuestIds)
-        : [];
-      const rawQuestId = event.dataTransfer?.getData("application/x-questieplus-quest")
-        || event.dataTransfer?.getData("text/plain")
-        || String(draggingQuestId ?? "");
-      const questIds = parsedQuestIds.length ? parsedQuestIds : normalizeQuestIdList(rawQuestId.split ? rawQuestId.split(",") : rawQuestId);
-      clearSequencerDragTargets();
+      const questIds = droppedQuestIds(event);
+      clearPlannerDragTargets();
       if (target.classList.contains("journey-insert-target")) {{
         insertBatchAt(Number(target.dataset.insertIndex), questIds);
       }} else if (target.classList.contains("journey-unused-drop")) {{
-        moveQuestIdsToUnused(questIds);
+        moveQuestIdsToHidden(questIds);
       }} else {{
         moveQuestIdsToBatch(questIds, Number(target.dataset.batchIndex), {{ moveExisting: draggingJourneyQuestId != null }});
       }}
+      restorePreDragModeAfterDrop();
+    }}
+
+    function handleBatchSummaryDragOver(event) {{
+      if (!batchSummaryDropAvailable() || (draggingQuestId == null && !draggingQuestIds.length)) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = draggingJourneyQuestId == null ? "copy" : "move";
+      const dropSurface = event.currentTarget === batchNavigator ? batchNavigator : chainList;
+      dropSurface.classList.add("batch-drop-over");
+    }}
+
+    function handleBatchSummaryDragLeave(event) {{
+      const dropSurface = event.currentTarget === batchNavigator ? batchNavigator : chainList;
+      if (event.relatedTarget && dropSurface.contains(event.relatedTarget)) return;
+      dropSurface.classList.remove("batch-drop-over");
+    }}
+
+    function handleBatchSummaryDrop(event) {{
+      if (!batchSummaryDropAvailable()) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const questIds = droppedQuestIds(event);
+      clearBatchSummaryDragTarget();
+      if (!questIds.length) return;
+      if (selectedBatchId === "hidden" || selectedBatchId === "unused") {{
+        moveQuestIdsToHidden(questIds);
+      }} else {{
+        const targetBatchIndex = activeJourney.batches.findIndex((batch) => batch.id === selectedBatchId);
+        if (targetBatchIndex >= 0) {{
+          moveQuestIdsToBatch(questIds, targetBatchIndex, {{ moveExisting: draggingJourneyQuestId != null }});
+        }}
+      }}
+      restorePreDragModeAfterDrop();
     }}
 
     function zoneSort(a, b) {{
@@ -6488,78 +9500,102 @@ def render_classic_html(records, chains, zones, continents):
     }}
 
     function populateFilters() {{
-      raceFilter.innerHTML = RACES.map((race) => `
-        <option value="${{race.mask ?? "all"}}" style="color:${{race.color}}">${{escapeHtml(race.label)}}</option>
-      `).join("");
-      classFilter.innerHTML = CLASSES.map((klass) => `
-        <option value="${{klass.mask ?? "all"}}" style="color:${{klass.color}}">${{escapeHtml(klass.label)}}</option>
-      `).join("");
-      levelFilter.innerHTML = '<option value="all">All levels</option>' + Array.from({{ length: 60 }}, (_, index) => {{
+      levelFilter.innerHTML = '<option value="all">All levels</option><option value="batch" style="color:#55aaff">Batch level</option>' + Array.from({{ length: 60 }}, (_, index) => {{
         const level = index + 1;
         return `<option value="${{level}}">Level ${{level}}</option>`;
       }}).join("");
-      updateFilterSelectColors();
+      syncLevelFilterFromControl({{ render: false }});
     }}
 
-    function populateQuestFilters() {{
+    function filterableZonesWithUnknown() {{
+      return [{{ id: UNKNOWN_ZONE_ID, name: "Unknown", levelRange: "" }}, ...filterableZones()];
+    }}
+
+    function optionChecked(set, value) {{
+      return set.has(value) ? "checked" : "";
+    }}
+
+    function filterActionHtml(column) {{
+      return `
+        <div class="filter-actions">
+          <button type="button" data-filter-column="${{column}}" data-filter-action="check-all">Check all</button>
+          <button type="button" data-filter-column="${{column}}" data-filter-action="uncheck-all">Uncheck all</button>
+        </div>
+      `;
+    }}
+
+    function filterCheckboxHtml(kind, value, label, checked, extra = "") {{
+      return `
+        <label class="quest-type-option">
+          <input type="checkbox" data-filter-kind="${{kind}}" value="${{escapeHtml(String(value))}}" ${{checked ? "checked" : ""}}>
+          <span ${{extra}}>${{label}}</span>
+        </label>
+      `;
+    }}
+
+    function populateMainFilterMenu() {{
       const counts = new Map();
       DATA.quests.forEach((quest) => {{
         (quest.typeIds || ["general"]).forEach((typeId) => {{
           counts.set(typeId, (counts.get(typeId) || 0) + 1);
         }});
       }});
-      questFilterMenu.innerHTML = `
-        <div class="quest-filter-title">Quest Types</div>
-        ${{QUEST_TYPE_FILTERS.map((filter) => `
-          <label class="quest-type-option">
-            <input type="checkbox" value="${{filter.id}}" ${{filters.typeIds.has(filter.id) ? "checked" : ""}}>
-            <span>${{escapeHtml(filter.label)}}</span>
-            <span class="type-count">${{counts.get(filter.id) || 0}}</span>
-          </label>
-        `).join("")}}
-      `;
-      questFilterMenu.querySelectorAll('input[type="checkbox"]').forEach((input) => {{
-        input.addEventListener("change", updateQuestTypeFiltersFromMenu);
-      }});
-      updateQuestFilterButton();
-    }}
-
-    function populateZoneFilters() {{
-      const zones = filterableZones();
-      zoneFilterMenu.innerHTML = `
-        <div class="zone-filter-title">Zones</div>
-        <div class="filter-actions">
-          <button type="button" data-zone-action="check-all">Check all</button>
-          <button type="button" data-zone-action="uncheck-all">Uncheck all</button>
+      mainFilterMenu.innerHTML = `
+        <div class="combined-filter-grid">
+          <div class="filter-column" data-filter-column-panel="identity">
+            <div class="filter-column-title">Character</div>
+            ${{filterActionHtml("identity")}}
+            <div class="filter-section">
+              <div class="filter-section-title">Faction</div>
+              ${{["Alliance", "Horde"].map((faction) => filterCheckboxHtml("faction", faction, escapeHtml(faction), filters.factions.has(faction))).join("")}}
+            </div>
+            <div class="filter-section">
+              <div class="filter-section-title">Race</div>
+              ${{journeyRaceOptions().map((race) => filterCheckboxHtml("race", race.mask, escapeHtml(race.label), filters.raceMasks.has(race.mask), `style="color:${{race.color}}"`)).join("")}}
+            </div>
+            <div class="filter-section">
+              <div class="filter-section-title">Class</div>
+              ${{journeyClassOptions().map((klass) => filterCheckboxHtml("class", klass.mask, escapeHtml(klass.label), filters.classMasks.has(klass.mask), `style="color:${{klass.color}}"`)).join("")}}
+            </div>
+          </div>
+          <div class="filter-column" data-filter-column-panel="zones">
+            <div class="filter-column-title">Zones</div>
+            ${{filterActionHtml("zones")}}
+            ${{filterCheckboxHtml("current-zone", "current-zone", "Current view", filters.useCurrentMapZone)}}
+            ${{filterableZonesWithUnknown().map((zone) => filterCheckboxHtml("zone", zone.id, zone.id === UNKNOWN_ZONE_ID ? "Unknown" : zoneOptionLabel(zone), filters.zoneIds.has(zone.id))).join("")}}
+          </div>
+          <div class="filter-column" data-filter-column-panel="types">
+            <div class="filter-column-title">Quest Types</div>
+            ${{filterActionHtml("types")}}
+            ${{QUEST_TYPE_FILTERS.map((filter) => `
+              <label class="quest-type-option">
+                <input type="checkbox" data-filter-kind="type" value="${{filter.id}}" ${{filters.typeIds.has(filter.id) ? "checked" : ""}}>
+                <span>${{escapeHtml(filter.label)}}</span>
+                <span class="type-count">${{counts.get(filter.id) || 0}}</span>
+              </label>
+            `).join("")}}
+          </div>
         </div>
-        ${{zones.map((zone) => `
-          <label class="quest-type-option">
-            <input type="checkbox" value="${{zone.id}}" ${{filters.zoneIds.has(zone.id) ? "checked" : ""}}>
-            <span>${{zoneOptionLabel(zone)}}</span>
-          </label>
-        `).join("")}}
       `;
-      zoneFilterMenu.querySelector('[data-zone-action="check-all"]').addEventListener("click", () => {{
-        filters.zoneIds = new Set(filterableZones().map((zone) => zone.id));
-        zoneFilterMenu.querySelectorAll('input[type="checkbox"]').forEach((input) => input.checked = true);
-        updateZoneFilterButton();
-        renderCurrentView();
+      mainFilterMenu.querySelectorAll('input[type="checkbox"]').forEach((input) => {{
+        input.addEventListener("change", updateMainFiltersFromMenu);
       }});
-      zoneFilterMenu.querySelector('[data-zone-action="uncheck-all"]').addEventListener("click", () => {{
-        filters.zoneIds = new Set();
-        zoneFilterMenu.querySelectorAll('input[type="checkbox"]').forEach((input) => input.checked = false);
-        updateZoneFilterButton();
-        renderCurrentView();
+      mainFilterMenu.querySelectorAll("[data-filter-action]").forEach((button) => {{
+        button.addEventListener("click", () => {{
+          const column = button.dataset.filterColumn;
+          const checked = button.dataset.filterAction === "check-all";
+          mainFilterMenu.querySelectorAll(`[data-filter-column-panel="${{column}}"] input[type="checkbox"]:not([data-filter-kind="current-zone"])`).forEach((input) => {{
+            input.checked = checked;
+          }});
+          updateMainFiltersFromMenu();
+        }});
       }});
-      zoneFilterMenu.querySelectorAll('input[type="checkbox"]').forEach((input) => {{
-        input.addEventListener("change", updateZoneFiltersFromMenu);
-      }});
-      updateZoneFilterButton();
+      updateMainFilterButton();
     }}
 
     function populateDisplayFilters() {{
       displayFilterMenu.innerHTML = `
-        <div class="display-filter-title">Map Display</div>
+        <div class="display-filter-title">Show on map</div>
         ${{DISPLAY_FILTERS.map((filter) => `
           <label class="quest-type-option">
             <input type="checkbox" value="${{filter.id}}" ${{displayFilters.has(filter.id) ? "checked" : ""}}>
@@ -6573,34 +9609,16 @@ def render_classic_html(records, chains, zones, continents):
       updateDisplayFilterButton();
     }}
 
-    function populateOptionsFilters() {{
-      optionsFilterMenu.innerHTML = `
-        <div class="options-filter-title">Catalogue Options</div>
-        ${{CATALOGUE_OPTIONS.map((option) => `
-          <label class="quest-type-option">
-            <input type="checkbox" value="${{option.id}}" ${{catalogueOptions.has(option.id) ? "checked" : ""}}>
-            <span>${{escapeHtml(option.label)}}</span>
-          </label>
-        `).join("")}}
-      `;
-      optionsFilterMenu.querySelectorAll('input[type="checkbox"]').forEach((input) => {{
-        input.addEventListener("change", updateOptionsFiltersFromMenu);
-      }});
-      updateOptionsFilterButton();
-    }}
-
-    function updateQuestTypeFiltersFromMenu() {{
+    function updateMainFiltersFromMenu() {{
       forcedCatalogueChainId = null;
-      filters.typeIds = new Set([...questFilterMenu.querySelectorAll('input[type="checkbox"]:checked')].map((input) => input.value));
-      updateQuestFilterButton();
-      renderCurrentView();
-    }}
-
-    function updateZoneFiltersFromMenu() {{
-      forcedCatalogueChainId = null;
-      filters.zoneIds = new Set([...zoneFilterMenu.querySelectorAll('input[type="checkbox"]:checked')].map((input) => Number(input.value)));
-      updateZoneFilterButton();
-      renderCurrentView();
+      filters.factions = new Set([...mainFilterMenu.querySelectorAll('input[data-filter-kind="faction"]:checked')].map((input) => input.value));
+      filters.raceMasks = new Set([...mainFilterMenu.querySelectorAll('input[data-filter-kind="race"]:checked')].map((input) => Number(input.value)));
+      filters.classMasks = new Set([...mainFilterMenu.querySelectorAll('input[data-filter-kind="class"]:checked')].map((input) => Number(input.value)));
+      filters.zoneIds = new Set([...mainFilterMenu.querySelectorAll('input[data-filter-kind="zone"]:checked')].map((input) => Number(input.value)));
+      filters.useCurrentMapZone = Boolean(mainFilterMenu.querySelector('input[data-filter-kind="current-zone"]')?.checked);
+      filters.typeIds = new Set([...mainFilterMenu.querySelectorAll('input[data-filter-kind="type"]:checked')].map((input) => input.value));
+      updateMainFilterButton();
+      renderCurrentView({{ scrollTargetChainToTop: true }});
     }}
 
     function updateDisplayFiltersFromMenu() {{
@@ -6612,35 +9630,32 @@ def render_classic_html(records, chains, zones, continents):
       renderCurrentView();
     }}
 
-    function updateOptionsFiltersFromMenu() {{
+    function updateCatalogueAssignedOption() {{
       forcedCatalogueChainId = null;
       catalogueOptions.clear();
-      optionsFilterMenu.querySelectorAll('input[type="checkbox"]:checked').forEach((input) => {{
-        catalogueOptions.add(input.value);
-      }});
-      updateOptionsFilterButton();
-      renderCurrentView();
+      if (showAssignedCatalogueCheckbox.checked) catalogueOptions.add(CATALOGUE_SHOW_ASSIGNED_OPTION);
+      updateCatalogueAssignedToggle();
+      renderCurrentView({{ scrollTargetChainToTop: true }});
     }}
 
-    function updateQuestFilterButton() {{
-      const enabledLabels = QUEST_TYPE_FILTERS
-        .filter((filter) => filters.typeIds.has(filter.id))
-        .map((filter) => filter.label);
-      questFilterCount.textContent = String(enabledLabels.length);
-      questFilterButton.title = enabledLabels.length ? enabledLabels.join(", ") : "No quest types selected";
-      questFilterButton.classList.toggle("active", enabledLabels.length !== 1 || !filters.typeIds.has("general"));
-    }}
-
-    function updateZoneFilterButton() {{
-      const zones = filterableZones();
-      const selectedZones = zones.filter((zone) => filters.zoneIds.has(zone.id));
-      zoneFilterCount.textContent = String(selectedZones.length);
-      zoneFilterButton.title = selectedZones.length === zones.length
-        ? "All zones"
-        : selectedZones.length
-          ? selectedZones.map((zone) => zone.name).join(", ")
-          : "No zones selected";
-      zoneFilterButton.classList.toggle("active", selectedZones.length !== zones.length);
+    function updateMainFilterButton() {{
+      const allRaces = journeyRaceOptions().length;
+      const allClasses = journeyClassOptions().length;
+      const allZones = filterableZonesWithUnknown().length;
+      const defaultTypes = new Set(QUEST_TYPE_FILTERS.filter((filter) => filter.defaultEnabled).map((filter) => filter.id));
+      const typesAreDefault = filters.typeIds.size === defaultTypes.size && [...defaultTypes].every((id) => filters.typeIds.has(id));
+      const identityAll = filters.factions.size === 2 && filters.raceMasks.size === allRaces && filters.classMasks.size === allClasses;
+      const zonesAll = !filters.useCurrentMapZone && filters.zoneIds.size === allZones;
+      const active = !identityAll || !zonesAll || !typesAreDefault;
+      const parts = [
+        `${{filters.factions.size}} factions`,
+        `${{filters.raceMasks.size}} races`,
+        `${{filters.classMasks.size}} classes`,
+        filters.useCurrentMapZone ? "current map zone" : `${{filters.zoneIds.size}} zones`,
+        `${{filters.typeIds.size}} quest types`,
+      ];
+      mainFilterButton.title = parts.join(", ");
+      mainFilterButton.classList.toggle("active", active);
     }}
 
     function updateDisplayFilterButton() {{
@@ -6648,27 +9663,22 @@ def render_classic_html(records, chains, zones, continents):
         .filter((filter) => displayFilters.has(filter.id))
         .map((filter) => filter.label);
       displayFilterCount.textContent = String(enabledLabels.length);
-      displayFilterButton.title = enabledLabels.length ? enabledLabels.join(", ") : "No display overlays selected";
+      displayFilterButton.title = enabledLabels.length ? enabledLabels.join(", ") : "No map overlays selected";
       displayFilterButton.classList.toggle("active", enabledLabels.length > 0);
     }}
 
-    function updateOptionsFilterButton() {{
-      const enabledLabels = CATALOGUE_OPTIONS
-        .filter((option) => catalogueOptions.has(option.id))
-        .map((option) => option.label);
-      optionsFilterCount.textContent = String(enabledLabels.length);
-      optionsFilterButton.title = enabledLabels.length ? enabledLabels.join(", ") : "No catalogue options selected";
-      optionsFilterButton.classList.toggle("active", enabledLabels.length !== CATALOGUE_OPTIONS.length);
+    function updateCatalogueAssignedToggle() {{
+      const enabled = catalogueOptions.has(CATALOGUE_SHOW_ASSIGNED_OPTION);
+      showAssignedCatalogueCheckbox.checked = enabled;
+      catalogueAssignedToggle.classList.toggle("active", enabled);
+      catalogueAssignedToggle.title = enabled
+        ? "Assigned and hidden quests are shown in the catalogue"
+        : "Assigned and hidden quests are hidden from the catalogue";
     }}
 
-    function setQuestFilterMenuOpen(open) {{
-      questFilterMenu.hidden = !open;
-      questFilterButton.setAttribute("aria-expanded", String(open));
-    }}
-
-    function setZoneFilterMenuOpen(open) {{
-      zoneFilterMenu.hidden = !open;
-      zoneFilterButton.setAttribute("aria-expanded", String(open));
+    function setMainFilterMenuOpen(open) {{
+      mainFilterMenu.hidden = !open;
+      mainFilterButton.setAttribute("aria-expanded", String(open));
     }}
 
     function setDisplayFilterMenuOpen(open) {{
@@ -6676,16 +9686,28 @@ def render_classic_html(records, chains, zones, continents):
       displayFilterButton.setAttribute("aria-expanded", String(open));
     }}
 
-    function setOptionsFilterMenuOpen(open) {{
-      optionsFilterMenu.hidden = !open;
-      optionsFilterButton.setAttribute("aria-expanded", String(open));
+    function selectedBatchLevelValue() {{
+      const batch = selectedBatch();
+      if (!batch || batch.id === "hidden" || batch.id === "unused") return null;
+      return computedBatchExpectedLevel(batch);
+    }}
+
+    function updateBatchLevelOption() {{
+      const option = levelFilter.querySelector('option[value="batch"]');
+      if (!option) return;
+      const level = selectedBatchLevelValue();
+      option.textContent = level == null ? "Batch level" : `Batch: Lv ${{level}}`;
     }}
 
     function updateFilterSelectColors() {{
-      const race = RACES.find((item) => String(item.mask ?? "all") === raceFilter.value) || RACES[0];
-      const klass = CLASSES.find((item) => String(item.mask ?? "all") === classFilter.value) || CLASSES[0];
-      tintSelect(raceFilter, race.color);
-      tintSelect(classFilter, klass.color);
+      updateBatchLevelOption();
+      if (levelFilter.value === "batch") {{
+        const level = selectedBatchLevelValue();
+        levelFilter.title = level == null ? "Batch level - select a batch" : `Batch level ${{level}}`;
+        tintSelect(levelFilter, "#55aaff");
+        return;
+      }}
+      levelFilter.title = levelFilter.value === "all" ? "All levels" : `Level ${{levelFilter.value}}`;
       tintSelect(levelFilter, levelFilter.value === "all" ? "#fff0ce" : "#40c040");
     }}
 
@@ -6694,12 +9716,22 @@ def render_classic_html(records, chains, zones, continents):
       select.style.borderColor = color === "#fff0ce" ? "rgba(255, 235, 196, 0.24)" : color;
     }}
 
-    function updateFiltersFromControls() {{
-      filters.raceMask = raceFilter.value === "all" ? null : Number(raceFilter.value);
-      filters.classMask = classFilter.value === "all" ? null : Number(classFilter.value);
-      filters.level = levelFilter.value === "all" ? null : Number(levelFilter.value);
+    function syncLevelFilterFromControl(options = {{}}) {{
+      if (levelFilter.value === "all") filters.level = null;
+      else if (levelFilter.value === "batch") filters.level = selectedBatchLevelValue();
+      else {{
+        const level = Number(levelFilter.value);
+        filters.level = Number.isFinite(level) ? level : null;
+      }}
       updateFilterSelectColors();
-      renderCurrentView();
+      if (options.render !== false) renderCurrentView({{ scrollTargetChainToTop: true }});
+    }}
+
+    function updateFiltersFromControls() {{
+      syncLevelFilterFromControl({{ render: false }});
+      updateMainFilterButton();
+      if (activeJourney) renderJourney();
+      renderCurrentView({{ scrollTargetChainToTop: true }});
     }}
 
     function updateSearchClearButton() {{
@@ -6708,9 +9740,10 @@ def render_classic_html(records, chains, zones, continents):
     }}
 
     function updateSearchFilterFromInput() {{
+      inventorySearchValues[inventoryMode] = questSearch.value;
       filters.search = questSearch.value.trim().toLowerCase();
       updateSearchClearButton();
-      renderCurrentView();
+      renderCurrentView({{ scrollTargetChainToTop: true }});
     }}
 
     function renderWorldTiles() {{
@@ -6823,7 +9856,7 @@ def render_classic_html(records, chains, zones, continents):
     function setWorldView() {{
       currentView = {{ type: "world", zoneId: null }};
       zoneSelect.value = "";
-      renderCurrentView();
+      renderCurrentView({{ scrollTargetChainToTop: filters.useCurrentMapZone }});
     }}
 
     function setZoneView(zoneId) {{
@@ -6832,15 +9865,28 @@ def render_classic_html(records, chains, zones, continents):
       hideWorldZoneTooltip();
       currentView = {{ type: "zone", zoneId: zone.id }};
       zoneSelect.value = String(zone.id);
-      renderCurrentView();
+      renderCurrentView({{ scrollTargetChainToTop: filters.useCurrentMapZone }});
     }}
 
     function questPassesRaceClass(quest) {{
       const raceMask = quest.requiredRaceMask || 0;
       const classMask = quest.requiredClassMask || 0;
-      const raceOk = filters.raceMask == null || raceMask === 0 || (raceMask & filters.raceMask) !== 0;
-      const classOk = filters.classMask == null || classMask === 0 || (classMask & filters.classMask) !== 0;
-      return raceOk && classOk;
+      const selectedRaces = [...filters.raceMasks];
+      const selectedClasses = [...filters.classMasks];
+      const raceOk = raceMask === 0
+        ? selectedRaces.length > 0
+        : selectedRaces.some((mask) => (raceMask & mask) !== 0);
+      const classOk = classMask === 0
+        ? selectedClasses.length > 0
+        : selectedClasses.some((mask) => (classMask & mask) !== 0);
+      const questFactions = raceMask === 0
+        ? ["Alliance", "Horde"]
+        : [...new Set(RACES
+          .filter((race) => race.mask != null && (raceMask & race.mask) !== 0)
+          .map((race) => race.faction)
+          .filter(Boolean))];
+      const factionOk = questFactions.some((faction) => filters.factions.has(faction));
+      return raceOk && classOk && factionOk;
     }}
 
     function questPassesType(quest) {{
@@ -6851,6 +9897,13 @@ def render_classic_html(records, chains, zones, continents):
     function questPassesSearch(quest) {{
       if (!filters.search) return true;
       return String(quest.name || "").toLowerCase().includes(filters.search);
+    }}
+
+    function selectedCatalogueChainId() {{
+      if (selectedChainId != null) return Number(selectedChainId);
+      if (selectedId != null) return Number(questsById.get(Number(selectedId))?.chainId);
+      if (activeId != null) return Number(questsById.get(Number(activeId))?.chainId);
+      return null;
     }}
 
     function questIsInCurrentView(quest) {{
@@ -6871,6 +9924,17 @@ def render_classic_html(records, chains, zones, continents):
       orange: "#ff8040",
       red: "#ff1a1a",
     }};
+
+    function questIsCompletedByProfile(questOrId) {{
+      const questId = Number(typeof questOrId === "object" ? questOrId?.id : questOrId);
+      return Number.isFinite(questId) && completedProfileQuestIds.has(questId);
+    }}
+
+    function questCompletionMarkHtml(questOrId, variant = "inline") {{
+      if (!questIsCompletedByProfile(questOrId)) return "";
+      const className = variant === "icon" ? "quest-complete-check icon" : "quest-complete-check";
+      return `<span class="${{className}}" title="Completed" aria-label="Completed">&#10003;</span>`;
+    }}
 
     function questDifficultyId(quest) {{
       if (!quest || filters.level == null) return null;
@@ -6991,10 +10055,11 @@ def render_classic_html(records, chains, zones, continents):
     }}
 
     function questPassesCatalogueOptions(quest) {{
-      if (!activeJourney || !quest) return true;
+      if (!quest) return true;
       const id = Number(quest.id);
-      if (!catalogueOptions.has("show-assigned") && assignedJourneyQuestIds().has(id)) return false;
-      if (!catalogueOptions.has("show-unused") && unusedJourneyQuestIds().has(id)) return false;
+      if (selectedId != null && Number(selectedId) === id) return true;
+      const showAssigned = catalogueOptions.has(CATALOGUE_SHOW_ASSIGNED_OPTION);
+      if (!showAssigned && (questIsCompletedByProfile(id) || assignedJourneyQuestIds().has(id) || unusedJourneyQuestIds().has(id))) return false;
       return true;
     }}
 
@@ -7012,7 +10077,7 @@ def render_classic_html(records, chains, zones, continents):
       if (assignedJourneyQuestIds().has(id) || unusedJourneyQuestIds().has(id)) return true;
       const availability = questAllowedForJourney(quest);
       if (!availability.ok) return false;
-      return !questPrerequisiteFailure(quest, assignedJourneyQuestIds());
+      return !questPrerequisiteFailure(quest, assignedOrCompletedQuestIds());
     }}
 
     function questAssignmentTitle(quest) {{
@@ -7020,18 +10085,24 @@ def render_classic_html(records, chains, zones, continents):
       return questCanBeAssignedNow(quest) ? base : `${{base}} - prerequisites not assigned yet`;
     }}
 
-    function questStatusBadgeHtml(quest) {{
-      const status = questJourneyStatus(quest);
-      if (!status) return "";
-      const label = status === "assigned" ? "Assigned" : "Hidden";
-      return `<span class="quest-status-dot ${{status}}" title="${{label}}" aria-label="${{label}}"></span>`;
+    function questAssignmentIconState(quest, options = {{}}) {{
+      if (!activeJourney || !quest) return "";
+      const id = Number(quest.id);
+      if (assignedJourneyQuestIds().has(id)) return inventoryMode === "batch" && !options.showInBatchSummary ? "" : "assigned";
+      if (unusedJourneyQuestIds().has(id)) return "hidden";
+      if (selectedBatchId == null || selectedBatchId === "hidden" || selectedBatchId === "unused") return "";
+      return questCanBeAssignedNow(quest) ? "available" : "unavailable";
     }}
 
-    function chainStatusBadgeHtml(quests) {{
+    function questStatusBadgeHtml(quest) {{
+      return "";
+    }}
+
+    function chainStatusBadgeHtml(quests, options = {{}}) {{
       const visibleQuests = (quests || []).filter(Boolean);
       if (!activeJourney || !visibleQuests.length) return "";
       const statuses = visibleQuests.map(questJourneyStatus);
-      if (statuses.every((status) => status === "assigned")) return '<span class="quest-status-dot assigned" title="Assigned" aria-label="Assigned"></span>';
+      if ((inventoryMode !== "batch" || options.showAssigned) && statuses.every((status) => status === "assigned")) return '<span class="quest-status-dot assigned" title="Assigned" aria-label="Assigned"></span>';
       if (statuses.every((status) => status === "hidden")) return '<span class="quest-status-dot hidden" title="Hidden" aria-label="Hidden"></span>';
       return "";
     }}
@@ -7047,17 +10118,64 @@ def render_classic_html(records, chains, zones, continents):
       return Boolean(activeQuest && Number(activeQuest.chainId) === chainId);
     }}
 
+    function selectedCatalogueChainIsActive(chain) {{
+      if (!chain) return false;
+      const chainId = selectedCatalogueChainId();
+      return chainId != null && Number(chain.id) === Number(chainId);
+    }}
+
+    function activeZoneFilterState() {{
+      const zones = filterableZonesWithUnknown();
+      const manualZoneFiltered = filters.zoneIds.size !== zones.length;
+      const manualZoneNames = manualZoneFiltered ? selectedZoneNameSet() : null;
+      if (filters.useCurrentMapZone) {{
+        if (currentView.type === "world") {{
+          return {{
+            zones,
+            zoneFiltered: false,
+            selectedZoneNames: null,
+            label: "all zones from world map",
+          }};
+        }}
+        if (!manualZoneFiltered) {{
+          return {{
+            zones,
+            zoneFiltered: false,
+            selectedZoneNames: null,
+            label: "all zones",
+          }};
+        }}
+        const zone = zonesById.get(Number(currentView.zoneId));
+        const selectedZoneNames = new Set(manualZoneNames);
+        selectedZoneNames.add(zone?.name || "Unknown");
+        return {{
+          zones,
+          zoneFiltered: true,
+          selectedZoneNames,
+          label: zone?.name || "Unknown",
+        }};
+      }}
+      return {{
+        zones,
+        zoneFiltered: manualZoneFiltered,
+        selectedZoneNames: manualZoneNames,
+        label: `${{filters.zoneIds.size}} zones`,
+      }};
+    }}
+
     function currentChains() {{
       const chains = [...chainsById.values()];
-      const zones = filterableZones();
-      const zoneFiltered = filters.zoneIds.size !== zones.length;
-      const selectedZoneNames = zoneFiltered ? selectedZoneNameSet() : null;
+      const zoneFilter = activeZoneFilterState();
       return chains
         .map((chain) => {{
           const forceVisible = forcedCatalogueChainIsActive(chain);
-          const visibleQuests = forceVisible
-            ? chain.quests
-            : chain.quests.filter((quest) => questPassesRaceClass(quest) && questPassesType(quest) && questPassesCatalogueOptions(quest));
+          const keepSelectionVisible = forceVisible || selectedCatalogueChainIsActive(chain);
+          const bypassZoneFilter = keepSelectionVisible;
+          const visibleQuests = chain.quests.filter((quest) => (
+            questPassesRaceClass(quest) &&
+            questPassesType(quest) &&
+            questPassesCatalogueOptions(quest)
+          ));
           const visibleStartQuest = visibleQuests[0] || null;
           const zoneNames = chainZoneNamesFromQuests(visibleQuests);
           return {{
@@ -7067,13 +10185,27 @@ def render_classic_html(records, chains, zones, continents):
             visibleStartLevel: visibleStartQuest?.requiredLevel ?? 0,
             zoneNames,
             forceVisible,
+            keepSelectionVisible,
+            bypassZoneFilter,
+            contextOpen: Number(questSearchContextChainId) === Number(chain.id),
           }};
         }})
         .filter((chain) => chain.visibleQuests.length > 0)
-        .filter((chain) => chain.forceVisible || !zoneFiltered || chain.zoneNames.some((zoneName) => selectedZoneNames.has(zoneName)))
-        .filter((chain) => chain.forceVisible || chainPassesLevel(chain))
-        .filter((chain) => chain.forceVisible || chainPassesSearch(chain))
-        .sort((a, b) => a.visibleStartLevel - b.visibleStartLevel || (a.visibleStartQuest?.questLevel ?? 0) - (b.visibleStartQuest?.questLevel ?? 0) || a.name.localeCompare(b.name));
+        .filter((chain) => chain.bypassZoneFilter || !zoneFilter.zoneFiltered || (chain.zoneNames.length ? chain.zoneNames.some((zoneName) => zoneFilter.selectedZoneNames.has(zoneName)) : zoneFilter.selectedZoneNames.has("Unknown")))
+        .filter((chain) => chain.keepSelectionVisible || chainPassesLevel(chain))
+        .filter((chain) => chain.keepSelectionVisible || chainPassesSearch(chain))
+        .map((chain) => {{
+          if (!chain.contextOpen) return chain;
+          const visibleQuests = chain.quests.slice();
+          return {{
+            ...chain,
+            visibleQuests,
+            visibleStartQuest: chain.firstQuest || visibleQuests[0] || null,
+            visibleStartLevel: chain.startLevel ?? chain.firstQuest?.requiredLevel ?? 0,
+            zoneNames: chainZoneNamesFromQuests(visibleQuests),
+          }};
+        }})
+        .sort(compareQuestChainOrder);
     }}
 
     function currentQuests() {{
@@ -7084,14 +10216,69 @@ def render_classic_html(records, chains, zones, continents):
       return DATA.quests.filter((quest) => questIds.has(quest.id));
     }}
 
+    function batchSummaryChains() {{
+      const batch = selectedBatch();
+      if (!batch) return [];
+      const batchQuestIds = new Set((batch.questIds || []).map(Number));
+      const chainIds = new Set(batchQuests(batch).map((quest) => Number(quest.chainId)));
+      const targetedQuest = selectedId != null ? questsById.get(Number(selectedId)) : null;
+      const externalTargetQuest = targetedQuest && !batchQuestIds.has(Number(targetedQuest.id))
+        ? targetedQuest
+        : null;
+      if (externalTargetQuest) chainIds.add(Number(externalTargetQuest.chainId));
+      if (batch.id === "hidden") {{
+        cloneUnusedQuestIds(activeJourney?.unusedQuestIds || []).forEach((questId) => {{
+          const quest = questsById.get(Number(questId));
+          if (quest) chainIds.add(Number(quest.chainId));
+        }});
+      }}
+      return [...chainIds]
+        .map((chainId) => {{
+          const chain = chainsById.get(Number(chainId));
+          if (!chain) return null;
+          const summaryQuests = chain.quests.filter((quest) => batchQuestIds.has(Number(quest.id)));
+          const isExternalTargetChain = externalTargetQuest != null
+            && Number(externalTargetQuest.chainId) === Number(chain.id);
+          const contextOpen = Number(batchSummaryContextChainId) === Number(chain.id);
+          const batchSearchQuests = isExternalTargetChain
+            ? [externalTargetQuest, ...summaryQuests.filter((quest) => Number(quest.id) !== Number(externalTargetQuest.id))]
+            : summaryQuests;
+          const visibleQuests = contextOpen
+            ? chain.quests.slice()
+            : isExternalTargetChain
+              ? batchSearchQuests
+              : summaryQuests;
+          return {{
+            ...chain,
+            visibleQuests,
+            summaryQuests,
+            batchSearchQuests,
+            visibleStartQuest: chain.firstQuest || visibleQuests[0] || null,
+            visibleStartLevel: chain.startLevel ?? chain.firstQuest?.requiredLevel ?? 0,
+            zoneNames: chainZoneNamesFromQuests(isExternalTargetChain ? [externalTargetQuest, ...summaryQuests] : summaryQuests),
+            contextOpen,
+            batchSummary: true,
+            externalTargetQuest: isExternalTargetChain ? externalTargetQuest : null,
+          }};
+        }})
+        .filter(Boolean)
+        .filter((chain) => !filters.search || chain.batchSearchQuests.some(questPassesSearch))
+        .sort((a, b) => Number(Boolean(b.externalTargetQuest)) - Number(Boolean(a.externalTargetQuest)) || compareQuestChainOrder(a, b));
+    }}
+
+    function inventoryChains() {{
+      return inventoryMode === "batch" ? batchSummaryChains() : currentChains();
+    }}
+
     function currentMapQuests() {{
       return currentQuests().filter(questIsInCurrentView);
     }}
 
-    function renderCurrentView() {{
+    function renderCurrentView(options = {{}}) {{
       const isWorld = currentView.type === "world";
       const zone = isWorld ? null : zonesById.get(currentView.zoneId);
       worldButton.classList.toggle("active", isWorld);
+      zoneSelect.classList.toggle("active", !isWorld);
       worldLayer.style.display = isWorld ? "block" : "none";
       zoneImage.style.display = isWorld ? "none" : "block";
       if (zone) {{
@@ -7100,16 +10287,24 @@ def render_classic_html(records, chains, zones, continents):
       }}
       mapTitle.hidden = isWorld;
       mapTitle.textContent = isWorld ? "" : zone.name;
+      if (currentAppMode === "replay") {{
+        scheduleMapFit();
+        return;
+      }}
       const catalogueScrollTop = chainList.scrollTop;
       renderInventory();
-      chainList.scrollTop = catalogueScrollTop;
-      renderAvailablePickupMarkers();
       if (selectedId != null && !visibleInInventory(questsById.get(selectedId))) {{
         activeId = null;
         selectedId = null;
       }}
-      if (selectedChainId != null && !currentChains().some((chain) => Number(chain.id) === Number(selectedChainId))) {{
+      if (selectedChainId != null && !inventoryChains().some((chain) => Number(chain.id) === Number(selectedChainId))) {{
         selectedChainId = null;
+      }}
+      const targetChainId = options.scrollTargetChainToTop ? selectedCatalogueChainId() : null;
+      if (targetChainId != null && inventoryChains().some((chain) => Number(chain.id) === Number(targetChainId))) {{
+        scrollChainToTop(targetChainId);
+      }} else {{
+        chainList.scrollTop = catalogueScrollTop;
       }}
       refreshSelectionState();
       scheduleMapFit();
@@ -7117,13 +10312,13 @@ def render_classic_html(records, chains, zones, continents):
 
     function visibleInInventory(quest) {{
       if (!quest) return false;
-      return currentChains().some((chain) => (
+      return inventoryChains().some((chain) => (
         chain.id === quest.chainId && chain.visibleQuests.some((item) => item.id === quest.id)
       ));
     }}
 
     function catalogueSelectionOrder() {{
-      return currentChains().flatMap((chain) => [
+      return inventoryChains().flatMap((chain) => [
         {{ type: "chain", id: chain.id }},
         ...chain.visibleQuests.map((quest) => ({{ type: "quest", id: quest.id, chainId: chain.id }})),
       ]);
@@ -7133,10 +10328,10 @@ def render_classic_html(records, chains, zones, continents):
       const element = target instanceof Element ? target : null;
       if (!element) return true;
       if (element.closest("input, textarea, select, [contenteditable='true']")) return false;
-      return Boolean(element.closest("#chain-list") || element.closest(".map-frame") || element === document.body);
+      return true;
     }}
 
-    function canUseSequencerKeys(target) {{
+    function canUsePlannerKeys(target) {{
       const element = target instanceof Element ? target : null;
       if (!element) return true;
       if (element.closest("input, textarea, select, [contenteditable='true']")) return false;
@@ -7148,7 +10343,7 @@ def render_classic_html(records, chains, zones, continents):
       if (!element) return true;
       if (element.closest("input, textarea, select, [contenteditable='true']")) return false;
       if (element.closest(".zone-link, .quest-wowhead-link, .pickup-choice-item, .journey-quest-remove, .journey-quest-unhide, .journey-insert-target")) return false;
-      return Boolean(element.closest("#chain-list") || element.closest("#sequencer-board") || element.closest(".map-frame") || element === document.body);
+      return Boolean(element.closest("#chain-list") || element.closest("#planner-board") || element.closest(".map-frame") || element === document.body);
     }}
 
     function scrollQuestIntoCatalogueView(id) {{
@@ -7209,7 +10404,7 @@ def render_classic_html(records, chains, zones, continents):
     }}
 
     function firstVisibleQuest() {{
-      const chain = currentChains()[0];
+      const chain = inventoryChains()[0];
       if (!chain) return null;
       if (currentView.type === "world") return chain.visibleQuests[0];
       return chain.visibleQuests.find((quest) => quest.zones.includes(currentView.zoneId)) || chain.visibleQuests[0];
@@ -7218,11 +10413,11 @@ def render_classic_html(records, chains, zones, continents):
     function clearTarget() {{
       highlightLayer.innerHTML = "";
       closePickupQuestList();
-      document.querySelectorAll(".quest-icon.active, .quest-icon.selected, .chain-row.active, .chain-row.selected, .map-marker.active, .map-marker.selected, .chain-quest-item.active, .chain-quest-item.selected, .journey-quest.active, .journey-quest.selected").forEach((element) => {{
-        element.classList.remove("active", "selected");
+      document.querySelectorAll(".quest-icon.active, .quest-icon.selected, .chain-row.active, .chain-row.selected, .map-marker.active, .map-marker.selected, .chain-quest-item.active, .chain-quest-item.selected, .journey-quest.active, .journey-quest.selected, .journey-quest.prerequisite-highlight").forEach((element) => {{
+        element.classList.remove("active", "selected", "prerequisite-highlight");
       }});
       if (!details) return;
-      const visibleChains = currentChains();
+      const visibleChains = inventoryChains();
       const visibleQuestCount = new Set(visibleChains.flatMap((chain) => chain.visibleQuests.map((quest) => quest.id))).size;
       const visibleChainCount = visibleChains.length;
       const viewName = currentView.type === "world" ? "World Map" : zonesById.get(currentView.zoneId)?.name;
@@ -7299,7 +10494,7 @@ def render_classic_html(records, chains, zones, continents):
     }}
 
     function selectedZoneNameSet() {{
-      return new Set(filterableZones()
+      return new Set(filterableZonesWithUnknown()
         .filter((zone) => filters.zoneIds.has(zone.id))
         .map((zone) => zone.name));
     }}
@@ -7328,32 +10523,64 @@ def render_classic_html(records, chains, zones, continents):
       return `[${{compactSegments.join(" -> ")}}]`;
     }}
 
+    function batchSummaryStatus(quest) {{
+      if (questIsCompletedByProfile(quest.id)) return {{ label: "Completed", className: "completed" }};
+      if (unusedJourneyQuestIds().has(Number(quest.id))) return {{ label: "Hidden", className: "hidden" }};
+      const batchIndex = findQuestBatchIndex(quest.id);
+      if (batchIndex >= 0) {{
+        const batch = activeJourney?.batches?.[batchIndex];
+        return {{ label: batch?.name || `Batch ${{batchIndex + 1}}`, className: "assigned" }};
+      }}
+      return {{ label: "Unassigned", className: "unassigned" }};
+    }}
+
+    function renderInventoryEmptyState(message) {{
+      const empty = document.createElement("div");
+      empty.className = "batch-summary-empty";
+      empty.textContent = message;
+      chainList.append(empty);
+    }}
+
     function renderInventory() {{
-      const chains = currentChains();
+      const chains = inventoryChains();
       chainList.innerHTML = "";
-      if (inventoryTitle) inventoryTitle.textContent = "Quest Catalogue";
+      if (inventoryTitle) inventoryTitle.textContent = inventoryMode === "batch" ? "Batch Summary" : "Quest Catalogue";
+
+      if (inventoryMode === "batch" && !activeJourney) {{
+        renderInventoryEmptyState("Create or import a Journey to use Batch Summary.");
+        return;
+      }}
+      if (inventoryMode === "batch" && !selectedBatch()) {{
+        renderInventoryEmptyState("Select a batch to see its quests.");
+        return;
+      }}
+      if (inventoryMode === "batch" && !chains.length) {{
+        renderInventoryEmptyState(filters.search ? "No quests in this batch match your search." : "This batch has no quests.");
+        return;
+      }}
 
       const fragment = document.createDocumentFragment();
-      chains.forEach((chain) => {{
-        const isExpanded = expandedChainIds.has(chain.id);
+      chains.forEach((chain, chainIndex) => {{
+        const isExpanded = !collapsedChainIds.has(chain.id);
         const row = document.createElement("section");
         row.className = "chain-row";
         if (isExpanded) row.classList.add("expanded");
         if (selectedChainId === chain.id) row.classList.add("selected");
         row.dataset.chainId = chain.id;
+        row.dataset.questIds = chain.visibleQuests.map((quest) => quest.id).join(",");
         row.draggable = true;
         row.tabIndex = 0;
         row.setAttribute("aria-expanded", String(isExpanded));
         row.setAttribute("aria-pressed", String(selectedChainId === chain.id));
         row.style.setProperty("--chain-color", chain.color);
         row.addEventListener("click", (event) => {{
+          if (event.target.closest(".chain-expander")) {{
+            event.stopPropagation();
+            toggleChainExpanded(chain.id);
+            return;
+          }}
+          if (event.target.closest(".batch-chain-context-toggle")) return;
           if (event.target.closest(".quest-icon, .chain-quest-item")) return;
-          selectCatalogueChain(chain.id);
-        }});
-        row.addEventListener("keydown", (event) => {{
-          if (event.key !== " ") return;
-          if (event.target !== row) return;
-          event.preventDefault();
           selectCatalogueChain(chain.id);
         }});
 
@@ -7364,18 +10591,34 @@ def render_classic_html(records, chains, zones, continents):
         meta.innerHTML = `
           <div class="chain-name" title="${{escapeHtml(chainTitle)}}">
             <span class="chain-name-text" ${{questDifficultyAttrs(chain.visibleStartQuest)}}>${{escapeHtml(chain.name)}}</span>
-            ${{chainStatusBadgeHtml(chain.visibleQuests)}}
+            ${{chainStatusBadgeHtml(chain.externalTargetQuest ? [chain.externalTargetQuest] : chain.visibleQuests, {{ showAssigned: Boolean(chain.externalTargetQuest) }})}}
             ${{chainZones ? `<span class="chain-zone-summary">${{escapeHtml(chainZones)}}</span>` : ""}}
           </div>
           <div class="chain-summary">
             <span class="chain-level">${{chain.visibleStartLevel}}</span>
-            <span class="chain-expander">${{isExpanded ? "Collapse" : "Expand"}}</span>
+            <button type="button" class="batch-chain-context-toggle${{chain.contextOpen ? " active" : ""}}" aria-pressed="${{String(chain.contextOpen)}}">${{chain.contextOpen ? (inventoryMode === "batch" ? "Batch only" : "Filter match only") : "Show chain"}}</button>
+            <span class="chain-expander" title="${{isExpanded ? "Collapse chain" : "Expand chain"}}">${{isExpanded ? "Collapse" : "Expand"}}</span>
           </div>
         `;
 
+        meta.querySelector(".batch-chain-context-toggle")?.addEventListener("click", (event) => {{
+          event.stopPropagation();
+          if (inventoryMode === "batch") {{
+            batchSummaryContextChainId = chain.contextOpen ? null : chain.id;
+          }} else {{
+            questSearchContextChainId = chain.contextOpen ? null : chain.id;
+          }}
+          collapsedChainIds.delete(chain.id);
+          renderInventory();
+          scrollChainIntoCatalogueView(chain.id);
+          refreshSelectionState();
+        }});
+
         const track = document.createElement("div");
         track.className = "chain-track";
-        chain.visibleQuests.forEach((quest) => track.append(createQuestIcon(quest)));
+        chain.visibleQuests.forEach((quest) => track.append(createQuestIcon(quest, {{
+          showAssignmentIndicator: Boolean(chain.externalTargetQuest && Number(chain.externalTargetQuest.id) === Number(quest.id)),
+        }})));
 
         row.append(meta, track);
         if (isExpanded) {{
@@ -7385,12 +10628,21 @@ def render_classic_html(records, chains, zones, continents):
           chain.visibleQuests.forEach((quest) => {{
             const groupId = quest.chainGroupId ?? 0;
             if (previousGroupId !== null && groupId !== previousGroupId) expanded.append(createChainGroupBreak());
-            expanded.append(createChainQuestItem(quest));
+            expanded.append(createChainQuestItem(quest, {{
+              batchSummaryStatus: inventoryMode === "batch" && chain.contextOpen ? batchSummaryStatus(quest) : null,
+              showAssignmentIndicator: Boolean(chain.externalTargetQuest && Number(chain.externalTargetQuest.id) === Number(quest.id)),
+            }}));
             previousGroupId = groupId;
           }});
           row.append(expanded);
         }}
         fragment.append(row);
+        if (chain.externalTargetQuest && chainIndex < chains.length - 1) {{
+          const divider = document.createElement("div");
+          divider.className = "batch-summary-target-divider";
+          divider.setAttribute("aria-hidden", "true");
+          fragment.append(divider);
+        }}
       }});
       chainList.append(fragment);
     }}
@@ -7403,32 +10655,31 @@ def render_classic_html(records, chains, zones, continents):
     }}
 
     function toggleChainExpanded(chainId) {{
-      if (expandedChainIds.has(chainId)) {{
-        expandedChainIds.delete(chainId);
-      }} else {{
-        expandedChainIds.add(chainId);
-      }}
+      if (collapsedChainIds.has(chainId)) collapsedChainIds.delete(chainId);
+      else collapsedChainIds.add(chainId);
       renderInventory();
       refreshSelectionState();
     }}
 
     function collapseAllChains() {{
-      currentChains().forEach((chain) => expandedChainIds.delete(chain.id));
+      inventoryChains().forEach((chain) => collapsedChainIds.add(chain.id));
       renderInventory();
       refreshSelectionState();
     }}
 
     function expandAllChains() {{
-      currentChains().forEach((chain) => expandedChainIds.add(chain.id));
+      inventoryChains().forEach((chain) => collapsedChainIds.delete(chain.id));
       renderInventory();
       refreshSelectionState();
     }}
 
-    function createQuestIcon(quest) {{
+    function createQuestIcon(quest, options = {{}}) {{
       const icon = document.createElement("button");
       icon.type = "button";
       icon.className = "quest-icon";
-      if (!questCanBeAssignedNow(quest)) icon.classList.add("assignment-locked");
+      const assignmentState = questAssignmentIconState(quest, {{ showInBatchSummary: options.showAssignmentIndicator }});
+      if (assignmentState) icon.classList.add(`assignment-${{assignmentState}}`);
+      if (questJourneyStatus(quest) === "hidden" && filters.search && questPassesSearch(quest)) icon.classList.add("hidden-search-match");
       if (!quest.startPoints.length && !quest.endPoints.length && !quest.objectivePoints.length) icon.classList.add("no-map");
       icon.dataset.questId = quest.id;
       icon.dataset.chainId = quest.chainId;
@@ -7447,11 +10698,13 @@ def render_classic_html(records, chains, zones, continents):
       return icon;
     }}
 
-    function createChainQuestItem(quest) {{
+    function createChainQuestItem(quest, options = {{}}) {{
       const isSelected = selectedId === quest.id;
       const item = document.createElement("div");
       item.className = "chain-quest-item";
-      if (!questCanBeAssignedNow(quest)) item.classList.add("assignment-locked");
+      const assignmentState = questAssignmentIconState(quest, {{ showInBatchSummary: options.showAssignmentIndicator }});
+      if (assignmentState) item.classList.add(`assignment-${{assignmentState}}`);
+      if (questJourneyStatus(quest) === "hidden" && filters.search && questPassesSearch(quest)) item.classList.add("hidden-search-match");
       if (isSelected) item.classList.add("has-detail");
       item.dataset.questId = quest.id;
       item.dataset.chainId = quest.chainId;
@@ -7467,9 +10720,11 @@ def render_classic_html(records, chains, zones, continents):
         <span class="chain-quest-main">
           <span class="chain-quest-title-row">
             <span class="chain-quest-title" ${{questDifficultyAttrs(quest)}}>${{escapeHtml(quest.name)}}</span>
+            ${{questCompletionMarkHtml(quest)}}
             ${{questStatusBadgeHtml(quest)}}
             ${{questTypeTextBadgesHtml(quest)}}
             ${{questZones ? `<span class="quest-zone-summary">${{escapeHtml(questZones)}}</span>` : ""}}
+            ${{options.batchSummaryStatus ? `<span class="batch-summary-status ${{escapeHtml(options.batchSummaryStatus.className)}}">${{escapeHtml(options.batchSummaryStatus.label)}}</span>` : ""}}
           </span>
         </span>
         <span class="chain-quest-meta">${{quest.requiredLevel ?? "?"}} / ${{quest.questLevel ?? "?"}}</span>
@@ -7481,21 +10736,66 @@ def render_classic_html(records, chains, zones, continents):
         event.stopPropagation();
         selectQuest(quest.id);
       }});
-      item.addEventListener("keydown", (event) => {{
-        if (event.target.closest(".zone-link, .quest-wowhead-link")) return;
-        if (event.key !== " ") return;
-        event.preventDefault();
-        selectQuest(quest.id);
-      }});
       return item;
     }}
 
     function questObjectiveLines(quest) {{
+      const indexedObjectives = (quest.objectiveDetails || [])
+        .map((objective) => objective?.label || objective?.name)
+        .filter(Boolean);
+      if (indexedObjectives.length) return [...new Set(indexedObjectives)];
       const objectives = [
         ...(quest.objectiveSummary || []),
         ...(quest.objectiveText || []),
       ];
       return [...new Set(objectives)].filter(Boolean);
+    }}
+
+    function formatRewardNumber(value) {{
+      return Number(value).toLocaleString("en-US");
+    }}
+
+    function adjustedQuestExperience(quest, characterLevel) {{
+      const baseXp = Number(quest?.baseXp);
+      const questLevel = Number(quest?.xpLevel ?? quest?.questLevel);
+      const level = Number(characterLevel);
+      if (!Number.isFinite(baseXp) || baseXp <= 0 || !Number.isFinite(questLevel) || questLevel <= 0 || !Number.isFinite(level)) return null;
+      if (level >= 60) return 0;
+      const multiplier = Math.max(1, Math.min(10, (2 * (questLevel - level)) + 20));
+      let xp = baseXp * multiplier / 10;
+      if (xp <= 100) xp = 5 * Math.floor((xp + 2) / 5);
+      else if (xp <= 500) xp = 10 * Math.floor((xp + 5) / 10);
+      else if (xp <= 1000) xp = 25 * Math.floor((xp + 12) / 25);
+      else xp = 50 * Math.floor((xp + 25) / 50);
+      return Math.floor(xp);
+    }}
+
+    function questExperienceHtml(quest) {{
+      const baseXp = Number(quest?.baseXp);
+      if (!Number.isFinite(baseXp) || baseXp <= 0) return "None";
+      if (levelFilter.value === "all") return `${{formatRewardNumber(baseXp)}} XP <span class="muted">(base)</span>`;
+      if (filters.level == null) return '<span class="muted">Select a batch to calculate XP</span>';
+      const level = Number(filters.level);
+      if (!Number.isFinite(level)) return "None";
+      const xp = adjustedQuestExperience(quest, level);
+      return xp == null ? "None" : `${{formatRewardNumber(xp)}} XP <span class="muted">at level ${{level}}</span>`;
+    }}
+
+    function questReputationHtml(quest) {{
+      const rewards = Array.isArray(quest?.reputationRewards) ? quest.reputationRewards : [];
+      if (!rewards.length) return "None";
+      return `<span class="catalogue-reward-list">${{rewards.map((reward) => {{
+        const amount = Number(reward.amount) || 0;
+        const sign = amount > 0 ? "+" : amount < 0 ? "−" : "";
+        const className = amount < 0 ? "catalogue-reputation-loss" : "catalogue-reputation-gain";
+        return `<span class="${{className}}">${{sign}}${{formatRewardNumber(Math.abs(amount))}} ${{escapeHtml(reward.name || `Faction ${{reward.factionId}}`)}}</span>`;
+      }}).join("")}}</span>`;
+    }}
+
+    function questItemRewardsHtml(quest) {{
+      const rewards = Array.isArray(quest?.itemRewards) ? quest.itemRewards : [];
+      if (!rewards.length) return "None";
+      return `<span class="catalogue-reward-list">${{rewards.map((item, index) => `<span title="Item #${{Number(item.id)}}">${{escapeHtml(item.name || `Item ${{item.id}}`)}}${{index < rewards.length - 1 ? "," : ""}}</span>`).join("")}}</span>`;
     }}
 
     function catalogueQuestDetailHtml(quest) {{
@@ -7523,6 +10823,18 @@ def render_classic_html(records, chains, zones, continents):
           <div class="catalogue-detail-row">
             <span class="catalogue-detail-label">Prerequisites</span>
             <span>${{questPrerequisiteHtml(quest)}}</span>
+          </div>
+          <div class="catalogue-detail-row">
+            <span class="catalogue-detail-label">Experience</span>
+            <span>${{questExperienceHtml(quest)}}</span>
+          </div>
+          <div class="catalogue-detail-row">
+            <span class="catalogue-detail-label">Reputation</span>
+            <span>${{questReputationHtml(quest)}}</span>
+          </div>
+          <div class="catalogue-detail-row">
+            <span class="catalogue-detail-label">Items</span>
+            <span>${{questItemRewardsHtml(quest)}}</span>
           </div>
         </div>
       `;
@@ -7691,6 +11003,7 @@ def render_classic_html(records, chains, zones, continents):
 
     function displayPointSourceName(point, quest, role) {{
       if (point?.sourceName) return point.sourceName;
+      if (role === "pickup") return sourceNameFromLabel(quest?.startSources?.[0]) || "Quest pickup";
       if (role === "handin") return sourceNameFromLabel(quest?.endSources?.[0]) || "Quest hand-in";
       return (quest?.objectiveSummary || [])[0] || (quest?.objectiveText || [])[0] || "Quest objective";
     }}
@@ -7721,6 +11034,7 @@ def render_classic_html(records, chains, zones, continents):
     }}
 
     function displayPointRoleText(role) {{
+      if (role === "pickup") return "Quest pickup";
       return role === "handin" ? "Quest hand-in" : "Quest objective";
     }}
 
@@ -7733,9 +11047,9 @@ def render_classic_html(records, chains, zones, continents):
     }}
 
     function displayPointPopoverNote(group) {{
-      return group.role === "handin"
-        ? "Turn-in location for visible catalogue quests."
-        : "Objective location for visible catalogue quests.";
+      if (group.role === "pickup") return "Pickup location for selected or targeted quests.";
+      if (group.role === "handin") return "Turn-in location for visible catalogue quests.";
+      return "Objective location for visible catalogue quests.";
     }}
 
     function renderObjectivePointMarkers() {{
@@ -8062,12 +11376,19 @@ def render_classic_html(records, chains, zones, continents):
           : "";
         previousChainId = quest.chainId;
         return `${{divider}}
-          <button type="button" class="pickup-choice-item" data-quest-id="${{quest.id}}">
-            <span class="pickup-choice-name-row">
-              <span class="pickup-choice-name" ${{questDifficultyAttrs(quest)}}>${{escapeHtml(quest.name)}}</span>
-              ${{questTypeTextBadgesHtml(quest)}}
+          <button type="button" class="pickup-choice-item" data-quest-id="${{quest.id}}" draggable="true">
+            <span class="pickup-choice-chain-step" style="--chain-color:${{escapeHtml(quest.chainColor || "#ffd34f")}}">
+              <span>${{quest.chainStep ?? 1}}</span>
+              ${{questTypeBadgesHtml(quest)}}
             </span>
-            <span class="pickup-choice-meta">${{quest.requiredLevel ?? "?"}} / ${{quest.questLevel ?? "?"}} - ${{escapeHtml(quest.chainName)}}</span>
+            <span class="pickup-choice-copy">
+              <span class="pickup-choice-name-row">
+                <span class="pickup-choice-name" ${{questDifficultyAttrs(quest)}}>${{escapeHtml(quest.name)}}</span>
+                ${{questCompletionMarkHtml(quest)}}
+                ${{questTypeTextBadgesHtml(quest)}}
+              </span>
+              <span class="pickup-choice-meta">${{quest.requiredLevel ?? "?"}} / ${{quest.questLevel ?? "?"}} - ${{escapeHtml(quest.chainName)}}</span>
+            </span>
           </button>`;
       }}).join("");
     }}
@@ -8098,6 +11419,8 @@ def render_classic_html(records, chains, zones, continents):
         closePickupQuestList();
         selectQuest(Number(item.dataset.questId), {{ scrollChainToTop: true }});
       }});
+      popover.addEventListener("dragstart", handleCatalogueDragStart);
+      popover.addEventListener("dragend", handleCatalogueDragEnd);
       popover.addEventListener("mouseenter", clearPickupPopoverCloseTimer);
       popover.addEventListener("mouseleave", schedulePickupPopoverClose);
       markerLayer.append(popover);
@@ -8125,6 +11448,8 @@ def render_classic_html(records, chains, zones, continents):
         closePickupQuestList();
         selectQuest(Number(item.dataset.questId), {{ scrollChainToTop: true }});
       }});
+      popover.addEventListener("dragstart", handleCatalogueDragStart);
+      popover.addEventListener("dragend", handleCatalogueDragEnd);
       popover.addEventListener("mouseenter", clearPickupPopoverCloseTimer);
       popover.addEventListener("mouseleave", schedulePickupPopoverClose);
       markerLayer.append(popover);
@@ -8132,7 +11457,7 @@ def render_classic_html(records, chains, zones, continents):
     }}
 
     function chainForId(chainId) {{
-      return currentChains().find((chain) => Number(chain.id) === Number(chainId)) || chainsById.get(Number(chainId)) || null;
+      return inventoryChains().find((chain) => Number(chain.id) === Number(chainId)) || chainsById.get(Number(chainId)) || null;
     }}
 
     function deselectCatalogueTarget(options = {{}}) {{
@@ -8159,7 +11484,6 @@ def render_classic_html(records, chains, zones, continents):
       selectedChainId = chain.id;
       selectedId = null;
       activeId = null;
-      expandedChainIds.add(chain.id);
       const previousScrollTop = chainList.scrollTop;
       renderInventory();
       if (options.scrollChainIntoView) {{
@@ -8188,7 +11512,7 @@ def render_classic_html(records, chains, zones, continents):
       selectedChainId = null;
       if (quest) {{
         const previousScrollTop = chainList.scrollTop;
-        expandedChainIds.add(quest.chainId);
+        collapsedChainIds.delete(quest.chainId);
         renderInventory();
         if (options.scrollChainToTop) {{
           scrollChainToTop(quest.chainId);
@@ -8206,7 +11530,7 @@ def render_classic_html(records, chains, zones, continents):
       const quest = questsById.get(Number(id));
       if (!quest) return;
       forcedCatalogueChainId = quest.chainId;
-      expandedChainIds.add(quest.chainId);
+      collapsedChainIds.delete(quest.chainId);
       selectQuest(quest.id, {{ scrollChainToTop: true, focusQuest: true, toggle: false }});
       showJourneyMessage(`Showing ${{quest.chainName}} in the Quest Catalogue.`, "ok");
     }}
@@ -8234,13 +11558,23 @@ def render_classic_html(records, chains, zones, continents):
 
     function selectedChainQuests() {{
       if (selectedChainId == null) return [];
-      const chain = currentChains().find((item) => Number(item.id) === Number(selectedChainId)) || chainsById.get(Number(selectedChainId));
+      const chain = inventoryMode === "batch"
+        ? chainsById.get(Number(selectedChainId))
+        : currentChains().find((item) => Number(item.id) === Number(selectedChainId)) || chainsById.get(Number(selectedChainId));
       return (chain?.visibleQuests || chain?.quests || []).filter(Boolean);
+    }}
+
+    function selectedAssignedChainQuests() {{
+      if (selectedChainId == null) return [];
+      const assigned = assignedJourneyQuestIds();
+      const chain = chainsById.get(Number(selectedChainId));
+      return (chain?.quests || [])
+        .filter((quest) => assigned.has(Number(quest.id)));
     }}
 
     function selectedBatchQuests() {{
       if (!activeJourney || selectedBatchId == null) return [];
-      if (selectedBatchId === "unused") {{
+      if (selectedBatchId === "hidden" || selectedBatchId === "unused") {{
         return cloneUnusedQuestIds(activeJourney.unusedQuestIds || [])
           .map((questId) => questsById.get(Number(questId)))
           .filter(Boolean);
@@ -8252,28 +11586,44 @@ def render_classic_html(records, chains, zones, continents):
     function selectedOverlayQuests() {{
       const quests = new Map();
       selectedBatchQuests().forEach((quest) => quests.set(quest.id, quest));
-      selectedChainQuests().forEach((quest) => quests.set(quest.id, quest));
+      if (selectedChainId != null) {{
+        selectedChainQuests().forEach((quest) => quests.set(quest.id, quest));
+      }}
       const selectedQuest = selectedId != null ? questsById.get(Number(selectedId)) : null;
       if (selectedQuest) quests.set(selectedQuest.id, selectedQuest);
       return [...quests.values()];
     }}
 
+    function selectedHighlightedQuests() {{
+      const selectedQuest = selectedId != null ? questsById.get(Number(selectedId)) : null;
+      if (selectedQuest) return [selectedQuest];
+      if (selectedChainId != null) return selectedAssignedChainQuests();
+      return [];
+    }}
+
+    function selectedQuestPrerequisiteIds() {{
+      return new Set();
+    }}
+
     function refreshSelectionState() {{
       const overlayQuestIds = new Set(selectedOverlayQuests().map((quest) => quest.id));
+      const highlightedQuestIds = new Set(selectedHighlightedQuests().map((quest) => quest.id));
+      const prerequisiteIds = selectedQuestPrerequisiteIds();
       document.querySelectorAll(".quest-icon").forEach((icon) => {{
         const questId = Number(icon.dataset.questId);
-        icon.classList.toggle("active", activeId === questId || overlayQuestIds.has(questId));
+        icon.classList.toggle("active", activeId === questId || highlightedQuestIds.has(questId));
         icon.classList.toggle("selected", selectedId !== null && questId === selectedId);
       }});
       document.querySelectorAll(".chain-quest-item").forEach((item) => {{
         const questId = Number(item.dataset.questId);
-        item.classList.toggle("active", activeId === questId || overlayQuestIds.has(questId));
+        item.classList.toggle("active", activeId === questId || highlightedQuestIds.has(questId));
         item.classList.toggle("selected", selectedId !== null && questId === selectedId);
       }});
       document.querySelectorAll(".journey-quest").forEach((item) => {{
         const questId = Number(item.dataset.questId);
-        item.classList.toggle("active", activeId === questId || overlayQuestIds.has(questId));
+        item.classList.toggle("active", activeId === questId || highlightedQuestIds.has(questId));
         item.classList.toggle("selected", selectedId !== null && questId === selectedId);
+        item.classList.toggle("prerequisite-highlight", prerequisiteIds.has(questId));
       }});
       document.querySelectorAll(".chain-row").forEach((row) => {{
         const chainId = Number(row.dataset.chainId);
@@ -8282,10 +11632,16 @@ def render_classic_html(records, chains, zones, continents):
         row.classList.toggle("selected", selectedChainId === chainId);
         row.setAttribute("aria-pressed", String(selectedChainId === chainId));
       }});
+      updateMapMarkerSelectionState(overlayQuestIds);
+    }}
+
+    function updateMapMarkerSelectionState(overlayQuestIds = null) {{
+      const activeQuestIds = overlayQuestIds || new Set(selectedOverlayQuests().map((quest) => quest.id));
+      const activeQuestIdList = [...activeQuestIds];
       document.querySelectorAll(".map-marker").forEach((marker) => {{
         const questId = Number(marker.dataset.questId);
         const questIds = marker.dataset.questIds || `|${{questId}}|`;
-        const active = [...overlayQuestIds].some((id) => questIds.includes(`|${{id}}|`));
+        const active = activeQuestIdList.some((id) => questIds.includes(`|${{id}}|`));
         marker.classList.toggle("active", active);
         marker.classList.toggle("selected", selectedId !== null && questIds.includes(`|${{selectedId}}|`));
       }});
@@ -8307,9 +11663,18 @@ def render_classic_html(records, chains, zones, continents):
 
     function renderSelectionOverlays() {{
       highlightLayer.innerHTML = "";
-      const quests = selectedOverlayQuests();
-      const forcePickupPins = selectedBatchId != null || selectedChainId != null;
-      quests.forEach((quest) => renderOverlay(quest, {{ append: true, forcePickupPins }}));
+      const selectedQuest = selectedId != null ? questsById.get(Number(selectedId)) : null;
+      const rendered = new Set();
+      const renderNormal = (quest) => {{
+        if (!quest || rendered.has(quest.id)) return;
+        rendered.add(quest.id);
+        renderOverlay(quest, {{ append: true, forcePickupPins: true, emphasis: false }});
+      }};
+      if (selectedQuest) {{
+        rendered.add(selectedQuest.id);
+      }}
+      selectedOverlayQuests().forEach(renderNormal);
+      if (selectedQuest) renderOverlay(selectedQuest, {{ append: true, forcePickupPins: true, emphasis: true }});
     }}
 
     function renderOverlay(quest, options = {{}}) {{
@@ -8317,23 +11682,51 @@ def render_classic_html(records, chains, zones, continents):
       const color = questObjectiveColor(quest);
       highlightLayer.style.setProperty("--chain-color", color);
       const objectivePoints = relevantPoints(quest.objectivePoints);
-      renderObjectiveLayer(objectivePoints, color);
+      renderObjectiveLayer(objectivePoints, color, {{ quest, emphasis: options.emphasis }});
       const startPoints = relevantPoints(quest.startPoints);
       if (options.forcePickupPins) {{
-        renderPins(startPoints, "pickup", "!", "Quest pickup");
+        renderPins(startPoints, "pickup", "!", "Quest pickup", {{ quest, role: "pickup", emphasis: options.emphasis }});
       }} else if (startPoints.length > 1) {{
-        renderPickupDots(startPoints);
+        renderPickupDots(startPoints, {{ quest, emphasis: options.emphasis }});
       }} else if (!displayFilters.has("available-pickups")) {{
-        renderPins(startPoints, "pickup", "!", "Quest pickup");
+        renderPins(startPoints, "pickup", "!", "Quest pickup", {{ quest, role: "pickup", emphasis: options.emphasis }});
       }}
-      renderPins(relevantPoints(quest.endPoints), "turnin", "?", "Quest turn-in");
+      renderPins(relevantPoints(quest.endPoints), "turnin", "?", "Quest turn-in", {{ quest, role: "handin", emphasis: options.emphasis }});
     }}
 
     function relevantPoints(points) {{
       return points.map(viewPoint).filter(Boolean);
     }}
 
-    function renderObjectiveLayer(points, color = null) {{
+    function overlayPointGroup(quest, point, role) {{
+      return {{
+        key: `${{role}}:${{quest.id}}:${{point.zoneId ?? "world"}}:${{point.x.toFixed(2)}}:${{point.y.toFixed(2)}}`,
+        role,
+        x: point.x,
+        y: point.y,
+        quests: new Map([[quest.id, quest]]),
+        sourceNames: new Set([displayPointSourceName(point, quest, role)]),
+        pointCount: 1,
+      }};
+    }}
+
+    function attachOverlayPointTooltip(element, quest, point, role) {{
+      if (!element || !quest || !point) return;
+      const group = overlayPointGroup(quest, point, role);
+      element.style.pointerEvents = "auto";
+      element.dataset.questId = quest.id;
+      element.dataset.questIds = `|${{quest.id}}|`;
+      element.addEventListener("mouseenter", () => showDisplayPointTooltip(group));
+      element.addEventListener("mouseleave", schedulePickupPopoverClose);
+      element.addEventListener("focus", () => showDisplayPointTooltip(group));
+      element.addEventListener("blur", schedulePickupPopoverClose);
+      element.addEventListener("click", (event) => {{
+        event.stopPropagation();
+        selectQuest(quest.id, {{ scrollChainToTop: true }});
+      }});
+    }}
+
+    function renderObjectiveLayer(points, color = null, options = {{}}) {{
       if (points.length) {{
         const bounds = points.reduce((box, point) => {{
           box.minX = Math.min(box.minX, point.x);
@@ -8348,43 +11741,52 @@ def render_classic_html(records, chains, zones, continents):
           const pad = points.length === 1 ? 4 : 2.8;
           const area = document.createElement("div");
           area.className = "objective-area";
+          if (options.emphasis) area.classList.add("selection-emphasis");
           if (color) area.style.setProperty("--chain-color", color);
           area.style.left = `${{(bounds.minX + bounds.maxX) / 2}}%`;
           area.style.top = `${{(bounds.minY + bounds.maxY) / 2}}%`;
           area.style.width = `${{Math.max(5, spreadX + pad * 2)}}%`;
           area.style.height = `${{Math.max(7, spreadY + pad * 2)}}%`;
+          if (options.quest && points.length === 1) attachOverlayPointTooltip(area, options.quest, points[0], "objective");
           highlightLayer.append(area);
         }}
       }}
       points.forEach((point) => {{
         const dot = document.createElement("div");
         dot.className = "objective-dot";
+        if (options.emphasis) dot.classList.add("selection-emphasis");
         if (color) dot.style.setProperty("--chain-color", color);
         dot.style.left = `${{point.x}}%`;
         dot.style.top = `${{point.y}}%`;
+        attachOverlayPointTooltip(dot, options.quest, point, "objective");
         highlightLayer.append(dot);
       }});
     }}
 
-    function renderPins(points, type, glyph, label) {{
+    function renderPins(points, type, glyph, label, options = {{}}) {{
       points.forEach((point, index) => {{
-        const pin = document.createElement("div");
+        const pin = document.createElement("button");
+        pin.type = "button";
         pin.className = `quest-pin ${{type}}`;
+        if (options.emphasis) pin.classList.add("selection-emphasis");
         pin.style.left = `${{point.x}}%`;
         pin.style.top = `${{point.y}}%`;
         pin.textContent = glyph;
         pin.setAttribute("aria-label", `${{label}} ${{index + 1}}`);
+        attachOverlayPointTooltip(pin, options.quest, point, options.role || (type === "turnin" ? "handin" : "pickup"));
         highlightLayer.append(pin);
       }});
     }}
 
-    function renderPickupDots(points) {{
+    function renderPickupDots(points, options = {{}}) {{
       points.forEach((point) => {{
         const dot = document.createElement("span");
         dot.className = "pickup-dot";
+        if (options.emphasis) dot.classList.add("selection-emphasis");
         dot.style.left = `${{point.x}}%`;
         dot.style.top = `${{point.y}}%`;
         dot.setAttribute("aria-label", "Alternate quest pickup");
+        attachOverlayPointTooltip(dot, options.quest, point, "pickup");
         highlightLayer.append(dot);
       }});
     }}
@@ -8393,7 +11795,7 @@ def render_classic_html(records, chains, zones, continents):
       if (!ids || !ids.length) return "None";
       return ids.map((id) => {{
         const quest = questsById.get(id);
-        return quest ? `${{escapeHtml(quest.name)}} (#${{id}})` : `#${{id}}`;
+        return quest ? `${{escapeHtml(quest.name)}}${{questCompletionMarkHtml(quest)}} (#${{id}})` : `#${{id}}`;
       }}).join(", ");
     }}
 
@@ -8404,11 +11806,7 @@ def render_classic_html(records, chains, zones, continents):
 
     function renderDetails(quest) {{
       if (!details) return;
-      const objectives = [
-        ...(quest.objectiveSummary || []),
-        ...(quest.objectiveText || []),
-      ];
-      const uniqueObjectives = [...new Set(objectives)].filter(Boolean);
+      const uniqueObjectives = questObjectiveLines(quest);
       const startCount = relevantPoints(quest.startPoints).length;
       const endCount = relevantPoints(quest.endPoints).length;
       const objectiveCount = relevantPoints(quest.objectivePoints).length;
@@ -8418,7 +11816,7 @@ def render_classic_html(records, chains, zones, continents):
       details.style.setProperty("--chain-color", quest.chainColor);
       details.innerHTML = `
         <div>
-          <h2>${{escapeHtml(quest.name)}} <span style="color:#a99b83">#${{quest.id}}</span></h2>
+          <h2>${{escapeHtml(quest.name)}} ${{questCompletionMarkHtml(quest)}} <span style="color:#a99b83">#${{quest.id}}</span></h2>
           <span class="chain-pill">${{escapeHtml(quest.chainName)}} - ${{quest.chainStep}}/${{quest.chainLength}}</span>
           <div class="type-pills">${{typePills}}</div>
           <p class="body-copy">${{escapeHtml(zoneList(quest))}}</p>
@@ -8451,16 +11849,34 @@ def render_classic_html(records, chains, zones, continents):
     }}
 
     worldButton.addEventListener("click", setWorldView);
-    mapViewButton.addEventListener("click", () => setAppMode("map"));
-    sequencerViewButton.addEventListener("click", () => setAppMode("sequencer"));
+    mapViewButton.addEventListener("click", () => {{
+      setAppMode("map");
+      focusAppSurface();
+    }});
+    plannerViewButton.addEventListener("click", () => {{
+      setAppMode("planner");
+      focusAppSurface();
+    }});
+    replayViewButton.addEventListener("click", () => {{
+      setAppMode("replay");
+      focusAppSurface();
+    }});
+    replayLocalButton.addEventListener("click", () => setReplayScope("local"));
+    replayWorldButton.addEventListener("click", () => setReplayScope("world"));
+    replayPauseButton.addEventListener("click", () => setReplayPaused(true));
+    replaySpeedButtons.forEach((button) => button.addEventListener("click", () => setReplaySpeed(button.dataset.replaySpeed)));
+    replayLogViewButton.addEventListener("click", () => setReplayPanelMode("events"));
+    replayProgressViewButton.addEventListener("click", () => setReplayPanelMode("progress"));
+    replayProgressInput.addEventListener("pointerdown", beginReplayScrub);
+    replayProgressInput.addEventListener("input", updateReplayScrub);
+    replayProgressInput.addEventListener("change", finishReplayScrub);
+    replayProgressInput.addEventListener("pointerup", finishReplayScrub);
+    replayEventLogViewport.addEventListener("scroll", renderReplayEventLogWindow, {{ passive: true }});
     zoneSelect.addEventListener("change", (event) => {{
       if (event.target.value) setZoneView(event.target.value);
       else setWorldView();
     }});
-    raceFilter.addEventListener("change", updateFiltersFromControls);
-    classFilter.addEventListener("change", updateFiltersFromControls);
     levelFilter.addEventListener("change", () => {{
-      if (selectedBatchId != null) deselectJourneyBatch({{ restoreLevel: false }});
       updateFiltersFromControls();
     }});
     questSearch.addEventListener("input", updateSearchFilterFromInput);
@@ -8469,6 +11885,8 @@ def render_classic_html(records, chains, zones, continents):
       updateSearchFilterFromInput();
       questSearch.focus();
     }});
+    inventorySearchModeButton.addEventListener("click", () => setInventoryMode("search"));
+    inventoryBatchModeButton.addEventListener("click", () => setInventoryMode("batch"));
     mapEl.addEventListener("mousemove", handleWorldZonePointerMove);
     mapEl.addEventListener("mouseleave", hideWorldZoneTooltip);
     mapEl.addEventListener("click", handleWorldZoneClick);
@@ -8476,6 +11894,14 @@ def render_classic_html(records, chains, zones, continents):
     expandAllChainsButton.addEventListener("click", expandAllChains);
     chainList.addEventListener("dragstart", handleCatalogueDragStart);
     chainList.addEventListener("dragend", handleCatalogueDragEnd);
+    chainList.addEventListener("dragenter", handleBatchSummaryDragOver);
+    chainList.addEventListener("dragover", handleBatchSummaryDragOver);
+    chainList.addEventListener("dragleave", handleBatchSummaryDragLeave);
+    chainList.addEventListener("drop", handleBatchSummaryDrop);
+    batchNavigator.addEventListener("dragenter", handleBatchSummaryDragOver);
+    batchNavigator.addEventListener("dragover", handleBatchSummaryDragOver);
+    batchNavigator.addEventListener("dragleave", handleBatchSummaryDragLeave);
+    batchNavigator.addEventListener("drop", handleBatchSummaryDrop);
     journeySetup.addEventListener("submit", (event) => {{
       event.preventDefault();
       createJourneyFromSetup();
@@ -8488,19 +11914,38 @@ def render_classic_html(records, chains, zones, continents):
       activeJourney.name = journeyNameEditor.value.trim() || activeJourney.name;
     }});
     journeySaveButton.addEventListener("click", saveJourneyJson);
+    journeyCopyAddonButton.addEventListener("click", copyJourneyAddonString);
     journeyCloseButton.addEventListener("click", closeCurrentJourney);
-    journeyImportButton.addEventListener("click", () => journeyImportInput.click());
-    journeyImportInput.addEventListener("change", () => {{
-      importJourneyFile(journeyImportInput.files?.[0]);
-      journeyImportInput.value = "";
+    journeyImportButton.addEventListener("click", () => setJourneyStringImportOpen(journeyStringImport.hidden));
+    journeyLoadButton.addEventListener("click", () => journeyLoadInput.click());
+    journeyLoadInput.addEventListener("change", () => {{
+      importJourneyFile(journeyLoadInput.files?.[0]);
+      journeyLoadInput.value = "";
     }});
-    sequencerBoard.addEventListener("dragstart", handleJourneyDragStart);
-    sequencerBoard.addEventListener("dragend", handleCatalogueDragEnd);
-    sequencerBoard.addEventListener("dragenter", handleSequencerDragOver);
-    sequencerBoard.addEventListener("dragover", handleSequencerDragOver);
-    sequencerBoard.addEventListener("dragleave", handleSequencerDragLeave);
-    sequencerBoard.addEventListener("drop", handleSequencerDrop);
-    sequencerBoard.addEventListener("click", (event) => {{
+    journeyStringSubmit.addEventListener("click", () => {{
+      if (!importJourneyString(journeyStringInput.value)) return;
+      journeyStringInput.value = "";
+      setJourneyStringImportOpen(false);
+    }});
+    journeyStringCancel.addEventListener("click", () => setJourneyStringImportOpen(false));
+    journeyStringInput.addEventListener("keydown", (event) => {{
+      if (!(event.ctrlKey || event.metaKey) || event.key !== "Enter") return;
+      event.preventDefault();
+      journeyStringSubmit.click();
+    }});
+    profileImportButton.addEventListener("click", () => profileImportInput.click());
+    profileImportInput.addEventListener("change", () => {{
+      importCharacterProfileFile(profileImportInput.files?.[0]);
+      profileImportInput.value = "";
+    }});
+    plannerBoard.addEventListener("dragstart", handleJourneyDragStart);
+    plannerBoard.addEventListener("dragend", handleCatalogueDragEnd);
+    plannerBoard.addEventListener("dragenter", handlePlannerDragOver);
+    plannerBoard.addEventListener("dragover", handlePlannerDragOver);
+    plannerBoard.addEventListener("dragleave", handlePlannerDragLeave);
+    plannerBoard.addEventListener("drop", handlePlannerDrop);
+    plannerBoard.addEventListener("wheel", handlePlannerWheel, {{ passive: false }});
+    plannerBoard.addEventListener("click", (event) => {{
       const insertTarget = event.target.closest(".journey-insert-target");
       if (insertTarget) {{
         insertBatchAt(Number(insertTarget.dataset.insertIndex));
@@ -8548,71 +11993,59 @@ def render_classic_html(records, chains, zones, continents):
         selectJourneyBatch(batchColumn.dataset.batchId);
       }}
     }});
-    batchNavPrev.addEventListener("click", () => moveSequencerSelection(-1));
-    batchNavNext.addEventListener("click", () => moveSequencerSelection(1));
-    sequencerPanel.addEventListener("click", (event) => {{
+    batchNavPrev.addEventListener("click", () => movePlannerSelection(-1));
+    batchNavNext.addEventListener("click", () => movePlannerSelection(1));
+    plannerPanel.addEventListener("click", (event) => {{
       if (!activeJourney || journeyWorkspace.hidden) return;
       if (event.target.closest(".journey-batch, .journey-head, .journey-message, .journey-insert-target")) return;
       deselectJourneyBatch();
     }});
-    questFilterButton.addEventListener("click", () => {{
-      setQuestFilterMenuOpen(questFilterMenu.hidden);
-      setZoneFilterMenuOpen(false);
+    mainFilterButton.addEventListener("click", () => {{
+      setMainFilterMenuOpen(mainFilterMenu.hidden);
       setDisplayFilterMenuOpen(false);
-      setOptionsFilterMenuOpen(false);
-    }});
-    zoneFilterButton.addEventListener("click", () => {{
-      setZoneFilterMenuOpen(zoneFilterMenu.hidden);
-      setQuestFilterMenuOpen(false);
-      setDisplayFilterMenuOpen(false);
-      setOptionsFilterMenuOpen(false);
     }});
     displayFilterButton.addEventListener("click", () => {{
       setDisplayFilterMenuOpen(displayFilterMenu.hidden);
-      setQuestFilterMenuOpen(false);
-      setZoneFilterMenuOpen(false);
-      setOptionsFilterMenuOpen(false);
+      setMainFilterMenuOpen(false);
     }});
-    optionsFilterButton.addEventListener("click", () => {{
-      setOptionsFilterMenuOpen(optionsFilterMenu.hidden);
-      setQuestFilterMenuOpen(false);
-      setZoneFilterMenuOpen(false);
-      setDisplayFilterMenuOpen(false);
-    }});
+    showAssignedCatalogueCheckbox.addEventListener("change", updateCatalogueAssignedOption);
     document.addEventListener("click", (event) => {{
       const zoneLink = event.target.closest(".zone-link");
       if (!zoneLink) return;
       event.preventDefault();
       event.stopPropagation();
+      setAppMode("map");
       setZoneView(zoneLink.dataset.zoneId);
+      focusAppSurface();
     }});
     document.addEventListener("click", (event) => {{
       if (!event.target.closest(".pickup-choice-popover, .available-pickup")) {{
         closePickupQuestList();
       }}
-      if (!questFilterWrap.contains(event.target)) {{
-        setQuestFilterMenuOpen(false);
-      }}
-      if (!zoneFilterWrap.contains(event.target)) {{
-        setZoneFilterMenuOpen(false);
+      if (!mainFilterWrap.contains(event.target)) {{
+        setMainFilterMenuOpen(false);
       }}
       if (!displayFilterWrap.contains(event.target)) {{
         setDisplayFilterMenuOpen(false);
       }}
-      if (!optionsFilterWrap.contains(event.target)) {{
-        setOptionsFilterMenuOpen(false);
-      }}
     }});
     document.addEventListener("keydown", (event) => {{
       const key = event.key.toLowerCase();
-      if ((event.key === "Enter" || event.code === "NumpadEnter") && canUseEnterPlacement(event.target)) {{
+      if (!event.altKey && !event.ctrlKey && !event.metaKey && (key === "q" || key === "e" || key === "r") && canUsePlannerKeys(event.target)) {{
+        setAppMode(key === "q" ? "map" : key === "e" ? "planner" : "replay");
+        focusAppSurface();
+        event.preventDefault();
+        closePickupQuestList();
+        return;
+      }}
+      if (currentAppMode !== "replay" && (event.key === "Enter" || event.code === "NumpadEnter" || event.key === " " || event.code === "Space") && canUseEnterPlacement(event.target)) {{
         if (placeSelectedCatalogueTarget()) {{
           event.preventDefault();
           closePickupQuestList();
           return;
         }}
       }}
-      if ((event.key === "ArrowDown" || key === "s" || event.key === "ArrowUp" || key === "w") && canUseCatalogueArrowKeys(event.target)) {{
+      if (currentAppMode !== "replay" && (event.key === "ArrowDown" || key === "s" || event.key === "ArrowUp" || key === "w") && canUseCatalogueArrowKeys(event.target)) {{
         const direction = event.key === "ArrowDown" || key === "s" ? 1 : -1;
         if (moveCatalogueSelection(direction)) {{
           event.preventDefault();
@@ -8620,19 +12053,17 @@ def render_classic_html(records, chains, zones, continents):
           return;
         }}
       }}
-      if ((event.key === "ArrowRight" || key === "d" || event.key === "ArrowLeft" || key === "a") && canUseSequencerKeys(event.target)) {{
+      if (currentAppMode !== "replay" && (event.key === "ArrowRight" || key === "d" || event.key === "ArrowLeft" || key === "a") && canUsePlannerKeys(event.target)) {{
         const direction = event.key === "ArrowRight" || key === "d" ? 1 : -1;
-        if (moveSequencerSelection(direction)) {{
+        if (movePlannerSelection(direction)) {{
           event.preventDefault();
           closePickupQuestList();
           return;
         }}
       }}
       if (event.key === "Escape") {{
-        setQuestFilterMenuOpen(false);
-        setZoneFilterMenuOpen(false);
+        setMainFilterMenuOpen(false);
         setDisplayFilterMenuOpen(false);
-        setOptionsFilterMenuOpen(false);
         closePickupQuestList();
         if (selectedId != null || selectedChainId != null || activeId != null) {{
           deselectCatalogueTarget();
@@ -8649,17 +12080,19 @@ def render_classic_html(records, chains, zones, continents):
 
     populateZoneSelect();
     populateFilters();
-    populateQuestFilters();
-    populateZoneFilters();
+    populateMainFilterMenu();
     populateDisplayFilters();
-    populateOptionsFilters();
+    updateCatalogueAssignedToggle();
+    updateProfileImportButton();
     populateJourneySetupControls();
     renderWorldTiles();
     renderJourney();
     setAppMode("map");
     updateSearchClearButton();
     new ResizeObserver(scheduleMapFit).observe(mapFrame);
-    window.addEventListener("resize", scheduleMapFit);
+    new ResizeObserver(updateWorkbenchColumns).observe(workbench);
+    window.addEventListener("resize", updateWorkbenchColumns);
+    updateWorkbenchColumns();
     setWorldView();
   </script>
 </body>
@@ -8668,11 +12101,240 @@ def render_classic_html(records, chains, zones, continents):
     return html
 
 
+def lua_string(value):
+    value = str(value or "")
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\r", "\\r") + '"'
+
+
+def lua_number_array(values):
+    values = [int(value) for value in values or [] if isinstance(value, int)]
+    return "{" + ",".join(str(value) for value in values) + "}"
+
+
+def lua_string_array(values):
+    return "{" + ",".join(lua_string(value) for value in values or [] if value) + "}"
+
+
+def lua_reputation_rewards(values):
+    entries = []
+    for reward in values or []:
+        faction_id = reward.get("factionId")
+        amount = reward.get("amount")
+        if isinstance(faction_id, int) and isinstance(amount, int):
+            entries.append(f"{{{faction_id},{amount}}}")
+    return "{" + ",".join(entries) + "}"
+
+
+def lua_objective_details(details):
+    type_codes = {
+        "monster": "m",
+        "object": "o",
+        "item": "i",
+        "reputation": "r",
+        "killcredit": "k",
+        "spell": "s",
+        "event": "e",
+    }
+    entries = []
+    for detail in details or []:
+        objective_type = type_codes.get(detail.get("type"), str(detail.get("type") or "?"))
+        fields = [
+            f"t={lua_string(objective_type)}",
+            f"i={lua_number_array(detail.get('ids') or [])}",
+            f"n={lua_string(detail.get('label') or detail.get('name') or 'Quest objective')}",
+        ]
+        entries.append("{" + ",".join(fields) + "}")
+    return "{" + ",".join(entries) + "}"
+
+
+def render_addon_quest_zones_lua(records, zones):
+    chains = {}
+    for record in records:
+        chain_id = record.get("chainId")
+        if not isinstance(chain_id, int):
+            continue
+        chain = chains.setdefault(chain_id, {
+            "name": record.get("chainName") or "",
+            "quests": [],
+            "zones": set(),
+            "requiredLevel": None,
+            "questLevel": None,
+        })
+        chain["name"] = chain["name"] or record.get("chainName") or ""
+        chain["quests"].append(record)
+        for zone_id in record.get("zones") or []:
+            if isinstance(zone_id, int):
+                chain["zones"].add(zone_id)
+        required_level = record.get("requiredLevel")
+        quest_level = record.get("questLevel")
+        if isinstance(required_level, int) and (chain["requiredLevel"] is None or required_level < chain["requiredLevel"]):
+            chain["requiredLevel"] = required_level
+        if isinstance(quest_level, int) and (chain["questLevel"] is None or quest_level < chain["questLevel"]):
+            chain["questLevel"] = quest_level
+
+    lines = [
+        "-- Generated by tools/build_questieplus_webapp.py; do not edit by hand.",
+        "QuestiePlusQuestZones = {",
+        "  zones = {",
+    ]
+    for zone in sorted(zones, key=lambda item: item["id"]):
+        lines.append(f"    [{zone['id']}] = {lua_string(zone['name'])},")
+    lines.extend([
+        "  },",
+        "  factions = {",
+        '    {id="Alliance",n="Alliance",d=true},',
+        '    {id="Horde",n="Horde",d=true},',
+        "  },",
+        "  races = {",
+        '    {m=1,n="Human",f="Alliance",d=true},',
+        '    {m=4,n="Dwarf",f="Alliance",d=true},',
+        '    {m=8,n="Night Elf",f="Alliance",d=true},',
+        '    {m=64,n="Gnome",f="Alliance",d=true},',
+        '    {m=2,n="Orc",f="Horde",d=true},',
+        '    {m=16,n="Undead",f="Horde",d=true},',
+        '    {m=32,n="Tauren",f="Horde",d=true},',
+        '    {m=128,n="Troll",f="Horde",d=true},',
+        "  },",
+        "  classes = {",
+        '    {m=1,n="Warrior",d=true},',
+        '    {m=2,n="Paladin",d=true},',
+        '    {m=4,n="Hunter",d=true},',
+        '    {m=8,n="Rogue",d=true},',
+        '    {m=16,n="Priest",d=true},',
+        '    {m=64,n="Shaman",d=true},',
+        '    {m=128,n="Mage",d=true},',
+        '    {m=256,n="Warlock",d=true},',
+        '    {m=1024,n="Druid",d=true},',
+        "  },",
+        "  types = {",
+    ])
+    for entry in QUEST_TYPE_FILTERS:
+        lines.append(
+            "    {"
+            f'id={lua_string(entry["id"])},'
+            f'n={lua_string(entry["label"])},'
+            f"d={'true' if entry.get('defaultEnabled') else 'false'}"
+            "},"
+        )
+    lines.extend([
+        "  },",
+        "  zoneList = {",
+    ])
+    for zone in zones:
+        if not zone.get("questCount"):
+            continue
+        lines.append(
+            "    {"
+            f"id={zone['id']},"
+            f"n={lua_string(zone['name'])},"
+            f"r={lua_string(zone.get('levelRange') or '')}"
+            "},"
+        )
+    lines.extend([
+        "  },",
+        "  chains = {",
+    ])
+    for chain_id in sorted(chains):
+        chain = chains[chain_id]
+        quest_ids = [
+            record["id"]
+            for record in sorted(
+                chain["quests"],
+                key=lambda item: (
+                    item.get("chainStep") or 9999,
+                    item.get("chainGroupId") or 9999,
+                    item.get("chainGroupStep") or 9999,
+                    item.get("requiredLevel") or 9999,
+                    item.get("questLevel") or 9999,
+                    item["id"],
+                ),
+            )
+        ]
+        fields = [
+            f"n={lua_string(chain['name'])}",
+            f"q={lua_number_array(quest_ids)}",
+            f"z={lua_number_array(sorted(chain['zones']))}",
+        ]
+        if isinstance(chain.get("requiredLevel"), int):
+            fields.append(f"rl={chain['requiredLevel']}")
+        if isinstance(chain.get("questLevel"), int):
+            fields.append(f"ql={chain['questLevel']}")
+        lines.append(f"    [{chain_id}] = {{{','.join(fields)}}},")
+    lines.extend([
+        "  },",
+        "  quests = {",
+    ])
+    for record in sorted(records, key=lambda item: item["id"]):
+        start_ids = record.get("startZoneIds") or []
+        objective_ids = record.get("objectiveZoneIds") or []
+        end_ids = record.get("endZoneIds") or []
+        all_ids = record.get("zones") or []
+        chain_id = record.get("chainId")
+        if not (start_ids or objective_ids or end_ids or all_ids or isinstance(chain_id, int)):
+            continue
+        fields = [
+            f"s={lua_number_array(start_ids)}",
+            f"o={lua_number_array(objective_ids)}",
+            f"e={lua_number_array(end_ids)}",
+            f"a={lua_number_array(all_ids)}",
+        ]
+        if isinstance(chain_id, int):
+            fields.append(f"c={chain_id}")
+        race_mask = record.get("requiredRaceMask")
+        class_mask = record.get("requiredClassMask")
+        type_ids = record.get("typeIds") or []
+        if isinstance(race_mask, int):
+            fields.append(f"rm={race_mask}")
+        if isinstance(class_mask, int):
+            fields.append(f"cm={class_mask}")
+        if type_ids:
+            fields.append(f"t={lua_string_array(type_ids)}")
+        objective_details = record.get("objectiveDetails") or []
+        if objective_details:
+            fields.append(f"od={lua_objective_details(objective_details)}")
+        xp_level = record.get("xpLevel")
+        base_xp = record.get("baseXp")
+        if isinstance(xp_level, int):
+            fields.append(f"xpl={xp_level}")
+        if isinstance(base_xp, int):
+            fields.append(f"xp={base_xp}")
+        reputation_rewards = record.get("reputationRewards") or []
+        if reputation_rewards:
+            fields.append(f"rp={lua_reputation_rewards(reputation_rewards)}")
+        item_reward_ids = [item.get("id") for item in record.get("itemRewards") or [] if isinstance(item.get("id"), int)]
+        if item_reward_ids:
+            fields.append(f"ir={lua_number_array(item_reward_ids)}")
+        for source_key, lua_key in (
+            ("chainStep", "cs"),
+            ("chainLength", "cl"),
+            ("chainGroupId", "cg"),
+            ("chainGroupStep", "cgs"),
+            ("chainGroupSize", "cgz"),
+            ("requiredLevel", "rl"),
+            ("questLevel", "ql"),
+        ):
+            value = record.get(source_key)
+            if isinstance(value, int):
+                fields.append(f"{lua_key}={value}")
+        lines.append(
+            f"    [{record['id']}] = {{{','.join(fields)}}},"
+        )
+    lines.extend([
+        "  },",
+        "}",
+        "",
+    ])
+    return "\n".join(lines)
+
+
 def main():
-    records, chains, zones, continents = build_classic_records()
+    records, chains, zones, continents, npc_names = build_classic_records()
     output = ROOT / "questieplus.html"
-    output.write_text(render_classic_html(records, chains, zones, continents), encoding="utf-8")
+    output.write_text(render_classic_html(records, chains, zones, continents, npc_names), encoding="utf-8")
+    addon_zones = ROOT / "QuestiePlus" / "QuestiePlusQuestZones.lua"
+    addon_zones.write_text(render_addon_quest_zones_lua(records, zones), encoding="utf-8")
     print(f"Wrote {output}")
+    print(f"Wrote {addon_zones}")
     print(f"Quest records: {len(records)}")
     print(f"Chains: {len(chains)}")
     print(f"Zone maps: {len(zones)}")

@@ -28,8 +28,8 @@ TILE_ROWS = 3
 VISIBLE_MAP_WIDTH = 1002
 VISIBLE_MAP_HEIGHT = 668
 CONTINENT_CROPS = {
-    0: (280, 0, 690, 668),
-    1: (290, 0, 700, 668),
+    0: (234, 0, 735, 668),
+    1: (244, 0, 745, 668),
 }
 DB2_BASE_URL = "https://wago.tools/db2"
 
@@ -317,6 +317,13 @@ def main():
     if args.zones_only and args.continents_only:
         raise SystemExit("--zones-only and --continents-only cannot be combined")
 
+    existing_manifest = {}
+    if METADATA_PATH.exists():
+        try:
+            existing_manifest = json.loads(METADATA_PATH.read_text(encoding="utf-8-sig"))
+        except (json.JSONDecodeError, OSError):
+            pass
+
     manifest = {
         "source": "Wago.Tools Classic Era CASC files with UiMapArtTile, WorldMapOverlay, and WorldMapOverlayTile DB2 data",
         "product": WAGO_PRODUCT,
@@ -327,8 +334,8 @@ def main():
         "visibleMapWidth": VISIBLE_MAP_WIDTH,
         "visibleMapHeight": VISIBLE_MAP_HEIGHT,
         "continentCrops": {str(key): list(value) for key, value in CONTINENT_CROPS.items()},
-        "zones": [],
-        "continents": [],
+        "zones": list(existing_manifest.get("zones") or []) if args.continents_only else [],
+        "continents": list(existing_manifest.get("continents") or []) if args.zones_only else [],
     }
 
     if not args.continents_only:

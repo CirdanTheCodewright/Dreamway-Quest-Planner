@@ -9,15 +9,15 @@
     "visibleMapHeight":  668,
     "continentCrops":  {
                            "0":  [
-                                     280,
+                                     234,
                                      0,
-                                     690,
+                                     735,
                                      668
                                  ],
                            "1":  [
-                                     290,
+                                     244,
                                      0,
-                                     700,
+                                     745,
                                      668
                                  ]
                        },
@@ -1317,12 +1317,12 @@
                            "target":  "C:/Users/Dan/Documents/WoW Quest Mapping/assets/classic-maps/continents/0.jpg",
                            "status":  "written",
                            "crop":  [
-                                        280,
+                                        234,
                                         0,
-                                        690,
+                                        735,
                                         668
                                     ],
-                           "width":  410,
+                           "width":  501,
                            "height":  668,
                            "tiles":  {
                                          "1":  270454,
@@ -1346,12 +1346,12 @@
                            "target":  "C:/Users/Dan/Documents/WoW Quest Mapping/assets/classic-maps/continents/1.jpg",
                            "status":  "written",
                            "crop":  [
-                                        290,
+                                        244,
                                         0,
-                                        700,
+                                        745,
                                         668
                                     ],
-                           "width":  410,
+                           "width":  501,
                            "height":  668,
                            "tiles":  {
                                          "1":  272075,

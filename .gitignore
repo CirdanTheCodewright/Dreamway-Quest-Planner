@@ -4,6 +4,7 @@
 
 # Generated verification output
 artifacts/
+questieplus-*-preview.png
 
 # Python
 __pycache__/
