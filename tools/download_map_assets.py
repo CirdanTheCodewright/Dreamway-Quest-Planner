@@ -30,6 +30,8 @@ VISIBLE_MAP_HEIGHT = 668
 CONTINENT_CROPS = {
     0: (234, 0, 735, 668),
     1: (244, 0, 745, 668),
+    530: (0, 0, 1002, 668),
+    571: (0, 0, 1002, 668),
 }
 DB2_BASE_URL = "https://wago.tools/db2"
 
@@ -41,6 +43,16 @@ FILE_RE = re.compile(
 CONTINENT_TEXTURES = {
     0: ("Azeroth", "azeroth"),
     1: ("Kalimdor", "kalimdor"),
+}
+MAP_IDS = (0, 1)
+USE_OVERLAYS = True
+AREA_IDS = None
+DB2_BUILD = None
+FILE_SEARCH_BY_VERSION = False
+TBC_CHANGED_AREA_IDS = {15, 3430, 3433, 3483, 3487, 3518, 3519, 3520, 3521, 3522, 3523, 3524, 3525, 3557, 3703, 4080}
+WOTLK_NORTHREND_AREA_IDS = {65, 66, 67, 210, 394, 495, 2817, 3537, 3711, 4197, 4395, 4742}
+ZONE_TEXTURE_ALIASES = {
+    4395: ("dalaran", "dalaran1_"),
 }
 
 _DB2_CACHE = {}
@@ -57,7 +69,7 @@ def request_bytes(url):
 
 def load_db2_csv(table_name):
     if table_name not in _DB2_CACHE:
-        query = urllib.parse.urlencode({"product": WAGO_PRODUCT})
+        query = urllib.parse.urlencode({"build": DB2_BUILD} if DB2_BUILD else {"product": WAGO_PRODUCT})
         data = request_bytes(f"{DB2_BASE_URL}/{table_name}/csv?{query}").decode("utf-8-sig")
         _DB2_CACHE[table_name] = list(csv.DictReader(io.StringIO(data)))
     return _DB2_CACHE[table_name]
@@ -100,7 +112,8 @@ def overlay_tiles_by_overlay_id():
 
 
 def wago_file_search(search):
-    query = urllib.parse.urlencode({"product": WAGO_PRODUCT, "search": search})
+    selector = {"version": WAGO_VERSION} if FILE_SEARCH_BY_VERSION else {"product": WAGO_PRODUCT}
+    query = urllib.parse.urlencode({**selector, "search": search})
     page = request_bytes(f"https://wago.tools/files?{query}").decode("utf-8")
     decoded = html.unescape(page)
     files = []
@@ -125,26 +138,30 @@ def load_zone_texture_names():
         for row in reader:
             area_id = int(row["AreaID"])
             map_id = int(row["MapID"])
-            if area_id > 0 and map_id in (0, 1):
-                texture = row["AreaName"].lower()
+            if area_id > 0 and map_id in MAP_IDS and (AREA_IDS is None or area_id in AREA_IDS):
+                texture_alias = ZONE_TEXTURE_ALIASES.get(area_id)
+                texture = texture_alias[0] if texture_alias else row["AreaName"].lower()
+                tile_basename = texture_alias[1] if texture_alias else texture
                 zones.append(
                     {
                         "areaId": area_id,
                         "mapId": map_id,
                         "areaName": row["AreaName"],
                         "texture": texture,
+                        "tileBasename": tile_basename,
                     }
                 )
     return zones
 
 
-def find_tile_set(texture_name):
-    search = f"interface/worldmap/{texture_name}/{texture_name}"
+def find_tile_set(texture_name, tile_basename=None):
+    tile_basename = tile_basename or texture_name
+    search = f"interface/worldmap/{texture_name}/{tile_basename}"
     tile_files = {}
     for file in wago_file_search(search):
         if file["folder"] != texture_name:
             continue
-        if file["basename"] != texture_name:
+        if file["basename"] != tile_basename:
             continue
         if 1 <= file["tile"] <= TILE_COLUMNS * TILE_ROWS:
             tile_files[file["tile"]] = file
@@ -243,7 +260,19 @@ def save_classic_zone_map(zone, force=False):
     if target.exists() and not force:
         return {"target": target.as_posix(), "status": "skipped", "sourceKind": "classic-casc-overlays"}
 
-    tile_files = find_tile_set(zone["texture"])
+    tile_files = find_tile_set(zone["texture"], zone.get("tileBasename"))
+    if not USE_OVERLAYS:
+        image = compose_tile_set(tile_files).convert("RGB")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        image.save(target, quality=94, optimize=True)
+        return {
+            "target": target.as_posix(),
+            "status": "written",
+            "sourceKind": "tbc-casc-base",
+            "width": image.width,
+            "height": image.height,
+            "tiles": {str(tile): tile_files[tile]["fdid"] for tile in sorted(tile_files)},
+        }
     art_id = ui_map_art_id_for_tile_set(tile_files)
     if not art_id:
         raise RuntimeError(f"{zone['texture']}: could not find UiMapArtID for base tiles")
@@ -290,8 +319,14 @@ def save_continent_map(continent_id, display_name, texture, force=False):
             "crop": list(CONTINENT_CROPS[continent_id]),
         }
 
-    tile_files = find_tile_set(texture)
-    image = compose_tile_set(tile_files)
+    try:
+        tile_files = find_tile_set(texture)
+        image = compose_tile_set(tile_files)
+    except RuntimeError:
+        if continent_id != 530:
+            raise
+        image = Image.open(io.BytesIO(request_bytes("https://warcraft.wiki.gg/wiki/Special:Redirect/file/WorldMap-Expansion01.jpg"))).convert("RGB")
+        tile_files = {}
     crop = CONTINENT_CROPS[continent_id]
     image = image.crop(crop)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -304,15 +339,60 @@ def save_continent_map(continent_id, display_name, texture, force=False):
         "width": image.width,
         "height": image.height,
         "tiles": {str(tile): tile_files[tile]["fdid"] for tile in sorted(tile_files)},
+        "sourceKind": "warcraft-wiki-composite" if continent_id == 530 and not tile_files else "casc-tiles",
     }
 
 
 def main():
+    global CSV_PATH, ASSET_ROOT, ZONE_ASSET_DIR, CONTINENT_ASSET_DIR, METADATA_PATH
+    global WAGO_PRODUCT, WAGO_VERSION, CONTINENT_TEXTURES, MAP_IDS, USE_OVERLAYS, AREA_IDS
+    global DB2_BUILD, FILE_SEARCH_BY_VERSION
     parser = argparse.ArgumentParser(description="Download and compose Classic Era WoW world map tiles.")
+    parser.add_argument("--game-version", choices=("era", "tbc", "wotlk"), default="era", help="Map set to download.")
     parser.add_argument("--force", action="store_true", help="Regenerate images that already exist.")
     parser.add_argument("--zones-only", action="store_true", help="Only compose individual zone maps.")
     parser.add_argument("--continents-only", action="store_true", help="Only compose continent maps.")
+    parser.add_argument("--tbc-changed-only", action="store_true", help="Only compose TBC-exclusive zones and Dustwallow Marsh.")
+    parser.add_argument("--wotlk-northrend-only", action="store_true", help="Only compose Northrend outdoor zone maps.")
     args = parser.parse_args()
+
+    if args.game_version == "tbc":
+        CSV_PATH = ROOT / "Questie" / "ExternalScripts(DONOTINCLUDEINRELEASE)" / "DBC - WoW.tools" / "worldmaparea_tbc.csv"
+        ASSET_ROOT = ROOT / "assets" / "tbc-maps"
+        ZONE_ASSET_DIR = ASSET_ROOT / "zones"
+        CONTINENT_ASSET_DIR = ASSET_ROOT / "continents"
+        METADATA_PATH = ASSET_ROOT / "manifest.json"
+        WAGO_PRODUCT = "wow_anniversary"
+        WAGO_VERSION = "2.5.6.68775"
+        CONTINENT_TEXTURES = {
+            0: ("Eastern Kingdoms", "azeroth"),
+            1: ("Kalimdor", "kalimdor"),
+            530: ("Outland", "expansion01"),
+        }
+        MAP_IDS = (0, 1, 530)
+        USE_OVERLAYS = True
+        if args.tbc_changed_only:
+            AREA_IDS = TBC_CHANGED_AREA_IDS
+    elif args.game_version == "wotlk":
+        CSV_PATH = ROOT / "Questie" / "ExternalScripts(DONOTINCLUDEINRELEASE)" / "DBC - WoW.tools" / "worldmaparea_wotlk.csv"
+        ASSET_ROOT = ROOT / "assets" / "wotlk-maps"
+        ZONE_ASSET_DIR = ASSET_ROOT / "zones"
+        CONTINENT_ASSET_DIR = ASSET_ROOT / "continents"
+        METADATA_PATH = ASSET_ROOT / "manifest.json"
+        WAGO_PRODUCT = "wow_classic"
+        WAGO_VERSION = "3.4.4.60430"
+        DB2_BUILD = WAGO_VERSION
+        FILE_SEARCH_BY_VERSION = True
+        CONTINENT_TEXTURES = {
+            0: ("Eastern Kingdoms", "azeroth"),
+            1: ("Kalimdor", "kalimdor"),
+            530: ("Outland", "expansion01"),
+            571: ("Northrend", "northrend"),
+        }
+        MAP_IDS = (0, 1, 530, 571)
+        USE_OVERLAYS = True
+        if args.wotlk_northrend_only:
+            AREA_IDS = WOTLK_NORTHREND_AREA_IDS
 
     if args.zones_only and args.continents_only:
         raise SystemExit("--zones-only and --continents-only cannot be combined")
@@ -325,7 +405,7 @@ def main():
             pass
 
     manifest = {
-        "source": "Wago.Tools Classic Era CASC files with UiMapArtTile, WorldMapOverlay, and WorldMapOverlayTile DB2 data",
+        "source": f"Wago.Tools { {'tbc': 'TBC Classic', 'wotlk': 'Wrath Classic'}.get(args.game_version, 'Classic Era') } CASC files with UiMapArtTile, WorldMapOverlay, and WorldMapOverlayTile DB2 data",
         "product": WAGO_PRODUCT,
         "version": WAGO_VERSION,
         "tileSize": TILE_SIZE,

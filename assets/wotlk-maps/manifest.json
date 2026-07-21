@@ -1,0 +1,822 @@
+{
+  "source": "Wago.Tools Wrath Classic CASC files with UiMapArtTile, WorldMapOverlay, and WorldMapOverlayTile DB2 data",
+  "product": "wow_classic",
+  "version": "3.4.4.60430",
+  "tileSize": 256,
+  "tileColumns": 4,
+  "tileRows": 3,
+  "visibleMapWidth": 1002,
+  "visibleMapHeight": 668,
+  "continentCrops": {
+    "0": [
+      234,
+      0,
+      735,
+      668
+    ],
+    "1": [
+      244,
+      0,
+      745,
+      668
+    ],
+    "530": [
+      0,
+      0,
+      1002,
+      668
+    ],
+    "571": [
+      0,
+      0,
+      1002,
+      668
+    ]
+  },
+  "zones": [
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/14.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 14,
+      "mapId": 1,
+      "areaName": "Durotar",
+      "texture": "durotar",
+      "tileBasename": "durotar"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/215.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 215,
+      "mapId": 1,
+      "areaName": "Mulgore",
+      "texture": "mulgore",
+      "tileBasename": "mulgore"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/17.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 17,
+      "mapId": 1,
+      "areaName": "Barrens",
+      "texture": "barrens",
+      "tileBasename": "barrens"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/36.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 36,
+      "mapId": 0,
+      "areaName": "Alterac",
+      "texture": "alterac",
+      "tileBasename": "alterac"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/45.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 45,
+      "mapId": 0,
+      "areaName": "Arathi",
+      "texture": "arathi",
+      "tileBasename": "arathi"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/3.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 3,
+      "mapId": 0,
+      "areaName": "Badlands",
+      "texture": "badlands",
+      "tileBasename": "badlands"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/4.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 4,
+      "mapId": 0,
+      "areaName": "BlastedLands",
+      "texture": "blastedlands",
+      "tileBasename": "blastedlands"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/85.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 85,
+      "mapId": 0,
+      "areaName": "Tirisfal",
+      "texture": "tirisfal",
+      "tileBasename": "tirisfal"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/130.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 130,
+      "mapId": 0,
+      "areaName": "Silverpine",
+      "texture": "silverpine",
+      "tileBasename": "silverpine"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/28.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 28,
+      "mapId": 0,
+      "areaName": "WesternPlaguelands",
+      "texture": "westernplaguelands",
+      "tileBasename": "westernplaguelands"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/139.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 139,
+      "mapId": 0,
+      "areaName": "EasternPlaguelands",
+      "texture": "easternplaguelands",
+      "tileBasename": "easternplaguelands"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/267.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 267,
+      "mapId": 0,
+      "areaName": "Hilsbrad",
+      "texture": "hilsbrad",
+      "tileBasename": "hilsbrad"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/47.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 47,
+      "mapId": 0,
+      "areaName": "Hinterlands",
+      "texture": "hinterlands",
+      "tileBasename": "hinterlands"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/1.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 1,
+      "mapId": 0,
+      "areaName": "DunMorogh",
+      "texture": "dunmorogh",
+      "tileBasename": "dunmorogh"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/51.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 51,
+      "mapId": 0,
+      "areaName": "SearingGorge",
+      "texture": "searinggorge",
+      "tileBasename": "searinggorge"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/46.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 46,
+      "mapId": 0,
+      "areaName": "BurningSteppes",
+      "texture": "burningsteppes",
+      "tileBasename": "burningsteppes"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/12.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 12,
+      "mapId": 0,
+      "areaName": "Elwynn",
+      "texture": "elwynn",
+      "tileBasename": "elwynn"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/41.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 41,
+      "mapId": 0,
+      "areaName": "DeadwindPass",
+      "texture": "deadwindpass",
+      "tileBasename": "deadwindpass"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/10.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 10,
+      "mapId": 0,
+      "areaName": "Duskwood",
+      "texture": "duskwood",
+      "tileBasename": "duskwood"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/38.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 38,
+      "mapId": 0,
+      "areaName": "LochModan",
+      "texture": "lochmodan",
+      "tileBasename": "lochmodan"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/44.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 44,
+      "mapId": 0,
+      "areaName": "Redridge",
+      "texture": "redridge",
+      "tileBasename": "redridge"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/33.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 33,
+      "mapId": 0,
+      "areaName": "Stranglethorn",
+      "texture": "stranglethorn",
+      "tileBasename": "stranglethorn"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/8.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 8,
+      "mapId": 0,
+      "areaName": "SwampOfSorrows",
+      "texture": "swampofsorrows",
+      "tileBasename": "swampofsorrows"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/40.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 40,
+      "mapId": 0,
+      "areaName": "Westfall",
+      "texture": "westfall",
+      "tileBasename": "westfall"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/11.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 11,
+      "mapId": 0,
+      "areaName": "Wetlands",
+      "texture": "wetlands",
+      "tileBasename": "wetlands"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/141.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 141,
+      "mapId": 1,
+      "areaName": "Teldrassil",
+      "texture": "teldrassil",
+      "tileBasename": "teldrassil"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/148.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 148,
+      "mapId": 1,
+      "areaName": "Darkshore",
+      "texture": "darkshore",
+      "tileBasename": "darkshore"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/331.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 331,
+      "mapId": 1,
+      "areaName": "Ashenvale",
+      "texture": "ashenvale",
+      "tileBasename": "ashenvale"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/400.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 400,
+      "mapId": 1,
+      "areaName": "ThousandNeedles",
+      "texture": "thousandneedles",
+      "tileBasename": "thousandneedles"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/406.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 406,
+      "mapId": 1,
+      "areaName": "StonetalonMountains",
+      "texture": "stonetalonmountains",
+      "tileBasename": "stonetalonmountains"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/405.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 405,
+      "mapId": 1,
+      "areaName": "Desolace",
+      "texture": "desolace",
+      "tileBasename": "desolace"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/357.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 357,
+      "mapId": 1,
+      "areaName": "Feralas",
+      "texture": "feralas",
+      "tileBasename": "feralas"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/15.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 15,
+      "mapId": 1,
+      "areaName": "Dustwallow",
+      "texture": "dustwallow",
+      "tileBasename": "dustwallow"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/440.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 440,
+      "mapId": 1,
+      "areaName": "Tanaris",
+      "texture": "tanaris",
+      "tileBasename": "tanaris"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/16.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 16,
+      "mapId": 1,
+      "areaName": "Aszhara",
+      "texture": "aszhara",
+      "tileBasename": "aszhara"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/361.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 361,
+      "mapId": 1,
+      "areaName": "Felwood",
+      "texture": "felwood",
+      "tileBasename": "felwood"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/490.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 490,
+      "mapId": 1,
+      "areaName": "UngoroCrater",
+      "texture": "ungorocrater",
+      "tileBasename": "ungorocrater"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/493.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 493,
+      "mapId": 1,
+      "areaName": "Moonglade",
+      "texture": "moonglade",
+      "tileBasename": "moonglade"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/1377.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 1377,
+      "mapId": 1,
+      "areaName": "Silithus",
+      "texture": "silithus",
+      "tileBasename": "silithus"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/618.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 618,
+      "mapId": 1,
+      "areaName": "Winterspring",
+      "texture": "winterspring",
+      "tileBasename": "winterspring"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/1519.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 1519,
+      "mapId": 0,
+      "areaName": "Stormwind",
+      "texture": "stormwind",
+      "tileBasename": "stormwind"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/1637.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 1637,
+      "mapId": 1,
+      "areaName": "Ogrimmar",
+      "texture": "ogrimmar",
+      "tileBasename": "ogrimmar"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/1537.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 1537,
+      "mapId": 0,
+      "areaName": "Ironforge",
+      "texture": "ironforge",
+      "tileBasename": "ironforge"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/1638.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 1638,
+      "mapId": 1,
+      "areaName": "ThunderBluff",
+      "texture": "thunderbluff",
+      "tileBasename": "thunderbluff"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/1657.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 1657,
+      "mapId": 1,
+      "areaName": "Darnassis",
+      "texture": "darnassis",
+      "tileBasename": "darnassis"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/1497.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 1497,
+      "mapId": 0,
+      "areaName": "Undercity",
+      "texture": "undercity",
+      "tileBasename": "undercity"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/3430.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 3430,
+      "mapId": 530,
+      "areaName": "EversongWoods",
+      "texture": "eversongwoods",
+      "tileBasename": "eversongwoods"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/3433.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 3433,
+      "mapId": 530,
+      "areaName": "Ghostlands",
+      "texture": "ghostlands",
+      "tileBasename": "ghostlands"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/3524.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 3524,
+      "mapId": 530,
+      "areaName": "AzuremystIsle",
+      "texture": "azuremystisle",
+      "tileBasename": "azuremystisle"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/3483.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 3483,
+      "mapId": 530,
+      "areaName": "Hellfire",
+      "texture": "hellfire",
+      "tileBasename": "hellfire"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/3521.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 3521,
+      "mapId": 530,
+      "areaName": "Zangarmarsh",
+      "texture": "zangarmarsh",
+      "tileBasename": "zangarmarsh"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/3557.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 3557,
+      "mapId": 530,
+      "areaName": "TheExodar",
+      "texture": "theexodar",
+      "tileBasename": "theexodar"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/3520.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 3520,
+      "mapId": 530,
+      "areaName": "ShadowmoonValley",
+      "texture": "shadowmoonvalley",
+      "tileBasename": "shadowmoonvalley"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/3522.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 3522,
+      "mapId": 530,
+      "areaName": "BladesEdgeMountains",
+      "texture": "bladesedgemountains",
+      "tileBasename": "bladesedgemountains"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/3525.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 3525,
+      "mapId": 530,
+      "areaName": "BloodmystIsle",
+      "texture": "bloodmystisle",
+      "tileBasename": "bloodmystisle"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/3518.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 3518,
+      "mapId": 530,
+      "areaName": "Nagrand",
+      "texture": "nagrand",
+      "tileBasename": "nagrand"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/3519.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 3519,
+      "mapId": 530,
+      "areaName": "TerokkarForest",
+      "texture": "terokkarforest",
+      "tileBasename": "terokkarforest"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/3523.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 3523,
+      "mapId": 530,
+      "areaName": "Netherstorm",
+      "texture": "netherstorm",
+      "tileBasename": "netherstorm"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/3487.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 3487,
+      "mapId": 530,
+      "areaName": "SilvermoonCity",
+      "texture": "silvermooncity",
+      "tileBasename": "silvermooncity"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/3703.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 3703,
+      "mapId": 530,
+      "areaName": "ShattrathCity",
+      "texture": "shattrathcity",
+      "tileBasename": "shattrathcity"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/3537.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 3537,
+      "mapId": 571,
+      "areaName": "BoreanTundra",
+      "texture": "boreantundra",
+      "tileBasename": "boreantundra"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/65.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 65,
+      "mapId": 571,
+      "areaName": "Dragonblight",
+      "texture": "dragonblight",
+      "tileBasename": "dragonblight"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/394.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 394,
+      "mapId": 571,
+      "areaName": "GrizzlyHills",
+      "texture": "grizzlyhills",
+      "tileBasename": "grizzlyhills"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/495.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 495,
+      "mapId": 571,
+      "areaName": "HowlingFjord",
+      "texture": "howlingfjord",
+      "tileBasename": "howlingfjord"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/210.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 210,
+      "mapId": 571,
+      "areaName": "IcecrownGlacier",
+      "texture": "icecrownglacier",
+      "tileBasename": "icecrownglacier"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/3711.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 3711,
+      "mapId": 571,
+      "areaName": "SholazarBasin",
+      "texture": "sholazarbasin",
+      "tileBasename": "sholazarbasin"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/67.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 67,
+      "mapId": 571,
+      "areaName": "TheStormPeaks",
+      "texture": "thestormpeaks",
+      "tileBasename": "thestormpeaks"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/66.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 66,
+      "mapId": 571,
+      "areaName": "ZulDrak",
+      "texture": "zuldrak",
+      "tileBasename": "zuldrak"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/4080.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 4080,
+      "mapId": 530,
+      "areaName": "Sunwell",
+      "texture": "sunwell",
+      "tileBasename": "sunwell"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/4197.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 4197,
+      "mapId": 571,
+      "areaName": "LakeWintergrasp",
+      "texture": "lakewintergrasp",
+      "tileBasename": "lakewintergrasp"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/4395.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 4395,
+      "mapId": 571,
+      "areaName": "Dalaran",
+      "texture": "dalaran",
+      "tileBasename": "dalaran1_"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/2817.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 2817,
+      "mapId": 571,
+      "areaName": "CrystalsongForest",
+      "texture": "crystalsongforest",
+      "tileBasename": "crystalsongforest"
+    },
+    {
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/zones/4742.jpg",
+      "status": "skipped",
+      "sourceKind": "classic-casc-overlays",
+      "areaId": 4742,
+      "mapId": 571,
+      "areaName": "HrothgarsLanding",
+      "texture": "hrothgarslanding",
+      "tileBasename": "hrothgarslanding"
+    }
+  ],
+  "continents": [
+    {
+      "texture": "azeroth",
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/continents/0.jpg",
+      "status": "skipped",
+      "crop": [
+        234,
+        0,
+        735,
+        668
+      ],
+      "continentId": 0,
+      "name": "Eastern Kingdoms"
+    },
+    {
+      "texture": "kalimdor",
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/continents/1.jpg",
+      "status": "skipped",
+      "crop": [
+        244,
+        0,
+        745,
+        668
+      ],
+      "continentId": 1,
+      "name": "Kalimdor"
+    },
+    {
+      "texture": "expansion01",
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/continents/530.jpg",
+      "status": "skipped",
+      "crop": [
+        0,
+        0,
+        1002,
+        668
+      ],
+      "continentId": 530,
+      "name": "Outland"
+    },
+    {
+      "texture": "northrend",
+      "target": "C:/Users/Dan/Documents/WoW Quest Mapping/assets/wotlk-maps/continents/571.jpg",
+      "status": "skipped",
+      "crop": [
+        0,
+        0,
+        1002,
+        668
+      ],
+      "continentId": 571,
+      "name": "Northrend"
+    }
+  ]
+}

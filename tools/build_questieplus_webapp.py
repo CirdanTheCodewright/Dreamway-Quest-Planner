@@ -1,5 +1,5 @@
-import csv
 import colorsys
+import csv
 import json
 import math
 import re
@@ -12,13 +12,64 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
 QUESTIE_DATABASE = ROOT / "Questie" / "Database"
 QUESTIE = QUESTIE_DATABASE / "Classic"
+QUESTIE_TBC = QUESTIE_DATABASE / "TBC"
+QUESTIE_WOTLK = QUESTIE_DATABASE / "Wotlk"
 QUEST_XP_CLASSIC = QUESTIE_DATABASE / "QuestXP" / "DB" / "xpDB-classic.lua"
+QUEST_XP_TBC = QUESTIE_DATABASE / "QuestXP" / "DB" / "xpDB-tbc.lua"
+QUEST_XP_WOTLK = QUESTIE_DATABASE / "QuestXP" / "DB" / "xpDB-wotlk.lua"
 QUEST_DB_SCHEMA = QUESTIE_DATABASE / "questDB.lua"
 CLASSIC_REPUTATION_FIXES = QUESTIE_DATABASE / "Corrections" / "Automatic" / "classicQuestReputationFixes.lua"
 CLASSIC_QUEST_FIXES = QUESTIE_DATABASE / "Corrections" / "classicQuestFixes.lua"
 CLASSIC_ITEM_FIXES = QUESTIE_DATABASE / "Corrections" / "classicItemFixes.lua"
+TBC_QUEST_FIXES = QUESTIE_DATABASE / "Corrections" / "tbcQuestFixes.lua"
+TBC_ITEM_FIXES = QUESTIE_DATABASE / "Corrections" / "tbcItemFixes.lua"
+WOTLK_QUEST_FIXES = QUESTIE_DATABASE / "Corrections" / "wotlkQuestFixes.lua"
+WOTLK_ITEM_FIXES = QUESTIE_DATABASE / "Corrections" / "wotlkItemFixes.lua"
+SOD_BASE_DIR = QUESTIE_DATABASE / "Corrections" / "Automatic"
+SOD_BASE_QUESTS = SOD_BASE_DIR / "sodBaseQuests.lua"
+SOD_BASE_NPCS = SOD_BASE_DIR / "sodBaseNPCs.lua"
+SOD_BASE_OBJECTS = SOD_BASE_DIR / "sodBaseObjects.lua"
+SOD_BASE_ITEMS = SOD_BASE_DIR / "sodBaseItems.lua"
 DUSKWOOD_ZONE_ID = 10
-ALLIANCE_RACE_MASK = 77
+ALLIANCE_RACE_MASK = 1101
+
+QUEST_KEY_IDS = {
+    "name": 1,
+    "startedBy": 2,
+    "finishedBy": 3,
+    "requiredLevel": 4,
+    "questLevel": 5,
+    "requiredRaces": 6,
+    "requiredClasses": 7,
+    "objectivesText": 8,
+    "objectives": 10,
+}
+NPC_KEY_IDS = {
+    "name": 1,
+    "minLevel": 4,
+    "maxLevel": 5,
+    "spawns": 7,
+    "zoneID": 9,
+    "questStarts": 10,
+    "questEnds": 11,
+    "friendlyToFaction": 13,
+}
+OBJECT_KEY_IDS = {"name": 1, "questStarts": 2, "questEnds": 3, "spawns": 4, "zoneID": 5}
+ITEM_KEY_IDS = {"name": 1, "npcDrops": 2, "objectDrops": 3, "itemDrops": 4, "startQuest": 5, "vendors": 14}
+CLASSIC_RACE_IDS = {"NONE": 0, "ALL_ALLIANCE": 77, "ALL_HORDE": 178}
+CLASSIC_CLASS_IDS = {
+    "NONE": 0,
+    "WARRIOR": 1,
+    "PALADIN": 2,
+    "HUNTER": 4,
+    "ROGUE": 8,
+    "PRIEST": 16,
+    "SHAMAN": 64,
+    "MAGE": 128,
+    "WARLOCK": 256,
+    "DRUID": 1024,
+    "DEATH_KNIGHT": 32,
+}
 
 
 class LuaTableParser:
@@ -141,6 +192,78 @@ def load_lua_data(path):
     if not match:
         raise ValueError(f"Could not find Questie data table in {path}")
     return LuaTableParser(match.group(1)).parse()
+
+
+def extract_balanced_lua_table(text, start):
+    depth = 0
+    quote = None
+    escaped = False
+    for index in range(start, len(text)):
+        char = text[index]
+        if quote:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+        if char in ("'", '"'):
+            quote = char
+        elif char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:index + 1]
+    raise ValueError("Unterminated Lua return table")
+
+
+def indexed_lua_row(value):
+    if isinstance(value, list):
+        return value
+    if not isinstance(value, dict):
+        return value
+    numeric_keys = [key for key in value if isinstance(key, int) and key > 0]
+    if not numeric_keys:
+        return value
+    row = [None] * max(numeric_keys)
+    for key in numeric_keys:
+        row[key - 1] = value[key]
+    return row
+
+
+def load_symbolic_return_table(path, key_prefix, key_ids, extra_constants=None):
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"\breturn\s*\{", text)
+    if not match:
+        raise ValueError(f"Could not find return table in {path}")
+    start = text.find("{", match.start())
+    table_text = extract_balanced_lua_table(text, start)
+    table_text = re.sub(r"--[^\r\n]*", "", table_text)
+    constants = {f"{key_prefix}.{name}": value for name, value in key_ids.items()}
+    constants.update(extra_constants or {})
+    for token, value in sorted(constants.items(), key=lambda item: -len(item[0])):
+        table_text = re.sub(rf"\b{re.escape(token)}\b", str(value), table_text)
+    parsed = LuaTableParser(table_text).parse()
+    return {
+        int(row_id): indexed_lua_row(row)
+        for row_id, row in parsed.items()
+        if isinstance(row_id, int)
+    }
+
+
+def load_sod_base_data():
+    quest_constants = {
+        **{f"raceIDs.{name}": value for name, value in CLASSIC_RACE_IDS.items()},
+        **{f"classIDs.{name}": value for name, value in CLASSIC_CLASS_IDS.items()},
+    }
+    return (
+        load_symbolic_return_table(SOD_BASE_QUESTS, "questKeys", QUEST_KEY_IDS, quest_constants),
+        load_symbolic_return_table(SOD_BASE_NPCS, "npcKeys", NPC_KEY_IDS),
+        load_symbolic_return_table(SOD_BASE_OBJECTS, "objectKeys", OBJECT_KEY_IDS),
+        load_symbolic_return_table(SOD_BASE_ITEMS, "itemKeys", ITEM_KEY_IDS),
+    )
 
 
 def load_lua_assignment_table(path, assignment):
@@ -1395,9 +1518,7 @@ def render_html(records, chains):
     const DATA = {payload};
     const QUEST_TYPE_FILTERS = DATA.questTypeFilters;
     const DISPLAY_FILTERS = [
-      {{ id: "available-pickups", label: "Pickups", defaultEnabled: true }},
-      {{ id: "quest-objectives", label: "Objectives", defaultEnabled: false }},
-      {{ id: "quest-handins", label: "Hand ins", defaultEnabled: false }},
+      {{ id: "available-pickups", label: "Quest pickups", defaultEnabled: true }},
     ];
     const RACES = [
       {{ label: "All races", mask: null, color: "#fff0ce" }},
@@ -2287,6 +2408,12 @@ CSV_DIR = ROOT / "Questie" / "ExternalScripts(DONOTINCLUDEINRELEASE)" / "DBC - W
 WORLDMAPAREA_CLASSIC = CSV_DIR / "worldmaparea_classic.csv"
 UIMAP_CLASSIC = CSV_DIR / "uimap_classic.csv"
 QUESTSORT_CLASSIC = CSV_DIR / "questsort_classic.csv"
+WORLDMAPAREA_TBC = CSV_DIR / "worldmaparea_tbc.csv"
+UIMAP_TBC = CSV_DIR / "uimap_tbc.csv"
+QUESTSORT_TBC = CSV_DIR / "questsort_tbc.csv"
+WORLDMAPAREA_WOTLK = CSV_DIR / "worldmaparea_wotlk.csv"
+UIMAP_WOTLK = CSV_DIR / "uimap_wotlk.csv"
+QUESTSORT_WOTLK = CSV_DIR / "questsort_wotlk.csv"
 AREA_ID_TO_UI_MAP = ROOT / "Questie" / "Database" / "Zones" / "data" / "areaIdToUiMapId.lua"
 SUBZONE_TO_PARENT = ROOT / "Questie" / "Database" / "Zones" / "data" / "subZoneToParentZone.lua"
 QUEST_TAG_INFO_CORRECTIONS = ROOT / "Questie" / "Database" / "Corrections" / "questTagInfoCorrections.lua"
@@ -2296,6 +2423,10 @@ CLASSIC_QUEST_FIXES = ROOT / "Questie" / "Database" / "Corrections" / "classicQu
 MAP_ASSET_DIR = ROOT / "assets" / "classic-maps" / "zones"
 LEGACY_MAP_ASSET_DIR = ROOT / "assets" / "maps"
 CONTINENT_MAP_ASSET_DIR = ROOT / "assets" / "classic-maps" / "continents"
+TBC_MAP_ASSET_DIR = ROOT / "assets" / "tbc-maps" / "zones"
+TBC_CONTINENT_MAP_ASSET_DIR = ROOT / "assets" / "tbc-maps" / "continents"
+WOTLK_MAP_ASSET_DIR = ROOT / "assets" / "wotlk-maps" / "zones"
+WOTLK_CONTINENT_MAP_ASSET_DIR = ROOT / "assets" / "wotlk-maps" / "continents"
 CONTINENT_IMAGE_WIDTH = 1002
 CONTINENT_IMAGE_HEIGHT = 668
 CONTINENT_IMAGE_CROPS = {
@@ -2308,7 +2439,7 @@ WORLD_CONTINENT_PANEL_WIDTH_PCT = WORLD_CONTINENT_PANEL_ASPECT / WORLD_MAP_ASPEC
 ZONE_HIT_GRID_WIDTH = 164
 ZONE_HIT_GRID_HEIGHT = 267
 ZONE_HIT_GRID_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-_"
-HORDE_RACE_MASK = 178
+HORDE_RACE_MASK = 690
 QUEST_FLAGS_RAID = 64
 QUEST_FLAGS_DAILY = 4096
 QUEST_FLAGS_WEEKLY = 32768
@@ -2352,7 +2483,7 @@ QUEST_TAG_TO_TYPE = {
     102: "special",
     294: "special",
 }
-CLASS_SORT_NAMES = {"Warlock", "Warrior", "Shaman", "Paladin", "Mage", "Rogue", "Hunter", "Priest", "Druid"}
+CLASS_SORT_NAMES = {"Warlock", "Warrior", "Shaman", "Paladin", "Mage", "Rogue", "Hunter", "Priest", "Druid", "Death Knight"}
 PROFESSION_SORT_NAMES = {
     "Herbalism",
     "Fishing",
@@ -2429,6 +2560,84 @@ CLASSIC_ZONE_LEVEL_RANGES = {
     1638: (1, 60),    # Thunder Bluff
     1657: (1, 60),    # Darnassus
 }
+TBC_ZONE_LEVEL_RANGES = {
+    **CLASSIC_ZONE_LEVEL_RANGES,
+    3430: (1, 10),     # Eversong Woods
+    3433: (10, 20),    # Ghostlands
+    3487: (1, 70),     # Silvermoon City
+    3524: (1, 10),     # Azuremyst Isle
+    3525: (10, 20),    # Bloodmyst Isle
+    3557: (1, 70),     # The Exodar
+    3483: (58, 63),    # Hellfire Peninsula
+    3521: (60, 64),    # Zangarmarsh
+    3519: (62, 65),    # Terokkar Forest
+    3518: (64, 67),    # Nagrand
+    3522: (65, 68),    # Blade's Edge Mountains
+    3523: (67, 70),    # Netherstorm
+    3520: (67, 70),    # Shadowmoon Valley
+    3703: (58, 70),    # Shattrath City
+    4080: (70, 70),    # Isle of Quel'Danas
+}
+WOTLK_ZONE_LEVEL_RANGES = {
+    **TBC_ZONE_LEVEL_RANGES,
+    3537: (68, 72),   # Borean Tundra
+    495: (68, 72),    # Howling Fjord
+    65: (71, 74),     # Dragonblight
+    394: (73, 75),    # Grizzly Hills
+    66: (74, 77),     # Zul'Drak
+    3711: (76, 78),   # Sholazar Basin
+    2817: (77, 80),   # Crystalsong Forest
+    67: (77, 80),     # The Storm Peaks
+    210: (77, 80),    # Icecrown
+    4197: (77, 80),   # Wintergrasp
+    4395: (74, 80),   # Dalaran
+    4742: (77, 80),   # Hrothgar's Landing
+}
+TBC_AZEROTH_EXPANSION_ZONE_IDS = {3430, 3433, 3487, 3524, 3525, 3557, 4080}
+# Secondary map-530 assignments from Blizzard's UiMapAssignment table in
+# TBC Classic build 2.5.6.68775. These are the coordinate windows used by
+# UiMap 1415 (Eastern Kingdoms) and UiMap 1414 (Kalimdor), respectively.
+TBC_AZEROTH_MAP_ASSIGNMENTS = {
+    0: {
+        "uiMinX": 0.45258000493,
+        "uiMinY": -0.0892701,
+        "uiMaxX": 0.6384999752,
+        "uiMaxY": 0.32325801253,
+        "regionMinX": 4800.0,
+        "regionMinY": -10133.299804688,
+        "regionMaxX": 16000.0,
+        "regionMaxY": -2666.669921875,
+    },
+    1: {
+        "uiMinX": 0.20289799571,
+        "uiMinY": 0.07999999821,
+        "uiMaxX": 0.42028999329,
+        "uiMaxY": 0.38999998569,
+        "regionMinX": -6933.330078125,
+        "regionMinY": -16000.0,
+        "regionMaxX": 533.33001708984,
+        "regionMaxY": -8000.0,
+    },
+}
+TBC_AZEROTH_ZONE_CONTINENTS = {
+    4080: 0,  # Isle of Quel'Danas
+    3430: 0,  # Eversong Woods
+    3433: 0,  # Ghostlands
+    3487: 0,  # Silvermoon City
+    3525: 1,  # Bloodmyst Isle
+    3524: 1,  # Azuremyst Isle
+    3557: 1,  # The Exodar
+}
+# Dalaran's WorldMapArea row is zeroed because the city is a WMO. These are
+# its map-571 bounds from Wrath Classic's UiMapAssignment rows for UiMap 125.
+WOTLK_WMO_ZONE_BOUNDS = {
+    4395: {
+        "left": 1052.51,
+        "right": 222.495,
+        "top": 6066.67,
+        "bottom": 5513.33,
+    },
+}
 
 
 def load_lua_return_table_merge(path):
@@ -2443,9 +2652,9 @@ def load_lua_return_table_merge(path):
     return merged
 
 
-def load_uimap_names():
+def load_uimap_names(path=UIMAP_CLASSIC):
     names = {}
-    with UIMAP_CLASSIC.open(encoding="utf-8", newline="") as handle:
+    with path.open(encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         for row in reader:
             try:
@@ -2455,9 +2664,9 @@ def load_uimap_names():
     return names
 
 
-def load_quest_sort_names():
+def load_quest_sort_names(path=QUESTSORT_CLASSIC):
     names = {}
-    with QUESTSORT_CLASSIC.open(encoding="utf-8", newline="") as handle:
+    with path.open(encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         for row in reader:
             try:
@@ -2467,21 +2676,28 @@ def load_quest_sort_names():
     return names
 
 
-def quest_tag_expression_applies_to_era(expression):
+def quest_tag_expression_applies(expression, version):
     if "Questie.IsSoD" in expression:
-        return False
-    if "Expansions.Current ~= Expansions.Era" in expression:
-        return False
-    if re.search(r"Expansions\.Current\s*>=\s*Expansions\.(Tbc|Wotlk|Cata|MoP)", expression):
-        return False
-    if re.search(r"Expansions\.Current\s*>\s*Expansions\.Era", expression):
-        return False
-    if re.search(r"Expansions\.Current\s*==\s*Expansions\.(Tbc|Wotlk|Cata|MoP)", expression):
-        return False
+        return version == "sod"
+    expansion_order = {"Era": 0, "Tbc": 1, "Wotlk": 2, "Cata": 3, "MoP": 4}
+    current = {"era": 0, "sod": 0, "tbc": 1, "wotlk": 2}.get(version, 0)
+    checks = re.findall(r"Expansions\.Current\s*(==|~=|>=|<=|>|<)\s*Expansions\.(Era|Tbc|Wotlk|Cata|MoP)", expression)
+    for operator, expansion in checks:
+        target = expansion_order[expansion]
+        applies = {
+            "==": current == target,
+            "~=": current != target,
+            ">=": current >= target,
+            "<=": current <= target,
+            ">": current > target,
+            "<": current < target,
+        }[operator]
+        if not applies:
+            return False
     return True
 
 
-def load_quest_tag_corrections():
+def load_quest_tag_corrections(version="era"):
     corrections = {}
     for raw_line in QUEST_TAG_INFO_CORRECTIONS.read_text(encoding="utf-8").splitlines():
         line = raw_line.split("--", 1)[0].strip()
@@ -2490,7 +2706,7 @@ def load_quest_tag_corrections():
             continue
         quest_id = int(match.group(1))
         expression = match.group(2)
-        if not quest_tag_expression_applies_to_era(expression):
+        if not quest_tag_expression_applies(expression, version):
             continue
         tag = re.search(r"\{(\d+)\s*,\s*l10n\(\"([^\"]+)\"\)\}", expression)
         if tag:
@@ -2653,13 +2869,20 @@ def derive_quest_type_ids(quest_id, quest, quest_sort_names, quest_tag_correctio
     }
 
 
-def load_world_area_data():
-    ui_names = load_uimap_names()
+def load_world_area_data(
+    world_area_path=WORLDMAPAREA_CLASSIC,
+    ui_map_path=UIMAP_CLASSIC,
+    zone_asset_dir=MAP_ASSET_DIR,
+    continent_asset_dir=CONTINENT_MAP_ASSET_DIR,
+    continent_ids=(0, 1),
+    version="era",
+):
+    ui_names = load_uimap_names(ui_map_path)
     area_to_ui = load_lua_return_table_merge(AREA_ID_TO_UI_MAP)
     zones = {}
     continents = {}
 
-    with WORLDMAPAREA_CLASSIC.open(encoding="utf-8", newline="") as handle:
+    with world_area_path.open(encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         for row in reader:
             area_id = int(row["AreaID"])
@@ -2673,15 +2896,17 @@ def load_world_area_data():
                 "mapId": map_id,
                 "areaId": area_id,
             }
-            if area_id == 0 and map_id in (0, 1):
+            if version == "wotlk" and area_id in WOTLK_WMO_ZONE_BOUNDS:
+                data.update(WOTLK_WMO_ZONE_BOUNDS[area_id])
+            if area_id == 0 and map_id in continent_ids:
                 continents[map_id] = data
                 continue
-            if area_id <= 0 or map_id not in (0, 1):
+            if area_id <= 0 or map_id not in continent_ids:
                 continue
 
             ui_id = area_to_ui.get(area_id)
             display_name = ui_names.get(ui_id) or re.sub(r"(?<!^)([A-Z])", r" \1", row["AreaName"]).strip()
-            asset_path = MAP_ASSET_DIR / f"{area_id}.jpg"
+            asset_path = zone_asset_dir / f"{area_id}.jpg"
             if not asset_path.exists():
                 asset_path = LEGACY_MAP_ASSET_DIR / f"{area_id}.jpg"
             if not asset_path.exists() and area_id == DUSKWOOD_ZONE_ID:
@@ -2693,6 +2918,12 @@ def load_world_area_data():
                 "uiMapId": ui_id,
                 "name": display_name,
                 "continentId": map_id,
+                "worldGroup": (
+                    "azeroth"
+                    if map_id in (0, 1) or area_id in TBC_AZEROTH_EXPANSION_ZONE_IDS
+                    else "northrend" if map_id == 571
+                    else "outland"
+                ),
                 "image": to_web_path(asset_path),
             }
 
@@ -2719,8 +2950,29 @@ def load_world_area_data():
             "objectPosition": "50% 50%",
         },
     }
+    if 530 in continents:
+        layout[530] = {
+            "id": 530,
+            "name": "Outland",
+            "x": 0.0,
+            "y": 0.0,
+            "width": 100.0,
+            "height": 100.0,
+            "objectPosition": "50% 50%",
+        }
+    if 571 in continents:
+        layout[571] = {
+            "id": 571,
+            "name": "Northrend",
+            "x": 0.0,
+            "y": 0.0,
+            "width": 100.0,
+            "height": 100.0,
+            "objectPosition": "50% 50%",
+        }
     for continent_id, continent in continents.items():
         continent.update(layout[continent_id])
+        continent["worldGroup"] = "outland" if continent_id == 530 else "northrend" if continent_id == 571 else "azeroth"
         continent["leftPct"] = layout[continent_id]["x"]
         continent["topPct"] = layout[continent_id]["y"]
         continent["widthPct"] = layout[continent_id]["width"]
@@ -2735,8 +2987,17 @@ def load_world_area_data():
         continent = continents.get(zone["continentId"])
         if continent:
             zone["worldRect"] = zone_rect_in_continent(zone, continent)
+        if version in ("tbc", "wotlk") and zone["id"] in TBC_AZEROTH_ZONE_CONTINENTS:
+            world_continent_id = TBC_AZEROTH_ZONE_CONTINENTS[zone["id"]]
+            zone["worldContinentId"] = world_continent_id
+            zone["worldRect"] = zone_rect_in_uimap_assignment(
+                zone,
+                continents[world_continent_id],
+                TBC_AZEROTH_MAP_ASSIGNMENTS[world_continent_id],
+            )
+            zone["worldRectOverride"] = True
     for continent_id, continent in continents.items():
-        continent["zoneHitGrid"] = build_continent_zone_hit_grid(continent_id, zones.values())
+        continent["zoneHitGrid"] = build_continent_zone_hit_grid(continent_id, zones.values(), continent_asset_dir)
     return zones, continents
 
 
@@ -2829,16 +3090,16 @@ def choose_zone_for_world_cell(x, y, continent_zones):
     return min(candidates, key=lambda item: item[0])[1]
 
 
-def build_continent_zone_hit_grid(continent_id, zones):
+def build_continent_zone_hit_grid(continent_id, zones, continent_asset_dir=CONTINENT_MAP_ASSET_DIR):
     continent_zones = [
         zone
         for zone in sorted(zones, key=lambda item: (item["name"], item["id"]))
-        if zone["continentId"] == continent_id and zone.get("worldRect") and zone.get("image")
+        if zone.get("worldContinentId", zone["continentId"]) == continent_id and zone.get("worldRect") and zone.get("image")
     ]
     if not continent_zones or len(continent_zones) >= len(ZONE_HIT_GRID_ALPHABET):
         return None
 
-    image_path = CONTINENT_MAP_ASSET_DIR / f"{continent_id}.jpg"
+    image_path = continent_asset_dir / f"{continent_id}.jpg"
     if not image_path.exists():
         return None
 
@@ -2880,6 +3141,33 @@ def zone_rect_in_continent(zone, continent):
     x2 = percent_between(zone["right"], continent["left"], continent["right"])
     y1 = percent_between(zone["top"], continent["top"], continent["bottom"])
     y2 = percent_between(zone["bottom"], continent["top"], continent["bottom"])
+    x1 = percent_between(x1, continent.get("cropLeftPct", 0), continent.get("cropLeftPct", 0) + continent.get("cropWidthPct", 100))
+    x2 = percent_between(x2, continent.get("cropLeftPct", 0), continent.get("cropLeftPct", 0) + continent.get("cropWidthPct", 100))
+    y1 = percent_between(y1, continent.get("cropTopPct", 0), continent.get("cropTopPct", 0) + continent.get("cropHeightPct", 100))
+    y2 = percent_between(y2, continent.get("cropTopPct", 0), continent.get("cropTopPct", 0) + continent.get("cropHeightPct", 100))
+    return {
+        "left": round(min(x1, x2), 4),
+        "top": round(min(y1, y2), 4),
+        "width": round(abs(x2 - x1), 4),
+        "height": round(abs(y2 - y1), 4),
+    }
+
+
+def zone_rect_in_uimap_assignment(zone, continent, assignment):
+    def ui_x(world_y):
+        region_span = assignment["regionMaxY"] - assignment["regionMinY"]
+        region_position = (assignment["regionMaxY"] - world_y) / region_span
+        return assignment["uiMinX"] + region_position * (assignment["uiMaxX"] - assignment["uiMinX"])
+
+    def ui_y(world_x):
+        region_span = assignment["regionMaxX"] - assignment["regionMinX"]
+        region_position = (assignment["regionMaxX"] - world_x) / region_span
+        return assignment["uiMinY"] + region_position * (assignment["uiMaxY"] - assignment["uiMinY"])
+
+    x1 = ui_x(zone["left"]) * 100
+    x2 = ui_x(zone["right"]) * 100
+    y1 = ui_y(zone["top"]) * 100
+    y2 = ui_y(zone["bottom"]) * 100
     x1 = percent_between(x1, continent.get("cropLeftPct", 0), continent.get("cropLeftPct", 0) + continent.get("cropWidthPct", 100))
     x2 = percent_between(x2, continent.get("cropLeftPct", 0), continent.get("cropLeftPct", 0) + continent.get("cropWidthPct", 100))
     y1 = percent_between(y1, continent.get("cropTopPct", 0), continent.get("cropTopPct", 0) + continent.get("cropHeightPct", 100))
@@ -2955,26 +3243,29 @@ def item_all_source_points(items, npcs, objects, item_id, kind="objective"):
     return points
 
 
-def source_points(points, source_name, source_type):
-    return [
-        {
+def source_points(points, source_name, source_type, source_id=None):
+    sourced = []
+    for point in points:
+        record = {
             **point,
             "sourceName": source_name,
             "sourceType": source_type,
         }
-        for point in points
-    ]
+        if source_id is not None:
+            record["sourceId"] = source_id
+        sourced.append(record)
+    return sourced
 
 
 def start_points_for_quest_all(quest, items, npcs, objects):
     starts = table_value(quest, 1)
     points = []
     for npc_id in source_refs(starts, 0):
-        points.extend(source_points(npc_all_spawn_points(npcs, npc_id, "start"), npc_name(npcs, npc_id), "npc"))
+        points.extend(source_points(npc_all_spawn_points(npcs, npc_id, "start"), npc_name(npcs, npc_id), "npc", npc_id))
     for object_id in source_refs(starts, 1):
-        points.extend(source_points(object_all_spawn_points(objects, object_id, "start"), object_name(objects, object_id), "object"))
+        points.extend(source_points(object_all_spawn_points(objects, object_id, "start"), object_name(objects, object_id), "object", object_id))
     for item_id in source_refs(starts, 2):
-        points.extend(source_points(item_all_source_points(items, npcs, objects, item_id, "start"), f"{item_name(items, item_id)} drop", "item"))
+        points.extend(source_points(item_all_source_points(items, npcs, objects, item_id, "start"), f"{item_name(items, item_id)} drop", "item", item_id))
     return points
 
 
@@ -2982,9 +3273,9 @@ def end_points_for_quest_all(quest, npcs, objects):
     ends = table_value(quest, 2)
     points = []
     for npc_id in source_refs(ends, 0):
-        points.extend(source_points(npc_all_spawn_points(npcs, npc_id, "turn-in"), npc_name(npcs, npc_id), "npc"))
+        points.extend(source_points(npc_all_spawn_points(npcs, npc_id, "turn-in"), npc_name(npcs, npc_id), "npc", npc_id))
     for object_id in source_refs(ends, 1):
-        points.extend(source_points(object_all_spawn_points(objects, object_id, "turn-in"), object_name(objects, object_id), "object"))
+        points.extend(source_points(object_all_spawn_points(objects, object_id, "turn-in"), object_name(objects, object_id), "object", object_id))
     return points
 
 
@@ -3000,25 +3291,25 @@ def objective_summary_and_points_all(quest, items, npcs, objects):
         if creature_ids:
             summary.append("Kill: " + ", ".join(dict.fromkeys(npc_name(npcs, npc_id) for npc_id in creature_ids)))
             for npc_id in creature_ids:
-                points.extend(source_points(npc_all_spawn_points(npcs, npc_id, "mob"), npc_name(npcs, npc_id), "npc"))
+                points.extend(source_points(npc_all_spawn_points(npcs, npc_id, "mob"), npc_name(npcs, npc_id), "npc", npc_id))
 
         object_ids = objective_ids(objectives, 1)
         if object_ids:
             summary.append("Use/find: " + ", ".join(dict.fromkeys(object_name(objects, object_id) for object_id in object_ids)))
             for object_id in object_ids:
-                points.extend(source_points(object_all_spawn_points(objects, object_id, "object"), object_name(objects, object_id), "object"))
+                points.extend(source_points(object_all_spawn_points(objects, object_id, "object"), object_name(objects, object_id), "object", object_id))
 
         item_ids = objective_ids(objectives, 2)
         if item_ids:
             summary.append("Collect: " + ", ".join(dict.fromkeys(item_name(items, item_id) for item_id in item_ids)))
             for item_id in item_ids:
-                points.extend(source_points(item_all_source_points(items, npcs, objects, item_id, "item"), f"{item_name(items, item_id)} source", "item"))
+                points.extend(source_points(item_all_source_points(items, npcs, objects, item_id, "item"), f"{item_name(items, item_id)} source", "item", item_id))
 
         kill_credit_ids = objective_ids(objectives, 4)
         if kill_credit_ids:
             summary.append("Credit: " + ", ".join(dict.fromkeys(npc_name(npcs, npc_id) for npc_id in kill_credit_ids)))
             for npc_id in kill_credit_ids:
-                points.extend(source_points(npc_all_spawn_points(npcs, npc_id, "mob"), npc_name(npcs, npc_id), "npc"))
+                points.extend(source_points(npc_all_spawn_points(npcs, npc_id, "mob"), npc_name(npcs, npc_id), "npc", npc_id))
 
     if isinstance(trigger_end, list) and len(trigger_end) > 1:
         text = trigger_end[0] if isinstance(trigger_end[0], str) else "Trigger area"
@@ -3051,8 +3342,21 @@ def project_point(point, zones, continents, subzones):
     zone = zones.get(zone_id)
     if not zone:
         return projected
-    continent = continents.get(zone["continentId"])
+    world_continent_id = zone.get("worldContinentId", zone["continentId"])
+    continent = continents.get(world_continent_id)
     if not continent:
+        return projected
+    projected["worldGroup"] = zone.get("worldGroup", "azeroth")
+    if projected["worldGroup"] != continent.get("worldGroup", "azeroth"):
+        return projected
+
+    if zone.get("worldRectOverride"):
+        rect = zone["worldRect"]
+        local_x = rect["left"] + rect["width"] * projected["x"] / 100
+        local_y = rect["top"] + rect["height"] * projected["y"] / 100
+        projected["worldX"] = round(continent["x"] + local_x * continent["width"] / 100, 3)
+        projected["worldY"] = round(continent["y"] + local_y * continent["height"] / 100, 3)
+        projected["continentId"] = world_continent_id
         return projected
 
     world_x = zone["left"] + (zone["right"] - zone["left"]) * projected["x"] / 100
@@ -3063,7 +3367,7 @@ def project_point(point, zones, continents, subzones):
     local_y = percent_between(local_y, continent.get("cropTopPct", 0), continent.get("cropTopPct", 0) + continent.get("cropHeightPct", 100))
     projected["worldX"] = round(continent["x"] + local_x * continent["width"] / 100, 3)
     projected["worldY"] = round(continent["y"] + local_y * continent["height"] / 100, 3)
-    projected["continentId"] = zone["continentId"]
+    projected["continentId"] = world_continent_id
     return projected
 
 
@@ -3103,6 +3407,8 @@ def dedupe_spatial_points(points):
             round(point.get("x", 0), 2),
             round(point.get("y", 0), 2),
             point.get("kind", "objective"),
+            point.get("sourceType"),
+            point.get("sourceId"),
         )
         if key not in seen:
             seen.add(key)
@@ -3173,8 +3479,8 @@ def reputation_reward_records(value, faction_names):
     return rewards
 
 
-def item_rewards_by_quest(items):
-    corrections = load_item_reward_corrections(CLASSIC_ITEM_FIXES)
+def item_rewards_by_quest(items, corrections_path=CLASSIC_ITEM_FIXES):
+    corrections = load_item_reward_corrections(corrections_path)
     rewards = defaultdict(list)
     for item_id, item in items.items():
         if not isinstance(item_id, int) or not isinstance(item, list):
@@ -3190,21 +3496,48 @@ def item_rewards_by_quest(items):
     return rewards
 
 
-def build_classic_records():
-    quests = load_lua_data(QUESTIE / "classicQuestDB.lua")
-    npcs = load_lua_data(QUESTIE / "classicNpcDB.lua")
-    objects = load_lua_data(QUESTIE / "classicObjectDB.lua")
-    items = load_lua_data(QUESTIE / "classicItemDB.lua")
-    xp_data = load_lua_assignment_table(QUEST_XP_CLASSIC, "QuestXP.db")
+def build_version_records(version="classic"):
+    is_tbc = version == "tbc"
+    is_wotlk = version == "wotlk"
+    is_expansion = is_tbc or is_wotlk
+    database_dir = QUESTIE_WOTLK if is_wotlk else QUESTIE_TBC if is_tbc else QUESTIE
+    prefix = "wotlk" if is_wotlk else "tbc" if is_tbc else "classic"
+    quests = load_lua_data(database_dir / f"{prefix}QuestDB.lua")
+    npcs = load_lua_data(database_dir / f"{prefix}NpcDB.lua")
+    objects = load_lua_data(database_dir / f"{prefix}ObjectDB.lua")
+    items = load_lua_data(database_dir / f"{prefix}ItemDB.lua")
+    sod_exclusive_quest_ids = set()
+    if not is_expansion:
+        sod_quests, sod_npcs, sod_objects, sod_items = load_sod_base_data()
+        classic_quest_ids = set(quests)
+        sod_exclusive_quest_ids = set(sod_quests) - classic_quest_ids
+        for table, additions in ((quests, sod_quests), (npcs, sod_npcs), (objects, sod_objects), (items, sod_items)):
+            for row_id, row in additions.items():
+                if row_id not in table:
+                    table[row_id] = row
+    xp_path = QUEST_XP_WOTLK if is_wotlk else QUEST_XP_TBC if is_tbc else QUEST_XP_CLASSIC
+    xp_data = load_lua_assignment_table(xp_path, "QuestXP.db")
     faction_names = load_faction_names()
     faction_ids = load_faction_ids()
-    reputation_corrections = load_reputation_corrections(CLASSIC_REPUTATION_FIXES, faction_ids)
-    reputation_corrections.update(load_reputation_corrections(CLASSIC_QUEST_FIXES, faction_ids))
-    quest_item_rewards = item_rewards_by_quest(items)
-    zones, continents = load_world_area_data()
+    reputation_corrections = {}
+    if is_expansion:
+        reputation_corrections.update(load_reputation_corrections(WOTLK_QUEST_FIXES if is_wotlk else TBC_QUEST_FIXES, faction_ids))
+    else:
+        reputation_corrections.update(load_reputation_corrections(CLASSIC_REPUTATION_FIXES, faction_ids))
+        reputation_corrections.update(load_reputation_corrections(CLASSIC_QUEST_FIXES, faction_ids))
+    item_fixes = WOTLK_ITEM_FIXES if is_wotlk else TBC_ITEM_FIXES if is_tbc else CLASSIC_ITEM_FIXES
+    quest_item_rewards = item_rewards_by_quest(items, item_fixes)
+    zones, continents = load_world_area_data(
+        world_area_path=WORLDMAPAREA_WOTLK if is_wotlk else WORLDMAPAREA_TBC if is_tbc else WORLDMAPAREA_CLASSIC,
+        ui_map_path=UIMAP_WOTLK if is_wotlk else UIMAP_TBC if is_tbc else UIMAP_CLASSIC,
+        zone_asset_dir=WOTLK_MAP_ASSET_DIR if is_wotlk else TBC_MAP_ASSET_DIR if is_tbc else MAP_ASSET_DIR,
+        continent_asset_dir=WOTLK_CONTINENT_MAP_ASSET_DIR if is_wotlk else TBC_CONTINENT_MAP_ASSET_DIR if is_tbc else CONTINENT_MAP_ASSET_DIR,
+        continent_ids=(0, 1, 530, 571) if is_wotlk else (0, 1, 530) if is_tbc else (0, 1),
+        version="wotlk" if is_wotlk else "tbc" if is_tbc else "era",
+    )
     subzones = load_lua_return_table_merge(SUBZONE_TO_PARENT)
-    quest_sort_names = load_quest_sort_names()
-    quest_tag_corrections = load_quest_tag_corrections()
+    quest_sort_names = load_quest_sort_names(QUESTSORT_WOTLK if is_wotlk else QUESTSORT_TBC if is_tbc else QUESTSORT_CLASSIC)
+    quest_tag_corrections = load_quest_tag_corrections("wotlk" if is_wotlk else "tbc" if is_tbc else "era")
     holiday_events = load_holiday_event_quests()
     aq_war_effort = load_quest_id_table("AQWarEffortQuests")
     invasion_quests = load_quest_id_table("InvasionQuests")
@@ -3214,7 +3547,16 @@ def build_classic_records():
     candidates = {
         quest_id: quest
         for quest_id, quest in quests.items()
-        if isinstance(quest, list) and table_value(quest, 0) and not str(table_value(quest, 0)).startswith("DND ")
+        if isinstance(quest, list)
+        and table_value(quest, 0)
+        and not str(table_value(quest, 0)).startswith("DND ")
+        and (
+            not is_expansion
+            or (
+                str(table_value(quest, 0)) != "NOT A QUEST"
+                and not str(table_value(quest, 0)).startswith(("BETA ", "OLD ", "UNUSED ", "DEPRECATED ", "zzOLD "))
+            )
+        )
     }
     breadcrumb_ids = derive_breadcrumb_ids(candidates, fixed_breadcrumb_ids)
     chains, chain_meta = derive_chains(candidates)
@@ -3265,6 +3607,7 @@ def build_classic_records():
 
         records.append({
             "id": quest_id,
+            "gameVersions": [version] if is_expansion else (["sod"] if quest_id in sod_exclusive_quest_ids else ["era", "sod"]),
             "name": table_value(quest, 0),
             "requiredLevel": table_value(quest, 3),
             "questLevel": table_value(quest, 4),
@@ -3305,7 +3648,7 @@ def build_classic_records():
             zone_chain_ids[zone_id].add(record["chainId"])
     level_ranges = {
         **zone_level_ranges(records),
-        **{zone_id: level_range for zone_id, level_range in CLASSIC_ZONE_LEVEL_RANGES.items() if zone_id in zones},
+        **{zone_id: level_range for zone_id, level_range in (WOTLK_ZONE_LEVEL_RANGES if is_wotlk else TBC_ZONE_LEVEL_RANGES if is_tbc else CLASSIC_ZONE_LEVEL_RANGES).items() if zone_id in zones},
     }
 
     serializable_zones = []
@@ -3321,6 +3664,8 @@ def build_classic_records():
             "uiMapId": zone.get("uiMapId"),
             "name": zone["name"],
             "continentId": zone["continentId"],
+            "worldContinentId": zone.get("worldContinentId", zone["continentId"]),
+            "worldGroup": zone.get("worldGroup", "azeroth"),
             "image": zone["image"],
             "worldRect": zone.get("worldRect"),
             "questCount": zone_counts[zone_id],
@@ -3338,11 +3683,12 @@ def build_classic_records():
         {
             "id": continent_id,
             "name": continent["name"],
+            "worldGroup": continent.get("worldGroup", "azeroth"),
             "x": continent["x"],
             "y": continent["y"],
             "width": continent["width"],
             "height": continent["height"],
-            "image": to_web_path(CONTINENT_MAP_ASSET_DIR / f"{continent_id}.jpg"),
+            "image": to_web_path((WOTLK_CONTINENT_MAP_ASSET_DIR if is_wotlk else TBC_CONTINENT_MAP_ASSET_DIR if is_tbc else CONTINENT_MAP_ASSET_DIR) / f"{continent_id}.jpg"),
             "crop": [
                 round(continent.get("cropLeftPct", 0), 4),
                 round(continent.get("cropTopPct", 0), 4),
@@ -3359,17 +3705,58 @@ def build_classic_records():
         for npc_id, row in npcs.items()
         if isinstance(npc_id, int) and isinstance(row, list) and row and isinstance(row[0], str)
     }
-    return records, chain_meta, serializable_zones, serializable_continents, npc_names
+    world_groups = [
+        {"id": "azeroth", "name": "Azeroth", "continentIds": [1, 0]},
+    ]
+    if is_tbc:
+        world_groups.append({"id": "outland", "name": "Outland", "continentIds": [530]})
+    elif is_wotlk:
+        world_groups.extend([
+            {"id": "outland", "name": "Outland", "continentIds": [530]},
+            {"id": "northrend", "name": "Northrend", "continentIds": [571]},
+        ])
+    return records, chain_meta, serializable_zones, serializable_continents, npc_names, world_groups
 
 
-def render_classic_html(records, chains, zones, continents, npc_names):
+def build_classic_records():
+    return build_version_records("classic")
+
+
+def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
+    records, chains, zones, continents, npc_names, world_groups = classic_bundle
+    tbc_records, tbc_chains, tbc_zones, tbc_continents, tbc_npc_names, tbc_world_groups = tbc_bundle
+    wotlk_records, wotlk_chains, wotlk_zones, wotlk_continents, wotlk_npc_names, wotlk_world_groups = wotlk_bundle
     payload = json.dumps({
-        "quests": records,
-        "chains": chains,
-        "zones": zones,
-        "continents": continents,
-        "npcNames": npc_names,
         "questTypeFilters": QUEST_TYPE_FILTERS,
+        "versions": {
+            "classic": {
+                "quests": records,
+                "chains": chains,
+                "zones": zones,
+                "continents": continents,
+                "npcNames": npc_names,
+                "worldGroups": world_groups,
+                "maxLevel": 60,
+            },
+            "tbc": {
+                "quests": tbc_records,
+                "chains": tbc_chains,
+                "zones": tbc_zones,
+                "continents": tbc_continents,
+                "npcNames": tbc_npc_names,
+                "worldGroups": tbc_world_groups,
+                "maxLevel": 70,
+            },
+            "wotlk": {
+                "quests": wotlk_records,
+                "chains": wotlk_chains,
+                "zones": wotlk_zones,
+                "continents": wotlk_continents,
+                "npcNames": wotlk_npc_names,
+                "worldGroups": wotlk_world_groups,
+                "maxLevel": 80,
+            },
+        },
     }, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     quest_count = len(records)
     zone_count = len(zones)
@@ -3438,8 +3825,54 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       min-width: 0;
       display: flex;
       align-items: center;
-      justify-content: flex-start;
+      justify-content: space-between;
       gap: 8px;
+    }}
+
+    .header-actions {{
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+    }}
+
+    .header-icon-button {{
+      width: 34px;
+      min-width: 34px;
+      height: 34px;
+      min-height: 34px;
+      display: inline-grid;
+      place-items: center;
+      padding: 0;
+      border: 1px solid rgba(255, 235, 196, 0.3);
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.065);
+      color: #fff0ce;
+      font: inherit;
+      font-size: 1.08rem;
+      font-weight: 850;
+      line-height: 1;
+      cursor: pointer;
+    }}
+
+    .header-icon-button:hover,
+    .header-icon-button[aria-expanded="true"] {{
+      border-color: rgba(255, 211, 79, 0.75);
+      background: rgba(255, 211, 79, 0.12);
+      color: #ffd34f;
+    }}
+
+    .info-button-glyph {{
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 1rem;
+      font-style: italic;
+      transform: translateY(-0.5px);
+    }}
+
+    .settings-button-glyph {{
+      font-size: 1.22rem;
+      transform: translateY(-0.5px);
     }}
 
     .header-side .inventory-mode-toggle button {{
@@ -3551,7 +3984,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     }}
 
     body.replay-mode header {{
-      grid-template-columns: minmax(0, 1fr);
+      grid-template-columns: minmax(0, 1fr) auto;
     }}
 
     body.replay-mode .header-main {{
@@ -3563,7 +3996,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     }}
 
     body.replay-mode .normal-toolbar-controls,
-    body.replay-mode .header-side {{
+    body.replay-mode .inventory-mode-toggle {{
       display: none;
     }}
 
@@ -3941,7 +4374,292 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       display: none;
     }}
 
-    .catalogue-assigned-toggle {{
+    .settings-button {{
+      flex: 0 0 auto;
+    }}
+
+    .settings-overlay,
+    .info-overlay,
+    .journey-config-overlay {{
+      position: fixed;
+      z-index: 240;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background: rgba(0, 0, 0, 0.64);
+      backdrop-filter: blur(2px);
+    }}
+
+    .settings-overlay[hidden],
+    .info-overlay[hidden],
+    .journey-config-overlay[hidden] {{
+      display: none;
+    }}
+
+    .settings-dialog,
+    .info-dialog,
+    .journey-config-dialog {{
+      width: min(1180px, calc(100vw - 36px));
+      max-height: min(820px, calc(100vh - 48px));
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      overflow: hidden;
+      border: 1px solid rgba(255, 235, 196, 0.3);
+      border-radius: 8px;
+      background: rgba(20, 23, 18, 0.99);
+      box-shadow: 0 28px 84px rgba(0, 0, 0, 0.68);
+    }}
+
+    .settings-dialog-head {{
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 12px 8px 16px;
+      border-bottom: 1px solid rgba(255, 235, 196, 0.18);
+    }}
+
+    .settings-dialog-head h2 {{
+      margin: 0;
+      color: #fff5d5;
+      font-size: 1.08rem;
+      letter-spacing: 0;
+    }}
+
+    .settings-close-button {{
+      width: 32px;
+      min-width: 32px;
+      padding: 0;
+      font-size: 1rem;
+    }}
+
+    .settings-grid {{
+      min-height: 0;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      overflow-y: auto;
+    }}
+
+    .settings-section {{
+      min-width: 0;
+      padding: 18px;
+    }}
+
+    .settings-section + .settings-section {{
+      border-left: 1px solid rgba(255, 235, 196, 0.18);
+    }}
+
+    .settings-section > h3 {{
+      margin: 0 0 14px;
+      padding: 0 0 9px;
+      border-bottom: 1px solid rgba(255, 211, 79, 0.34);
+      color: #fff2cf;
+      font-size: 0.92rem;
+      text-align: center;
+      letter-spacing: 0;
+    }}
+
+    .info-dialog {{
+      width: min(760px, calc(100vw - 36px));
+      grid-template-rows: auto minmax(0, 1fr);
+    }}
+
+    .journey-config-dialog {{
+      width: min(620px, calc(100vw - 36px));
+      grid-template-rows: auto minmax(0, 1fr);
+    }}
+
+    .journey-config-body {{
+      display: grid;
+      gap: 16px;
+      overflow-y: auto;
+      padding: 18px;
+    }}
+
+    .journey-config-body > p {{
+      margin: 0;
+      color: #a99b83;
+      font-size: 0.78rem;
+      line-height: 1.45;
+    }}
+
+    .journey-config-body .journey-metadata-controls {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }}
+
+    .journey-config-body .journey-metadata-control {{
+      display: grid;
+      gap: 6px;
+    }}
+
+    .journey-config-body .journey-metadata-control select,
+    .journey-config-body .journey-metadata-control.version select {{
+      width: 100%;
+      min-width: 0;
+      min-height: 36px;
+    }}
+
+    .info-dialog-body {{
+      overflow-y: auto;
+      padding: 20px 22px 22px;
+    }}
+
+    .info-dialog-body section + section {{
+      margin-top: 20px;
+      padding-top: 18px;
+      border-top: 1px solid rgba(255, 235, 196, 0.16);
+    }}
+
+    .info-dialog-body h3 {{
+      margin: 0 0 8px;
+      color: #ffd34f;
+      font-size: 0.94rem;
+      letter-spacing: 0;
+    }}
+
+    .info-dialog-body p {{
+      margin: 0;
+      color: #d7c8ad;
+      font-size: 0.86rem;
+      line-height: 1.55;
+    }}
+
+    .info-dialog-body p + p {{
+      margin-top: 9px;
+    }}
+
+    .info-dialog-body a {{
+      color: #8fc8ff;
+      font-weight: 800;
+    }}
+
+    .settings-section-copy,
+    .settings-status {{
+      margin: 0 0 14px;
+      color: #bfae91;
+      font-size: 0.82rem;
+      line-height: 1.45;
+    }}
+
+    .settings-status {{
+      padding: 9px 10px;
+      border: 1px solid rgba(255, 235, 196, 0.14);
+      border-radius: 6px;
+      background: rgba(0, 0, 0, 0.2);
+    }}
+
+    .game-version-options {{
+      display: grid;
+      gap: 8px;
+    }}
+
+    .game-version-option {{
+      display: grid;
+      grid-template-columns: 18px minmax(0, 1fr);
+      gap: 9px;
+      align-items: start;
+      padding: 10px;
+      border: 1px solid rgba(255, 235, 196, 0.16);
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.035);
+      cursor: pointer;
+    }}
+
+    .game-version-option:has(input:checked) {{
+      border-color: rgba(255, 211, 79, 0.62);
+      background: rgba(255, 211, 79, 0.1);
+    }}
+
+    .game-version-option input {{
+      width: 16px;
+      height: 16px;
+      margin: 2px 0 0;
+      accent-color: var(--gold);
+    }}
+
+    .game-version-option strong {{
+      display: block;
+      color: #fff0ce;
+      font-size: 0.86rem;
+    }}
+
+    .game-version-option small {{
+      display: block;
+      margin-top: 3px;
+      color: #a99b83;
+      font-size: 0.72rem;
+      line-height: 1.35;
+    }}
+
+    .settings-journey-host .journey-setup {{
+      place-self: stretch;
+      width: 100%;
+      max-height: none;
+      padding: 0;
+      overflow: visible;
+      border: 0;
+      background: transparent;
+      box-shadow: none;
+    }}
+
+    .settings-subsection-title {{
+      margin: 2px 0 0;
+      padding-top: 12px;
+      border-top: 1px solid rgba(255, 235, 196, 0.14);
+      color: #e9d9b7;
+      font-size: 0.76rem;
+      font-weight: 850;
+      text-align: center;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }}
+
+    .settings-journey-host .journey-start-button {{
+      min-width: 170px;
+      justify-self: center;
+    }}
+
+    .settings-profile-actions {{
+      display: grid;
+      gap: 10px;
+      margin-top: 8px;
+    }}
+
+    .settings-profile-actions .profile-import-button {{
+      width: 100%;
+    }}
+
+    .settings-loaded-actions {{
+      display: grid;
+      margin-top: 12px;
+    }}
+
+    .settings-loaded-actions .journey-close-button {{
+      width: 100%;
+      justify-self: stretch;
+    }}
+
+    .planner-empty-state {{
+      place-self: center;
+      width: min(460px, 92%);
+      display: grid;
+      justify-items: center;
+      gap: 10px;
+      padding: 22px;
+      color: #bfae91;
+      text-align: center;
+    }}
+
+    .planner-empty-state[hidden] {{
+      display: none;
+    }}
+
+    .catalogue-assigned-toggle,
+    .map-quests-toggle {{
       min-height: 34px;
       display: inline-flex;
       align-items: center;
@@ -3958,13 +4676,15 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       user-select: none;
     }}
 
-    .catalogue-assigned-toggle.active {{
+    .catalogue-assigned-toggle.active,
+    .map-quests-toggle.active {{
       border-color: var(--gold);
       background: rgba(255, 211, 79, 0.16);
       color: #fff8dc;
     }}
 
-    .catalogue-assigned-toggle input {{
+    .catalogue-assigned-toggle input,
+    .map-quests-toggle input {{
       width: 16px;
       height: 16px;
       margin: 0;
@@ -3980,6 +4700,19 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       width: min(190px, 22vw);
       min-width: min(190px, 22vw);
       max-width: min(190px, 22vw);
+    }}
+
+    #world-select {{
+      width: 108px;
+      min-width: 108px;
+      max-width: 108px;
+      font-weight: 750;
+    }}
+
+    #world-select.active {{
+      border-color: var(--gold);
+      background: rgba(255, 211, 79, 0.16);
+      color: #fff8dc;
     }}
 
     #zone-select.active {{
@@ -4008,8 +4741,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       background: rgba(210, 202, 186, 0.34);
     }}
 
-    .main-filter-wrap,
-    .display-filter-wrap {{
+    .main-filter-wrap {{
       position: relative;
     }}
 
@@ -4017,8 +4749,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       display: none;
     }}
 
-    .main-filter-button,
-    .display-filter-button {{
+    .main-filter-button {{
       display: inline-flex;
       align-items: center;
       gap: 8px;
@@ -4030,8 +4761,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       justify-content: center;
     }}
 
-    .main-filter-button .filter-count,
-    .display-filter-button .filter-count {{
+    .main-filter-button .filter-count {{
       display: inline-grid;
       place-items: center;
       min-width: 18px;
@@ -4044,8 +4774,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       line-height: 1;
     }}
 
-    .main-filter-menu,
-    .display-filter-menu {{
+    .main-filter-menu {{
       position: absolute;
       z-index: 80;
       top: calc(100% + 7px);
@@ -4061,8 +4790,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       box-shadow: 0 18px 40px rgba(0, 0, 0, 0.42);
     }}
 
-    .main-filter-menu[hidden],
-    .display-filter-menu[hidden] {{
+    .main-filter-menu[hidden] {{
       display: none;
     }}
 
@@ -4112,15 +4840,6 @@ def render_classic_html(records, chains, zones, continents, npc_names):
 
     .filter-section + .filter-section {{
       margin-top: 12px;
-    }}
-
-    .display-filter-title {{
-      padding: 4px 6px 8px;
-      margin-bottom: 5px;
-      border-bottom: 1px solid rgba(255, 235, 196, 0.14);
-      color: #fff2cf;
-      font-size: 0.8rem;
-      font-weight: 850;
     }}
 
     .filter-actions {{
@@ -4414,11 +5133,14 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     }}
 
     .journey-head {{
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
+      display: grid;
+      gap: 8px;
       min-width: 0;
+      padding-right: 124px;
+    }}
+
+    body.dragging-quest .journey-head {{
+      padding-right: 232px;
     }}
 
     .journey-title-tools {{
@@ -4453,11 +5175,83 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       outline: none;
     }}
 
-    .journey-character-summary {{
+    .journey-metadata-controls {{
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }}
+
+    .journey-metadata-control {{
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      min-width: 0;
+    }}
+
+    .journey-metadata-control > span {{
       color: #a99b83;
-      font-size: 0.78rem;
-      font-weight: 750;
+      font-size: 0.66rem;
+      font-weight: 850;
+      text-transform: uppercase;
       white-space: nowrap;
+    }}
+
+    .journey-metadata-control select {{
+      min-width: 104px;
+      min-height: 30px;
+      padding: 0 7px;
+      border: 1px solid rgba(255, 235, 196, 0.22);
+      border-radius: 6px;
+      background: rgba(0, 0, 0, 0.24);
+      color: #fff0ce;
+      font: inherit;
+      font-size: 0.76rem;
+      font-weight: 760;
+      outline: none;
+    }}
+
+    .journey-metadata-control.version select {{
+      min-width: 142px;
+    }}
+
+    .journey-metadata-control select:focus {{
+      border-color: rgba(255, 211, 79, 0.62);
+      box-shadow: 0 0 0 2px rgba(255, 211, 79, 0.14);
+    }}
+
+    @media (max-width: 620px) {{
+      .journey-config-body .journey-metadata-controls {{
+        grid-template-columns: minmax(0, 1fr);
+      }}
+    }}
+
+    .journey-hidden-drop {{
+      min-width: 102px;
+      min-height: 34px;
+      display: inline-grid;
+      place-items: center;
+      padding: 0 12px;
+      border: 1px dashed rgba(255, 116, 116, 0.72);
+      border-radius: 7px;
+      background: rgba(129, 24, 24, 0.5);
+      color: #ffb0a8;
+      font-size: 0.8rem;
+      font-weight: 850;
+      cursor: copy;
+    }}
+
+    .journey-hidden-drop[hidden] {{
+      display: none;
+    }}
+
+    .journey-hidden-drop.drag-over {{
+      border-style: solid;
+      border-color: #ff7474;
+      background: rgba(180, 35, 35, 0.72);
+      color: #fff4ef;
+      box-shadow: 0 0 0 2px rgba(255, 116, 116, 0.2), 0 0 20px rgba(255, 60, 60, 0.28);
     }}
 
     .journey-message {{
@@ -4603,6 +5397,12 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       padding: 0 8px;
       color: #fff1cd;
       font-weight: 850;
+    }}
+
+    .journey-batch.completed .batch-name-input,
+    .journey-batch.unused .batch-name-input {{
+      display: flex;
+      align-items: center;
     }}
 
     .batch-level-control {{
@@ -5157,6 +5957,15 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       box-shadow: 0 2px 7px rgba(0, 0, 0, 0.58), 0 0 13px color-mix(in srgb, var(--quest-difficulty-color, #ffd34f) 60%, transparent);
     }}
 
+    .map-marker.available-pickup.selected {{
+      width: 36px;
+      min-width: 36px;
+      height: 36px;
+      border-width: 3px;
+      font-size: 1.2rem;
+      z-index: 45;
+    }}
+
     .map-marker.available-objective {{
       width: 8px;
       min-width: 8px;
@@ -5610,6 +6419,15 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       scrollbar-color: rgba(255, 255, 255, 0.24) transparent;
       scrollbar-width: thin;
       transition: background-color 120ms ease, box-shadow 120ms ease;
+    }}
+
+    .virtual-chain-spacer {{
+      width: 1px;
+      pointer-events: none;
+    }}
+
+    .virtual-chain-slot {{
+      min-width: 0;
     }}
 
     .chain-list.batch-drop-over {{
@@ -6495,23 +7313,14 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       font-weight: 720;
     }}
 
-    @media (max-width: 1900px) {{
-      header {{
-        grid-template-columns: minmax(0, 1fr);
-        align-items: start;
-      }}
-
-      .header-side {{
-        min-height: 40px;
-        padding-top: 6px;
-        border-top: 1px solid rgba(255, 235, 196, 0.12);
-      }}
-    }}
-
     @media (max-width: 1450px) {{
       .header-main {{
         display: grid;
         grid-template-columns: minmax(0, 1fr);
+      }}
+
+      .header-side {{
+        align-self: start;
       }}
 
       .normal-toolbar-controls {{
@@ -6574,6 +7383,28 @@ def render_classic_html(records, chains, zones, continents, npc_names):
         grid-template-columns: 1fr;
       }}
     }}
+
+    @media (max-width: 820px) {{
+      .settings-overlay,
+      .info-overlay {{
+        padding: 10px;
+      }}
+
+      .settings-dialog,
+      .info-dialog {{
+        width: calc(100vw - 20px);
+        max-height: calc(100vh - 20px);
+      }}
+
+      .settings-grid {{
+        grid-template-columns: 1fr;
+      }}
+
+      .settings-section + .settings-section {{
+        border-left: 0;
+        border-top: 1px solid rgba(255, 235, 196, 0.18);
+      }}
+    }}
   </style>
 </head>
 <body>
@@ -6613,19 +7444,14 @@ def render_classic_html(records, chains, zones, continents, npc_names):
             </div>
           </div>
           <div class="normal-toolbar-controls" id="normal-toolbar-controls">
-            <button type="button" class="profile-import-button" id="profile-import-button">
-              Import Profile <span class="filter-count" id="profile-import-count" hidden></span>
-            </button>
-            <input class="profile-import-input" id="profile-import-input" type="file" accept=".lua,.json,application/json,text/plain">
             <span class="toolbar-separator" aria-hidden="true"></span>
             <button type="button" id="world-button">World</button>
+            <select id="world-select" aria-label="World" hidden></select>
             <select id="zone-select" aria-label="Zone"></select>
-            <div class="display-filter-wrap" id="display-filter-wrap">
-              <button type="button" id="display-filter-button" class="display-filter-button" aria-expanded="false" aria-controls="display-filter-menu">
-                Show <span class="filter-count" id="display-filter-count"></span>
-              </button>
-              <div class="display-filter-menu" id="display-filter-menu" hidden></div>
-            </div>
+            <label class="map-quests-toggle active" id="map-quests-toggle">
+              <input type="checkbox" id="show-quests-on-map" checked>
+              <span>Show quests</span>
+            </label>
             <span class="toolbar-separator" aria-hidden="true"></span>
             <div class="main-filter-wrap" id="main-filter-wrap">
               <button type="button" id="main-filter-button" class="main-filter-button" aria-expanded="false" aria-controls="main-filter-menu">
@@ -6635,8 +7461,8 @@ def render_classic_html(records, chains, zones, continents, npc_names):
             </div>
             <div class="catalogue-toggle-wrap">
               <label class="catalogue-assigned-toggle" id="catalogue-assigned-toggle">
-                <input type="checkbox" id="show-assigned-catalogue">
-                <span>Show assigned quests</span>
+                <input type="checkbox" id="hide-assigned-catalogue">
+                <span>Hide assigned</span>
               </label>
             </div>
             <select id="level-filter" class="filter-select level-select" aria-label="Current level"></select>
@@ -6647,6 +7473,14 @@ def render_classic_html(records, chains, zones, continents, npc_names):
         <div class="inventory-mode-toggle" role="group" aria-label="Quest catalogue mode">
           <button type="button" class="active" id="inventory-search-mode" aria-pressed="true">Quest Search</button>
           <button type="button" id="inventory-batch-mode" aria-pressed="false">Batch Summary</button>
+        </div>
+        <div class="header-actions" aria-label="QuestiePlus information and settings">
+          <button type="button" class="header-icon-button" id="info-button" aria-label="About QuestiePlus" title="About QuestiePlus" aria-expanded="false" aria-controls="info-overlay">
+            <span class="info-button-glyph" aria-hidden="true">i</span>
+          </button>
+          <button type="button" class="header-icon-button settings-button" id="settings-button" aria-label="Settings" title="Settings" aria-expanded="false" aria-controls="settings-overlay">
+            <span class="settings-button-glyph" aria-hidden="true">&#9881;</span>
+          </button>
         </div>
       </div>
     </header>
@@ -6665,8 +7499,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
         </div>
         <div class="planner-panel" id="planner-panel" hidden>
           <form class="journey-setup" id="journey-setup">
-            <h2>Create a Journey</h2>
-            <p>Name the plan and lock in the character race and class before planning quests.</p>
+            <div class="settings-subsection-title">Open Existing Journey</div>
             <div class="journey-setup-actions">
               <button class="journey-import-button" id="journey-import-button" type="button">Import Journey</button>
               <button class="journey-load-button" id="journey-load-button" type="button">Load Journey</button>
@@ -6681,6 +7514,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
               </div>
             </div>
             <div class="journey-message" id="journey-setup-message" hidden></div>
+            <div class="settings-subsection-title">Create a New Journey</div>
             <div class="journey-setup-grid">
               <div class="journey-field full">
                 <label for="journey-name-input">Journey name</label>
@@ -6695,10 +7529,16 @@ def render_classic_html(records, chains, zones, continents, npc_names):
                 <select id="journey-class-select"></select>
               </div>
             </div>
-            <button class="journey-start-button" id="journey-start-button" type="submit" disabled>Start Journey</button>
+            <button class="journey-start-button" id="journey-start-button" type="submit" disabled>Create New Journey</button>
           </form>
+          <div class="planner-empty-state" id="planner-empty-state">
+            <strong>No Journey is open.</strong>
+            <span>Create, import, or load a Journey from Settings.</span>
+            <button type="button" id="planner-open-settings">Open Settings</button>
+          </div>
           <div class="journey-workspace" id="journey-workspace" hidden>
             <div class="journey-global-actions">
+              <div class="journey-hidden-drop" id="journey-hidden-drop" role="button" aria-label="Move dragged quests to Hidden" hidden>Hidden</div>
               <button class="journey-close-button" id="journey-close-button" type="button">Close Journey</button>
             </div>
             <div class="journey-head">
@@ -6706,7 +7546,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
                 <input class="journey-name-editor" id="journey-name-editor" type="text" aria-label="Journey name">
                 <button class="journey-save-button" id="journey-save-button" type="button">Save Journey</button>
                 <button class="journey-save-button" id="journey-copy-addon-button" type="button">Copy Addon String</button>
-                <span class="journey-character-summary" id="journey-character-summary"></span>
+                <button class="journey-save-button" id="journey-configure-button" type="button">Configure Journey</button>
               </div>
             </div>
             <div class="journey-message" id="journey-message" hidden></div>
@@ -6748,20 +7588,129 @@ def render_classic_html(records, chains, zones, continents, npc_names):
         </div>
       </aside>
     </section>
+    <div class="settings-overlay" id="settings-overlay" hidden>
+      <section class="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <div class="settings-dialog-head">
+          <h2 id="settings-title">QuestiePlus Settings</h2>
+          <button type="button" class="settings-close-button" id="settings-close-button" aria-label="Close Settings">x</button>
+        </div>
+        <div class="settings-grid">
+          <section class="settings-section">
+            <h3>Game Version</h3>
+            <p class="settings-section-copy">Choose the quest database shown in maps and search. Imported plans remain intact when versions differ.</p>
+            <div class="game-version-options" id="game-version-options">
+              <label class="game-version-option">
+                <input type="radio" name="game-version" value="era" checked>
+                <span><strong>Classic Era</strong><small>Original Vanilla quest progression.</small></span>
+              </label>
+              <label class="game-version-option">
+                <input type="radio" name="game-version" value="sod">
+                <span><strong>Season of Discovery</strong><small>Classic quests plus SoD-exclusive content.</small></span>
+              </label>
+              <label class="game-version-option">
+                <input type="radio" name="game-version" value="tbc">
+                <span><strong>The Burning Crusade</strong><small>TBC quests, level 70 progression, and Outland maps.</small></span>
+              </label>
+              <label class="game-version-option">
+                <input type="radio" name="game-version" value="wotlk">
+                <span><strong>Wrath of the Lich King</strong><small>Wrath quests, level 80 progression, and Northrend maps.</small></span>
+              </label>
+            </div>
+          </section>
+          <section class="settings-section settings-journey-host" id="settings-journey-host">
+            <h3>Journey</h3>
+            <p class="settings-section-copy">Journeys organize quests into ordered batches that can be planned here, shared as files or strings, and followed through the QuestiePlus addon.</p>
+            <div class="settings-status" id="journey-settings-status">No Journey is open.</div>
+            <div class="settings-loaded-actions">
+              <button type="button" class="journey-close-button" id="settings-journey-close-button" hidden>Close Journey</button>
+            </div>
+          </section>
+          <section class="settings-section">
+            <h3>Character Profile</h3>
+            <p class="settings-section-copy">Import the profile saved by the QuestiePlus addon to show completed quests and unlock Replay. Select the character profile Lua file from your WoW SavedVariables folder, or a JSON profile you exported previously.</p>
+            <div class="settings-status" id="profile-settings-status">No character profile imported.</div>
+            <div id="settings-profile-import-controls">
+              <div class="settings-subsection-title">Import a Character Profile</div>
+              <div class="settings-profile-actions">
+                <button type="button" class="profile-import-button journey-import-button" id="profile-import-button">Choose Profile File</button>
+                <input class="profile-import-input" id="profile-import-input" type="file" accept=".lua,.json,application/json,text/plain">
+              </div>
+            </div>
+            <div class="settings-loaded-actions">
+              <button type="button" class="journey-close-button" id="settings-profile-close-button" hidden>Close Character Profile</button>
+            </div>
+          </section>
+        </div>
+      </section>
+    </div>
+    <div class="journey-config-overlay" id="journey-config-overlay" hidden>
+      <section class="journey-config-dialog" role="dialog" aria-modal="true" aria-labelledby="journey-config-title">
+        <div class="settings-dialog-head">
+          <h2 id="journey-config-title">Configure Journey</h2>
+          <button type="button" class="settings-close-button" id="journey-config-close-button" aria-label="Close Configure Journey">x</button>
+        </div>
+        <div class="journey-config-body">
+          <p>These settings determine which quests suit the Journey and are included whenever it is saved or exported.</p>
+          <div class="journey-metadata-controls" aria-label="Journey game and character settings">
+            <label class="journey-metadata-control version"><span>Version</span><select id="journey-version-editor" aria-label="Journey game version"></select></label>
+            <label class="journey-metadata-control"><span>Faction</span><select id="journey-faction-editor" aria-label="Journey faction"></select></label>
+            <label class="journey-metadata-control"><span>Race</span><select id="journey-race-editor" aria-label="Journey race"></select></label>
+            <label class="journey-metadata-control"><span>Class</span><select id="journey-class-editor" aria-label="Journey class"></select></label>
+          </div>
+        </div>
+      </section>
+    </div>
+    <div class="info-overlay" id="info-overlay" hidden>
+      <section class="info-dialog" role="dialog" aria-modal="true" aria-labelledby="info-title">
+        <div class="settings-dialog-head">
+          <h2 id="info-title">About QuestiePlus</h2>
+          <button type="button" class="settings-close-button" id="info-close-button" aria-label="Close About QuestiePlus">x</button>
+        </div>
+        <div class="info-dialog-body">
+          <section>
+            <h3>What QuestiePlus Is</h3>
+            <p>QuestiePlus is a planning companion for Classic World of Warcraft across Classic Era, Season of Discovery, The Burning Crusade, and Wrath of the Lich King. It combines a geographic quest browser, a Journey planner for grouping quests into practical batches, an in-game Journey tracker, and a Replay view built from your character's recorded progress.</p>
+          </section>
+          <section>
+            <h3>How To Use It</h3>
+            <p>Choose your game version in Settings, then create or load a Journey. Search and filter the quest catalogue, inspect quest locations on the map, and drag quests into Planner batches in the order you want to complete them.</p>
+            <p>Copy the addon string to use that Journey in game. Import a QuestiePlus character profile to recognize completed quests and replay recorded pickups, objectives, hand-ins, kills, deaths, and levels.</p>
+          </section>
+          <section>
+            <h3>Acknowledgements</h3>
+            <p>QuestiePlus is built on quest data and conventions from <a href="https://github.com/Questie/Questie" target="_blank" rel="noopener noreferrer">Questie</a>. Deep thanks to the Questie team and its contributors for maintaining the database and addon that make this project possible.</p>
+            <p>World of Warcraft and its related assets are trademarks of Blizzard Entertainment. QuestiePlus is an independent community project and is not affiliated with Blizzard Entertainment or the Questie team.</p>
+          </section>
+        </div>
+      </section>
+    </div>
   </main>
   <script>
     const DATA = {payload};
     const QUEST_TYPE_FILTERS = DATA.questTypeFilters;
+    const GAME_VERSIONS = [
+      {{ id: "era", label: "Classic Era" }},
+      {{ id: "sod", label: "Season of Discovery" }},
+      {{ id: "tbc", label: "The Burning Crusade" }},
+      {{ id: "wotlk", label: "Wrath of the Lich King" }},
+    ];
+    const JOURNEY_FACTIONS = [
+      {{ id: "all", label: "All factions" }},
+      {{ id: "Alliance", label: "Alliance" }},
+      {{ id: "Horde", label: "Horde" }},
+    ];
     const RACES = [
       {{ label: "All races", mask: null, color: "#fff0ce" }},
       {{ label: "Human", mask: 1, faction: "Alliance", color: "#5aa9ff" }},
       {{ label: "Dwarf", mask: 4, faction: "Alliance", color: "#5aa9ff" }},
       {{ label: "Night Elf", mask: 8, faction: "Alliance", color: "#5aa9ff" }},
       {{ label: "Gnome", mask: 64, faction: "Alliance", color: "#5aa9ff" }},
+      {{ label: "Draenei", mask: 1024, faction: "Alliance", color: "#5aa9ff", versions: ["tbc", "wotlk"] }},
       {{ label: "Orc", mask: 2, faction: "Horde", color: "#ff6b5f" }},
       {{ label: "Undead", mask: 16, faction: "Horde", color: "#ff6b5f" }},
       {{ label: "Tauren", mask: 32, faction: "Horde", color: "#ff6b5f" }},
       {{ label: "Troll", mask: 128, faction: "Horde", color: "#ff6b5f" }},
+      {{ label: "Blood Elf", mask: 512, faction: "Horde", color: "#ff6b5f", versions: ["tbc", "wotlk"] }},
     ];
     const CLASSES = [
       {{ label: "All classes", mask: null, color: "#fff0ce" }},
@@ -6774,6 +7723,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       {{ label: "Mage", mask: 128, color: "#69CCF0" }},
       {{ label: "Warlock", mask: 256, color: "#9482C9" }},
       {{ label: "Druid", mask: 1024, color: "#FF7D0A" }},
+      {{ label: "Death Knight", mask: 32, color: "#C41E3A", versions: ["wotlk"] }},
     ];
     const UNKNOWN_ZONE_ID = 0;
     const REPLAY_EVENT_TYPES = {{
@@ -6803,53 +7753,68 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       useCurrentMapZone: true,
     }};
     const DISPLAY_FILTERS = [
-      {{ id: "available-pickups", label: "Pickups", defaultEnabled: true }},
-      {{ id: "quest-objectives", label: "Objectives", defaultEnabled: false }},
-      {{ id: "quest-handins", label: "Hand ins", defaultEnabled: false }},
+      {{ id: "available-pickups", label: "Quest pickups", defaultEnabled: true }},
     ];
     const displayFilters = new Set(DISPLAY_FILTERS.filter((filter) => filter.defaultEnabled).map((filter) => filter.id));
-    const CATALOGUE_SHOW_ASSIGNED_OPTION = "show-assigned";
-    const catalogueOptions = new Set();
-    const questsById = new Map(DATA.quests.map((quest) => [quest.id, quest]));
-    const zonesById = new Map(DATA.zones.map((zone) => [zone.id, zone]));
-    const zonesByName = new Map(DATA.zones.map((zone) => [zone.name, zone]));
-    const zonesByUiMapId = new Map(DATA.zones.filter((zone) => zone.uiMapId != null).map((zone) => [Number(zone.uiMapId), zone]));
-    const continentsById = new Map(DATA.continents.map((continent) => [Number(continent.id), continent]));
-    const npcNamesById = new Map(Object.entries(DATA.npcNames || {{}}).map(([npcId, name]) => [Number(npcId), name]));
-    const chainsById = new Map(DATA.chains.map((chain) => [chain.id, {{ ...chain, quests: [] }}]));
-    DATA.quests.forEach((quest) => {{
-      if (!chainsById.has(quest.chainId)) {{
-        chainsById.set(quest.chainId, {{
-          id: quest.chainId,
-          name: quest.chainName,
-          color: quest.chainColor,
-          count: 0,
-          quests: [],
-        }});
-      }}
-      chainsById.get(quest.chainId).quests.push(quest);
-    }});
-    chainsById.forEach((chain) => {{
-      chain.quests.sort((a, b) => a.chainStep - b.chainStep || a.requiredLevel - b.requiredLevel || a.id - b.id);
-      chain.firstQuest = chain.quests[0];
-      chain.startLevel = chain.firstQuest?.requiredLevel ?? 0;
-    }});
+    const CATALOGUE_HIDE_ASSIGNED_OPTION = "hide-assigned";
+    const catalogueOptions = new Set([CATALOGUE_HIDE_ASSIGNED_OPTION]);
+    let ACTIVE_DATA = DATA.versions.classic;
+    let questsById = new Map();
+    let zonesById = new Map();
+    let zonesByName = new Map();
+    let zonesByUiMapId = new Map();
+    let continentsById = new Map();
+    let npcNamesById = new Map();
+    let chainsById = new Map();
+
+    function rebuildActiveIndexes() {{
+      questsById = new Map(ACTIVE_DATA.quests.map((quest) => [quest.id, quest]));
+      zonesById = new Map(ACTIVE_DATA.zones.map((zone) => [zone.id, zone]));
+      zonesByName = new Map(ACTIVE_DATA.zones.map((zone) => [zone.name, zone]));
+      zonesByUiMapId = new Map(ACTIVE_DATA.zones.filter((zone) => zone.uiMapId != null).map((zone) => [Number(zone.uiMapId), zone]));
+      continentsById = new Map(ACTIVE_DATA.continents.map((continent) => [Number(continent.id), continent]));
+      npcNamesById = new Map(Object.entries(ACTIVE_DATA.npcNames || {{}}).map(([npcId, name]) => [Number(npcId), name]));
+      chainsById = new Map(ACTIVE_DATA.chains.map((chain) => [chain.id, {{ ...chain, quests: [] }}]));
+      ACTIVE_DATA.quests.forEach((quest) => {{
+        if (!chainsById.has(quest.chainId)) {{
+          chainsById.set(quest.chainId, {{ id: quest.chainId, name: quest.chainName, color: quest.chainColor, count: 0, quests: [] }});
+        }}
+        chainsById.get(quest.chainId).quests.push(quest);
+      }});
+      chainsById.forEach((chain) => {{
+        chain.quests.sort((a, b) => a.chainStep - b.chainStep || a.requiredLevel - b.requiredLevel || a.id - b.id);
+        chain.firstQuest = chain.quests[0];
+        chain.startLevel = chain.firstQuest?.requiredLevel ?? 0;
+      }});
+    }}
+    rebuildActiveIndexes();
 
     const worldButton = document.querySelector("#world-button");
+    const worldSelect = document.querySelector("#world-select");
     const zoneSelect = document.querySelector("#zone-select");
     const levelFilter = document.querySelector("#level-filter");
     const mainFilterWrap = document.querySelector("#main-filter-wrap");
     const mainFilterButton = document.querySelector("#main-filter-button");
     const mainFilterMenu = document.querySelector("#main-filter-menu");
-    const displayFilterWrap = document.querySelector("#display-filter-wrap");
-    const displayFilterButton = document.querySelector("#display-filter-button");
-    const displayFilterCount = document.querySelector("#display-filter-count");
-    const displayFilterMenu = document.querySelector("#display-filter-menu");
+    const mapQuestsToggle = document.querySelector("#map-quests-toggle");
+    const showQuestsOnMapCheckbox = document.querySelector("#show-quests-on-map");
     const catalogueAssignedToggle = document.querySelector("#catalogue-assigned-toggle");
-    const showAssignedCatalogueCheckbox = document.querySelector("#show-assigned-catalogue");
+    const hideAssignedCatalogueCheckbox = document.querySelector("#hide-assigned-catalogue");
     const profileImportButton = document.querySelector("#profile-import-button");
     const profileImportInput = document.querySelector("#profile-import-input");
-    const profileImportCount = document.querySelector("#profile-import-count");
+    const settingsButton = document.querySelector("#settings-button");
+    const settingsOverlay = document.querySelector("#settings-overlay");
+    const settingsCloseButton = document.querySelector("#settings-close-button");
+    const infoButton = document.querySelector("#info-button");
+    const infoOverlay = document.querySelector("#info-overlay");
+    const infoCloseButton = document.querySelector("#info-close-button");
+    const settingsJourneyHost = document.querySelector("#settings-journey-host");
+    const journeySettingsStatus = document.querySelector("#journey-settings-status");
+    const settingsJourneyCloseButton = document.querySelector("#settings-journey-close-button");
+    const gameVersionOptions = document.querySelector("#game-version-options");
+    const profileSettingsStatus = document.querySelector("#profile-settings-status");
+    const settingsProfileImportControls = document.querySelector("#settings-profile-import-controls");
+    const settingsProfileCloseButton = document.querySelector("#settings-profile-close-button");
     const batchNavigator = document.querySelector("#batch-navigator");
     const batchNavPrev = document.querySelector("#batch-nav-prev");
     const batchNavNext = document.querySelector("#batch-nav-next");
@@ -6874,12 +7839,21 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     const mapModePanel = document.querySelector("#map-mode-panel");
     const plannerPanel = document.querySelector("#planner-panel");
     const journeySetup = document.querySelector("#journey-setup");
+    const plannerEmptyState = document.querySelector("#planner-empty-state");
+    const plannerOpenSettingsButton = document.querySelector("#planner-open-settings");
     const journeyNameInput = document.querySelector("#journey-name-input");
     const journeyRaceSelect = document.querySelector("#journey-race-select");
     const journeyClassSelect = document.querySelector("#journey-class-select");
     const journeyStartButton = document.querySelector("#journey-start-button");
     const journeyWorkspace = document.querySelector("#journey-workspace");
     const journeyNameEditor = document.querySelector("#journey-name-editor");
+    const journeyConfigureButton = document.querySelector("#journey-configure-button");
+    const journeyConfigOverlay = document.querySelector("#journey-config-overlay");
+    const journeyConfigCloseButton = document.querySelector("#journey-config-close-button");
+    const journeyVersionEditor = document.querySelector("#journey-version-editor");
+    const journeyFactionEditor = document.querySelector("#journey-faction-editor");
+    const journeyRaceEditor = document.querySelector("#journey-race-editor");
+    const journeyClassEditor = document.querySelector("#journey-class-editor");
     const journeySaveButton = document.querySelector("#journey-save-button");
     const journeyCopyAddonButton = document.querySelector("#journey-copy-addon-button");
     const journeyCloseButton = document.querySelector("#journey-close-button");
@@ -6890,7 +7864,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     const journeyStringInput = document.querySelector("#journey-string-input");
     const journeyStringSubmit = document.querySelector("#journey-string-submit");
     const journeyStringCancel = document.querySelector("#journey-string-cancel");
-    const journeyCharacterSummary = document.querySelector("#journey-character-summary");
+    const journeyHiddenDrop = document.querySelector("#journey-hidden-drop");
     const journeySetupMessage = document.querySelector("#journey-setup-message");
     const journeyMessage = document.querySelector("#journey-message");
     const plannerBoard = document.querySelector("#planner-board");
@@ -6919,7 +7893,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     const expandAllChainsButton = document.querySelector("#expand-all-chains");
     const details = document.querySelector("#details");
 
-    let currentView = {{ type: "world", zoneId: null }};
+    let currentView = {{ type: "world", zoneId: null, worldId: "azeroth" }};
     let currentAppMode = "map";
     let activeId = null;
     let selectedId = null;
@@ -6938,6 +7912,11 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     let questSearchContextChainId = null;
     const inventoryScrollTop = {{ search: 0, batch: 0 }};
     const inventorySearchValues = {{ search: "", batch: "" }};
+    const inventoryVirtualHeights = new Map();
+    let inventoryVirtualLayout = null;
+    let inventoryVirtualFrame = 0;
+    let inventoryVirtualScrollFrame = 0;
+    let currentGameVersion = "era";
     let activeJourney = null;
     let journeyBatchCounter = 0;
     let selectedBatchId = null;
@@ -7031,6 +8010,118 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       }});
     }}
 
+    function normalizeGameVersion(value) {{
+      const normalized = String(value || "").trim().toLowerCase();
+      if (["tbc", "burning-crusade", "the burning crusade", "burning crusade"].includes(normalized)) return "tbc";
+      if (["wotlk", "wrath", "wrath-of-the-lich-king", "wrath of the lich king"].includes(normalized)) return "wotlk";
+      return normalized === "sod" || normalized === "season-of-discovery" || normalized === "season of discovery"
+        ? "sod"
+        : "era";
+    }}
+
+    function gameVersionLabel(value) {{
+      const id = normalizeGameVersion(value);
+      return GAME_VERSIONS.find((version) => version.id === id)?.label || "Classic Era";
+    }}
+
+    function questPassesGameVersion(quest) {{
+      const versions = Array.isArray(quest?.gameVersions) && quest.gameVersions.length
+        ? quest.gameVersions.map(normalizeGameVersion)
+        : ["era", "sod"];
+      return versions.includes(currentGameVersion);
+    }}
+
+    function updateSettingsStatus() {{
+      gameVersionOptions.querySelectorAll('input[name="game-version"]').forEach((input) => {{
+        input.checked = input.value === currentGameVersion;
+      }});
+      journeySettingsStatus.textContent = activeJourney
+        ? `${{activeJourney.name}} - ${{gameVersionLabel(activeJourney.gameVersion)}} - ${{activeJourney.batches.length}} batch${{activeJourney.batches.length === 1 ? "" : "es"}}`
+        : "No Journey is open.";
+      journeySetup.hidden = Boolean(activeJourney);
+      settingsJourneyCloseButton.hidden = !activeJourney;
+      settingsProfileImportControls.hidden = Boolean(activeCharacterProfile);
+      settingsProfileCloseButton.hidden = !activeCharacterProfile;
+      if (!activeCharacterProfile) {{
+        profileSettingsStatus.textContent = "No character profile imported.";
+        return;
+      }}
+      const character = activeCharacterProfile.character || {{}};
+      const identity = [character.name, character.realm].filter(Boolean).join(" - ") || "Imported character";
+      profileSettingsStatus.textContent = `${{identity}} - ${{gameVersionLabel(activeCharacterProfile.gameVersion)}} - ${{activeCharacterProfile.completedQuestIds.length}} completed quests - ${{activeCharacterProfile.events.length}} replay events`;
+    }}
+
+    function setSettingsOpen(open) {{
+      if (open) {{
+        infoOverlay.hidden = true;
+        infoButton.setAttribute("aria-expanded", "false");
+        journeyConfigOverlay.hidden = true;
+      }}
+      settingsOverlay.hidden = !open;
+      settingsButton.setAttribute("aria-expanded", String(open));
+      if (open) {{
+        setMainFilterMenuOpen(false);
+        updateSettingsStatus();
+        requestAnimationFrame(() => settingsCloseButton.focus());
+      }} else {{
+        settingsButton.focus({{ preventScroll: true }});
+      }}
+    }}
+
+    function setJourneyConfigOpen(open) {{
+      const shouldOpen = Boolean(open && activeJourney);
+      if (shouldOpen) {{
+        settingsOverlay.hidden = true;
+        settingsButton.setAttribute("aria-expanded", "false");
+        infoOverlay.hidden = true;
+        infoButton.setAttribute("aria-expanded", "false");
+        syncJourneyMetadataControls();
+      }}
+      journeyConfigOverlay.hidden = !shouldOpen;
+      if (shouldOpen) requestAnimationFrame(() => journeyConfigCloseButton.focus());
+      else if (activeJourney) journeyConfigureButton.focus({{ preventScroll: true }});
+    }}
+
+    function setInfoOpen(open) {{
+      if (open) {{
+        settingsOverlay.hidden = true;
+        settingsButton.setAttribute("aria-expanded", "false");
+        journeyConfigOverlay.hidden = true;
+      }}
+      infoOverlay.hidden = !open;
+      infoButton.setAttribute("aria-expanded", String(open));
+      if (open) {{
+        setMainFilterMenuOpen(false);
+        requestAnimationFrame(() => infoCloseButton.focus());
+      }} else {{
+        infoButton.focus({{ preventScroll: true }});
+      }}
+    }}
+
+    function setGameVersion(value) {{
+      const nextVersion = normalizeGameVersion(value);
+      if (currentGameVersion === nextVersion) return;
+      currentGameVersion = nextVersion;
+      ACTIVE_DATA = DATA.versions[nextVersion] || DATA.versions.classic;
+      rebuildActiveIndexes();
+      const validWorldIds = new Set((ACTIVE_DATA.worldGroups || []).map((group) => group.id));
+      if (!validWorldIds.has(currentView.worldId)) currentView = {{ type: "world", zoneId: null, worldId: "azeroth" }};
+      if (currentView.type === "zone" && !zonesById.has(Number(currentView.zoneId))) currentView = {{ type: "world", zoneId: null, worldId: "azeroth" }};
+      questSearchContextChainId = null;
+      batchSummaryContextChainId = null;
+      filters.zoneIds = new Set();
+      filters.raceMasks = new Set(journeyRaceOptions().map((race) => race.mask));
+      populateWorldSelect();
+      populateZoneSelect();
+      populateFilters();
+      populateJourneySetupControls();
+      renderWorldTiles();
+      populateMainFilterMenu();
+      renderJourney();
+      renderCurrentView({{ scrollTargetChainToTop: true }});
+      updateSettingsStatus();
+    }}
+
     function setAppMode(mode) {{
       const previousMode = currentAppMode;
       const normalized = mode === "planner" ? "planner" : mode === "replay" ? "replay" : "map";
@@ -7087,7 +8178,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       inventorySearchWrap.hidden = false;
       questSearch.placeholder = isBatchSummary ? "Search batch" : "Search quests";
       questSearch.setAttribute("aria-label", isBatchSummary ? "Search batch" : "Search quests");
-      catalogueAssignedToggle.hidden = currentAppMode === "replay";
+      catalogueAssignedToggle.hidden = currentAppMode === "replay" || !activeJourney;
       mainFilterWrap.hidden = currentAppMode === "replay";
       if (!isBatchSummary) clearBatchSummaryDragTarget();
     }}
@@ -7108,11 +8199,34 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     }}
 
     function journeyRaceOptions() {{
-      return RACES.filter((race) => race.mask != null);
+      return RACES.filter((race) => race.mask != null && (!race.versions || race.versions.includes(currentGameVersion)));
     }}
 
     function journeyClassOptions() {{
-      return CLASSES.filter((klass) => klass.mask != null);
+      return CLASSES.filter((klass) => klass.mask != null && (!klass.versions || klass.versions.includes(currentGameVersion)));
+    }}
+
+    function allJourneyRaceOption() {{
+      return {{ label: "All races", mask: 0, faction: null, color: "#fff0ce" }};
+    }}
+
+    function allJourneyClassOption() {{
+      return {{ label: "All classes", mask: 0, color: "#fff0ce" }};
+    }}
+
+    function journeyRaceEditorOptions() {{
+      return [allJourneyRaceOption(), ...journeyRaceOptions()];
+    }}
+
+    function journeyClassEditorOptions() {{
+      return [allJourneyClassOption(), ...journeyClassOptions()];
+    }}
+
+    function normalizeJourneyFaction(value, race = null) {{
+      const text = String(value || "").trim().toLowerCase();
+      if (text === "alliance") return "Alliance";
+      if (text === "horde") return "Horde";
+      return race?.faction || "all";
     }}
 
     function populateJourneySetupControls() {{
@@ -7120,6 +8234,18 @@ def render_classic_html(records, chains, zones, continents, npc_names):
         <option value="${{race.mask}}" style="color:${{race.color}}">${{escapeHtml(race.label)}}</option>
       `).join("");
       journeyClassSelect.innerHTML = '<option value="">Select class</option>' + journeyClassOptions().map((klass) => `
+        <option value="${{klass.mask}}" style="color:${{klass.color}}">${{escapeHtml(klass.label)}}</option>
+      `).join("");
+      journeyVersionEditor.innerHTML = GAME_VERSIONS.map((version) => `
+        <option value="${{version.id}}">${{escapeHtml(version.label)}}</option>
+      `).join("");
+      journeyFactionEditor.innerHTML = JOURNEY_FACTIONS.map((faction) => `
+        <option value="${{faction.id}}">${{escapeHtml(faction.label)}}</option>
+      `).join("");
+      journeyRaceEditor.innerHTML = journeyRaceEditorOptions().map((race) => `
+        <option value="${{race.mask}}" style="color:${{race.color}}">${{escapeHtml(race.label)}}</option>
+      `).join("");
+      journeyClassEditor.innerHTML = journeyClassEditorOptions().map((klass) => `
         <option value="${{klass.mask}}" style="color:${{klass.color}}">${{escapeHtml(klass.label)}}</option>
       `).join("");
       updateJourneyStartButton();
@@ -7143,18 +8269,61 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     }}
 
     function selectedJourneyRace() {{
-      return journeyRaceOptions().find((race) => String(race.mask) === String(activeJourney?.raceMask));
+      return journeyRaceEditorOptions().find((race) => String(race.mask) === String(activeJourney?.raceMask));
     }}
 
     function selectedJourneyClass() {{
-      return journeyClassOptions().find((klass) => String(klass.mask) === String(activeJourney?.classMask));
+      return journeyClassEditorOptions().find((klass) => String(klass.mask) === String(activeJourney?.classMask));
     }}
 
-    function applyJourneyIdentityToFilters(race, klass) {{
-      if (race?.faction) filters.factions = new Set([race.faction]);
-      if (race?.mask != null) filters.raceMasks = new Set([race.mask]);
-      if (klass?.mask != null) filters.classMasks = new Set([klass.mask]);
+    function applyJourneyIdentityToFilters(race, klass, faction = activeJourney?.faction) {{
+      filters.factions = faction === "Alliance" || faction === "Horde"
+        ? new Set([faction])
+        : new Set(["Alliance", "Horde"]);
+      filters.raceMasks = race?.mask
+        ? new Set([race.mask])
+        : new Set(journeyRaceOptions().map((item) => item.mask));
+      filters.classMasks = klass?.mask
+        ? new Set([klass.mask])
+        : new Set(journeyClassOptions().map((item) => item.mask));
       populateMainFilterMenu();
+    }}
+
+    function syncJourneyMetadataControls() {{
+      if (!activeJourney) return;
+      journeyVersionEditor.value = normalizeGameVersion(activeJourney.gameVersion);
+      journeyFactionEditor.value = normalizeJourneyFaction(activeJourney.faction, selectedJourneyRace());
+      journeyRaceEditor.value = String(Number(activeJourney.raceMask) || 0);
+      journeyClassEditor.value = String(Number(activeJourney.classMask) || 0);
+    }}
+
+    function updateJourneyMetadata(kind) {{
+      if (!activeJourney) return;
+      if (kind === "version") {{
+        activeJourney.gameVersion = normalizeGameVersion(journeyVersionEditor.value);
+      }} else if (kind === "faction") {{
+        activeJourney.faction = normalizeJourneyFaction(journeyFactionEditor.value);
+        const race = selectedJourneyRace();
+        if (race?.faction && race.faction !== activeJourney.faction) {{
+          activeJourney.race = "All races";
+          activeJourney.raceMask = 0;
+        }}
+      }} else if (kind === "race") {{
+        const race = journeyRaceEditorOptions().find((item) => String(item.mask) === journeyRaceEditor.value) || allJourneyRaceOption();
+        activeJourney.race = race.label;
+        activeJourney.raceMask = race.mask;
+        if (race.faction) activeJourney.faction = race.faction;
+      }} else if (kind === "class") {{
+        const klass = journeyClassEditorOptions().find((item) => String(item.mask) === journeyClassEditor.value) || allJourneyClassOption();
+        activeJourney.class = klass.label;
+        activeJourney.classMask = klass.mask;
+      }}
+      const race = selectedJourneyRace() || allJourneyRaceOption();
+      const klass = selectedJourneyClass() || allJourneyClassOption();
+      applyJourneyIdentityToFilters(race, klass, activeJourney.faction);
+      updateFiltersFromControls();
+      renderJourney();
+      renderCurrentView({{ scrollTargetChainToTop: true }});
     }}
 
     function createJourneyFromSetup() {{
@@ -7165,6 +8334,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       journeyBatchCounter = 0;
       activeJourney = {{
         schemaVersion: 1,
+        gameVersion: currentGameVersion,
         id: slugify(name) || `journey-${{Date.now().toString(36)}}`,
         name,
         race: race.label,
@@ -7187,6 +8357,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       updateFiltersFromControls();
       renderJourney();
       showJourneyMessage("Journey created. Drag quests into Batch 1 to begin.", "ok");
+      setSettingsOpen(false);
     }}
 
     function slugify(value) {{
@@ -7208,7 +8379,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     function cloneUnusedQuestIds(ids = activeJourney?.unusedQuestIds || []) {{
       return [...new Set((ids || [])
         .map((id) => Number(id))
-        .filter((id) => Number.isFinite(id) && questsById.has(id)))];
+        .filter((id) => Number.isFinite(id) && id > 0))];
     }}
 
     function cloneJourneyForUndo(journey = activeJourney) {{
@@ -7257,7 +8428,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     function sortedBatchQuestIds(questIds = []) {{
       const ids = [...new Set((questIds || [])
         .map((id) => Number(id))
-        .filter((id) => Number.isFinite(id) && questsById.has(id)))];
+        .filter((id) => Number.isFinite(id) && id > 0))];
       const idSet = new Set(ids);
       const chainIds = new Set(ids
         .map((id) => questsById.get(id)?.chainId)
@@ -7295,13 +8466,14 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     }}
 
     function computedBatchExpectedLevel(batch) {{
+      const maxLevel = ACTIVE_DATA.maxLevel || 60;
       const override = Number(batch?.expectedLevelOverride);
-      if (Number.isFinite(override) && override > 0) return Math.max(1, Math.min(60, Math.round(override)));
+      if (Number.isFinite(override) && override > 0) return Math.max(1, Math.min(maxLevel, Math.round(override)));
       const levels = batchQuests(batch)
         .map((quest) => Number(quest.questLevel ?? quest.requiredLevel))
         .filter((level) => Number.isFinite(level) && level > 0);
       if (!levels.length) return null;
-      return Math.max(1, Math.min(60, Math.round(levels.reduce((sum, level) => sum + level, 0) / levels.length)));
+      return Math.max(1, Math.min(maxLevel, Math.round(levels.reduce((sum, level) => sum + level, 0) / levels.length)));
     }}
 
     function batchZoneNames(batch) {{
@@ -7322,7 +8494,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     function normalizeExpectedLevel(value) {{
       const level = Number(value);
       if (!Number.isFinite(level) || level <= 0) return null;
-      return Math.max(1, Math.min(60, Math.round(level)));
+      return Math.max(1, Math.min(ACTIVE_DATA.maxLevel || 60, Math.round(level)));
     }}
 
     function looksLikeAutoBatchName(value) {{
@@ -7422,11 +8594,12 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     function questAllowedForJourney(quest) {{
       if (!activeJourney) return {{ ok: false, message: "Create a Journey before adding quests." }};
       if (!quest) return {{ ok: false, message: "Unknown quest." }};
-      if (quest.requiredRaceMask && !(quest.requiredRaceMask & activeJourney.raceMask)) {{
-        return {{ ok: false, message: `${{quest.name}} is not available to a ${{activeJourney.race}}.` }};
+      const journeyRaceMask = Number(activeJourney.raceMask) || (activeJourney.faction === "Alliance" ? 77 : activeJourney.faction === "Horde" ? 178 : 255);
+      if (quest.requiredRaceMask && !(quest.requiredRaceMask & journeyRaceMask)) {{
+        return {{ ok: false, message: `${{quest.name}} is not available to the selected Journey character settings.` }};
       }}
-      if (quest.requiredClassMask && !(quest.requiredClassMask & activeJourney.classMask)) {{
-        return {{ ok: false, message: `${{quest.name}} is not available to a ${{activeJourney.class}}.` }};
+      if (quest.requiredClassMask && activeJourney.classMask && !(quest.requiredClassMask & activeJourney.classMask)) {{
+        return {{ ok: false, message: `${{quest.name}} is not available to the selected Journey class.` }};
       }}
       return {{ ok: true }};
     }}
@@ -7463,7 +8636,14 @@ def render_classic_html(records, chains, zones, continents, npc_names):
         batch.questIds.forEach((questId) => availableIds.add(Number(questId)));
         for (const questId of batch.questIds) {{
           const quest = questsById.get(Number(questId));
-          if (!quest) continue;
+          if (!quest) {{
+            warnings.set(Number(questId), `Quest #${{questId}} is not present in this QuestiePlus database.`);
+            continue;
+          }}
+          if (!questPassesGameVersion(quest)) {{
+            warnings.set(Number(questId), `${{quest.name}} is not available in ${{gameVersionLabel(currentGameVersion)}}.`);
+            continue;
+          }}
           const message = questPrerequisiteFailure(quest, availableIds);
           if (message) warnings.set(Number(questId), message);
         }}
@@ -7488,7 +8668,10 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       for (let index = 0; index < batches.length; index += 1) {{
         for (const questId of batches[index].questIds) {{
           const quest = questsById.get(Number(questId));
-          if (!quest) return {{ ok: false, message: `Unknown quest #${{questId}} in Batch ${{index + 1}}.` }};
+          if (!quest) {{
+            if (options.allowUnknown === true) continue;
+            return {{ ok: false, message: `Unknown quest #${{questId}} in Batch ${{index + 1}}.` }};
+          }}
           const availability = questAllowedForJourney(quest);
           if (!availability.ok) return availability;
         }}
@@ -7511,10 +8694,15 @@ def render_classic_html(records, chains, zones, continents, npc_names):
 
     function renderJourney() {{
       const hasJourney = Boolean(activeJourney);
+      updateJourneyDependentControls();
+      updateSettingsStatus();
+      journeyStartButton.textContent = "Create New Journey";
       journeySetup.hidden = hasJourney;
+      plannerEmptyState.hidden = hasJourney;
       journeyWorkspace.hidden = !hasJourney;
       journeySaveButton.disabled = !hasJourney;
       journeyCopyAddonButton.disabled = !hasJourney;
+      journeyConfigureButton.disabled = !hasJourney;
       journeyCloseButton.disabled = !hasJourney;
       journeyImportButton.disabled = false;
       updateBatchNavigator();
@@ -7525,9 +8713,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       sortJourneyBatchQuestIds(activeJourney.batches);
       renumberNumericBatches(activeJourney.batches);
       journeyNameEditor.value = activeJourney.name;
-      const race = selectedJourneyRace();
-      const klass = selectedJourneyClass();
-      journeyCharacterSummary.textContent = [race?.label, klass?.label].filter(Boolean).join(" ");
+      syncJourneyMetadataControls();
       plannerBoard.innerHTML = "";
       if (activeCharacterProfile) plannerBoard.append(createCompletedColumnElement());
       const prerequisiteWarnings = journeyPrerequisiteWarnings(activeJourney.batches);
@@ -7552,7 +8738,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
             <input class="batch-name-input" value="${{escapeHtml(batch.name || String(index + 1))}}" aria-label="Batch ${{index + 1}} name">
             <label class="batch-level-control">
               <span>Lv</span>
-              <input class="batch-level-input" type="number" min="1" max="60" value="${{expectedLevel ?? ""}}" placeholder="-" aria-label="Batch ${{index + 1}} expected level">
+              <input class="batch-level-input" type="number" min="1" max="${{ACTIVE_DATA.maxLevel || 60}}" value="${{expectedLevel ?? ""}}" placeholder="-" aria-label="Batch ${{index + 1}} expected level">
             </label>
             <button class="batch-delete-button" type="button" data-batch-id="${{escapeHtml(batch.id)}}" aria-label="Delete batch ${{index + 1}}">x</button>
           </div>
@@ -7589,8 +8775,8 @@ def render_classic_html(records, chains, zones, continents, npc_names):
         drop.append(empty);
       }} else {{
         batch.questIds.forEach((questId) => {{
-          const quest = questsById.get(Number(questId));
-          if (quest) drop.append(createJourneyQuestElement(quest, batch.id, {{
+          const quest = questsById.get(Number(questId)) || journeyPlaceholderQuest(questId);
+          drop.append(createJourneyQuestElement(quest, batch.id, {{
             prerequisiteWarning: prerequisiteWarnings.get(Number(questId)) || "",
           }}));
         }});
@@ -7673,8 +8859,13 @@ def render_classic_html(records, chains, zones, continents, npc_names):
         drop.append(empty);
       }} else {{
         unusedIds.forEach((questId) => {{
-          const quest = questsById.get(Number(questId));
-          if (quest) drop.append(createJourneyQuestElement(quest, "hidden", {{ hidden: true }}));
+          const quest = questsById.get(Number(questId)) || journeyPlaceholderQuest(questId);
+          const warning = !questsById.has(Number(questId))
+            ? `Quest #${{questId}} is not present in this QuestiePlus database.`
+            : !questPassesGameVersion(quest)
+              ? `${{quest.name}} is not available in ${{gameVersionLabel(currentGameVersion)}}.`
+              : "";
+          drop.append(createJourneyQuestElement(quest, "hidden", {{ hidden: true, prerequisiteWarning: warning }}));
         }});
       }}
       return batchEl;
@@ -7716,6 +8907,20 @@ def render_classic_html(records, chains, zones, continents, npc_names):
           : `<button class="journey-quest-remove" type="button" aria-label="Remove ${{escapeHtml(quest.name)}} from Journey">x</button>`}}
       `;
       return item;
+    }}
+
+    function journeyPlaceholderQuest(questId) {{
+      return {{
+        id: Number(questId),
+        name: `Quest #${{questId}}`,
+        chainStep: "?",
+        chainColor: "#d3a64b",
+        requiredLevel: null,
+        questLevel: null,
+        typeIds: [],
+        typeLabels: [],
+        gameVersions: [],
+      }};
     }}
 
     function selectedBatch() {{
@@ -8071,6 +9276,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       if (!activeJourney) return;
       const ok = window.confirm("Close the current Journey? Make sure you have saved it first. Unsaved changes will be lost.");
       if (!ok) return;
+      journeyConfigOverlay.hidden = true;
       activeJourney = null;
       selectedBatchId = null;
       preBatchLevelValue = null;
@@ -8088,6 +9294,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       setAppMode("planner");
       renderJourney();
       renderCurrentView();
+      setSettingsOpen(true);
     }}
 
     function moveQuestIdsToHidden(questIds) {{
@@ -8165,6 +9372,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
         schemaVersion: 1,
         app: "QuestiePlus",
         kind: "Journey",
+        gameVersion: normalizeGameVersion(activeJourney.gameVersion || currentGameVersion),
         savedAt: new Date().toISOString(),
         id: activeJourney.id,
         name: activeJourney.name,
@@ -8258,6 +9466,8 @@ def render_classic_html(records, chains, zones, continents, npc_names):
         Number(journey.classMask) || 0,
         batches,
         journeyTransportNumberList(cloneUnusedQuestIds(journey.unusedQuestIds)),
+        normalizeGameVersion(journey.gameVersion || currentGameVersion),
+        journey.faction === "Alliance" ? "a" : journey.faction === "Horde" ? "h" : "*",
       ].join(":");
     }}
 
@@ -8272,7 +9482,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       const source = String(text || "").trim();
       const separator = source.startsWith("QPJ2:") ? ":" : "|";
       const fields = source.split(separator);
-      if (fields[0] !== "QPJ2" || fields.length !== 7) throw new Error("This is not a valid QPJ2 Journey string.");
+      if (fields[0] !== "QPJ2" || (fields.length !== 7 && fields.length !== 8 && fields.length !== 9)) throw new Error("This is not a valid QPJ2 Journey string.");
       const name = decodeJourneyTransportText(fields[2]).trim();
       const raceMask = Number(fields[3]);
       const classMask = Number(fields[4]);
@@ -8300,7 +9510,12 @@ def render_classic_html(records, chains, zones, continents, npc_names):
         schemaVersion: 2,
         id: decodeJourneyTransportText(fields[1]) || slugify(name),
         name,
-        character: {{ raceMask, classMask }},
+        gameVersion: normalizeGameVersion(fields[7] || "era"),
+        character: {{
+          raceMask,
+          classMask,
+          faction: fields[8] === "a" ? "Alliance" : fields[8] === "h" ? "Horde" : "all",
+        }},
         batches,
         hiddenQuestIds: parseJourneyTransportNumberList(fields[6], "Hidden quest"),
       }};
@@ -8341,19 +9556,24 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     function raceFromImportedJourney(data) {{
       const character = data.character || {{}};
       const raceMask = Number(character.raceMask ?? data.raceMask);
-      const byMask = journeyRaceOptions().find((race) => race.mask === raceMask);
+      const byMask = journeyRaceEditorOptions().find((race) => race.mask === raceMask);
       if (byMask) return byMask;
       const raceName = String(character.race || data.race || "").toLowerCase();
-      return journeyRaceOptions().find((race) => race.label.toLowerCase() === raceName) || null;
+      return journeyRaceEditorOptions().find((race) => race.label.toLowerCase() === raceName) || null;
     }}
 
     function classFromImportedJourney(data) {{
       const character = data.character || {{}};
       const classMask = Number(character.classMask ?? data.classMask);
-      const byMask = journeyClassOptions().find((klass) => klass.mask === classMask);
+      const byMask = journeyClassEditorOptions().find((klass) => klass.mask === classMask);
       if (byMask) return byMask;
       const className = String(character.class || data.class || "").toLowerCase();
-      return journeyClassOptions().find((klass) => klass.label.toLowerCase() === className) || null;
+      return journeyClassEditorOptions().find((klass) => klass.label.toLowerCase() === className) || null;
+    }}
+
+    function factionFromImportedJourney(data, race) {{
+      const character = data.character || {{}};
+      return normalizeJourneyFaction(character.faction ?? data.faction, race);
     }}
 
     function questIdsFromImportedBatch(batch) {{
@@ -8364,7 +9584,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
           : [];
       return ids
         .map((id) => Number(id))
-        .filter((id, index, list) => Number.isFinite(id) && questsById.has(id) && list.indexOf(id) === index);
+        .filter((id, index, list) => Number.isFinite(id) && id > 0 && list.indexOf(id) === index);
     }}
 
     function questIdsFromImportedUnused(data) {{
@@ -8383,7 +9603,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
                   : [];
       return ids
         .map((id) => Number(id))
-        .filter((id, index, list) => Number.isFinite(id) && questsById.has(id) && list.indexOf(id) === index);
+        .filter((id, index, list) => Number.isFinite(id) && id > 0 && list.indexOf(id) === index);
     }}
 
     function importedBatchLevelOverride(batch) {{
@@ -8399,6 +9619,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       const name = String(data.name || "").trim();
       const race = raceFromImportedJourney(data);
       const klass = classFromImportedJourney(data);
+      const faction = factionFromImportedJourney(data, race);
       if (!name || !race || !klass) {{
         showJourneyMessage("Import failed: Journey must include a name, race, and class.");
         return false;
@@ -8408,11 +9629,12 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       journeyBatchCounter = 0;
       const importedJourney = {{
         schemaVersion: Number(data.schemaVersion) || 1,
+        gameVersion: normalizeGameVersion(data.gameVersion || data.gameFlavor || data.version || "era"),
         id: String(data.id || slugify(name) || `journey-${{Date.now().toString(36)}}`),
         name,
         race: race.label,
         raceMask: race.mask,
-        faction: race.faction,
+        faction,
         class: klass.label,
         classMask: klass.mask,
         batches: rawBatches.map((batch, index) => newBatch(
@@ -8429,7 +9651,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       const previousJourney = activeJourney;
       activeJourney = importedJourney;
       renumberNumericBatches(activeJourney.batches);
-      const validation = validateJourneyBatches(importedJourney.batches, {{ checkPrerequisites: false }});
+      const validation = validateJourneyBatches(importedJourney.batches, {{ checkPrerequisites: false, allowUnknown: true }});
       if (!validation.ok) {{
         activeJourney = previousJourney;
         renderJourney();
@@ -8443,14 +9665,15 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       selectedId = null;
       activeId = null;
       clearJourneyUndo();
-      applyJourneyIdentityToFilters(race, klass);
+      applyJourneyIdentityToFilters(race, klass, faction);
       updateFiltersFromControls();
       renderJourney();
       const warningCount = journeyPrerequisiteWarnings(importedJourney.batches).size;
       const warningText = warningCount
-        ? ` with ${{warningCount}} prerequisite warning${{warningCount === 1 ? "" : "s"}}`
+        ? ` with ${{warningCount}} warning${{warningCount === 1 ? "" : "s"}}`
         : "";
       showJourneyMessage(`Imported Journey "${{name}}"${{warningText}}.`, "ok");
+      setSettingsOpen(false);
       return true;
     }}
 
@@ -8648,6 +9871,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       return {{
         schemaVersion: Number(profile.schemaVersion) || 1,
         eventSchemaVersion: Number(profile.eventSchemaVersion) || 1,
+        gameVersion: normalizeGameVersion(profile.gameVersion || profile.gameFlavor || profile.version || "era"),
         app: String(profile.app || "QuestiePlus"),
         kind: String(profile.kind || "CharacterProfile"),
         character: profile.character && typeof profile.character === "object" ? {{ ...profile.character }} : {{}},
@@ -8674,6 +9898,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       return {{
         schemaVersion: luaNumberField(text, "schemaVersion") || 1,
         eventSchemaVersion: luaNumberField(text, "eventSchemaVersion") || 1,
+        gameVersion: normalizeGameVersion(luaStringField(text, "gameVersion") || luaStringField(text, "gameFlavor") || "era"),
         app: "QuestiePlus",
         kind: "CharacterProfile",
         character: {{
@@ -8690,17 +9915,8 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     }}
 
     function updateProfileImportButton() {{
-      const hasProfile = Boolean(activeCharacterProfile);
-      profileImportButton.classList.toggle("active", hasProfile);
-      profileImportCount.hidden = !hasProfile;
-      profileImportCount.textContent = hasProfile ? String(activeCharacterProfile.completedQuestIds.length) : "";
-      if (!hasProfile) {{
-        profileImportButton.title = "Import a QuestiePlus character profile";
-        return;
-      }}
-      const character = activeCharacterProfile.character || {{}};
-      const identity = [character.name, character.realm].filter(Boolean).join(" - ") || "Imported character";
-      profileImportButton.title = `${{identity}}: ${{activeCharacterProfile.completedQuestIds.length}} completed quests, ${{activeCharacterProfile.events.length}} replay events`;
+      settingsButton.title = "Settings";
+      updateSettingsStatus();
     }}
 
     function importCharacterProfileData(profile) {{
@@ -8729,6 +9945,16 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       }} catch (error) {{
         window.alert(`Profile import failed: ${{error.message}}`);
       }}
+    }}
+
+    function closeCharacterProfile() {{
+      if (!activeCharacterProfile) return;
+      activeCharacterProfile = null;
+      completedProfileQuestIds.clear();
+      initializeReplay();
+      updateProfileImportButton();
+      renderJourney();
+      renderCurrentView({{ scrollTargetChainToTop: true }});
     }}
 
     function replayEventType(event) {{
@@ -8847,10 +10073,10 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       replayEventLogContent.innerHTML = `
         <div class="replay-empty">
           <span>${{escapeHtml(message)}}</span>
-          <button type="button" id="replay-import-profile-button">Import Profile</button>
+          <button type="button" id="replay-import-profile-button">Open Settings</button>
         </div>
       `;
-      replayEventLogContent.querySelector("#replay-import-profile-button")?.addEventListener("click", () => profileImportInput.click());
+      replayEventLogContent.querySelector("#replay-import-profile-button")?.addEventListener("click", () => setSettingsOpen(true));
     }}
 
     function renderReplayEventLog(options = {{}}) {{
@@ -9035,8 +10261,8 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     function replayWorldPoint(event) {{
       const zone = replayEventZone(event);
       const rect = zone?.worldRect;
-      const continent = zone ? continentsById.get(Number(zone.continentId)) : null;
-      if (!rect || !continent) return null;
+      const continent = zone ? continentsById.get(Number(zone.worldContinentId ?? zone.continentId)) : null;
+      if (!rect || !continent || (zone.worldGroup || "azeroth") !== (continent.worldGroup || "azeroth")) return null;
       const localX = Number(rect.left) + event.x * Number(rect.width);
       const localY = Number(rect.top) + event.y * Number(rect.height);
       return {{
@@ -9059,9 +10285,10 @@ def render_classic_html(records, chains, zones, continents, npc_names):
 
     function setReplayMapForEvent(event, options = {{}}) {{
       if (replayState.scope === "world") {{
-        if (currentView.type !== "world") {{
+        const eventWorldId = replayEventZone(event)?.worldGroup || "azeroth";
+        if (currentView.type !== "world" || currentView.worldId !== eventWorldId) {{
           clearReplayMarkers();
-          setWorldView();
+          setWorldView(eventWorldId);
         }}
         return;
       }}
@@ -9289,6 +10516,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
         event.dataTransfer.setData("application/x-questieplus-source", "catalogue-chain");
         chainNode.classList.add("dragging");
         document.body.classList.add("dragging-quest");
+        journeyHiddenDrop.hidden = false;
         if (currentAppMode === "map" && !keepMapForBatchSummaryDrop) setAppMode("planner");
         return;
       }}
@@ -9307,6 +10535,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       event.dataTransfer.setData("application/x-questieplus-source", isMapTooltipQuest ? "map-tooltip" : "catalogue");
       questNode.classList.add("dragging");
       document.body.classList.add("dragging-quest");
+      journeyHiddenDrop.hidden = false;
       if (isMapTooltipQuest) document.body.classList.add("dragging-map-tooltip");
       if (currentAppMode === "map" && !keepMapForBatchSummaryDrop) {{
         if (isMapTooltipQuest) {{
@@ -9344,6 +10573,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       event.dataTransfer.setData("application/x-questieplus-source", "journey");
       questNode.classList.add("dragging");
       document.body.classList.add("dragging-quest");
+      journeyHiddenDrop.hidden = false;
     }}
 
     function handleCatalogueDragEnd() {{
@@ -9351,6 +10581,8 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       document.querySelectorAll(".chain-row.dragging, .quest-icon.dragging, .chain-quest-item.dragging, .pickup-choice-item.dragging, .journey-quest.dragging").forEach((element) => element.classList.remove("dragging"));
       document.body.classList.remove("dragging-quest");
       document.body.classList.remove("dragging-map-tooltip");
+      journeyHiddenDrop.hidden = true;
+      journeyHiddenDrop.classList.remove("drag-over");
       clearPlannerDragTargets();
       clearBatchSummaryDragTarget();
       const shouldRestoreMap = preDragAppMode === "map";
@@ -9385,6 +10617,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
 
     function clearPlannerDragTargets() {{
       plannerBoard.querySelectorAll(".drag-over").forEach((element) => element.classList.remove("drag-over"));
+      journeyHiddenDrop.classList.remove("drag-over");
     }}
 
     function clearBatchSummaryDragTarget() {{
@@ -9444,6 +10677,28 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       restorePreDragModeAfterDrop();
     }}
 
+    function handleJourneyHiddenDragOver(event) {{
+      if (draggingQuestId == null && !draggingQuestIds.length) return;
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = draggingJourneyQuestId == null ? "copy" : "move";
+      journeyHiddenDrop.classList.add("drag-over");
+    }}
+
+    function handleJourneyHiddenDragLeave(event) {{
+      if (event.relatedTarget && journeyHiddenDrop.contains(event.relatedTarget)) return;
+      journeyHiddenDrop.classList.remove("drag-over");
+    }}
+
+    function handleJourneyHiddenDrop(event) {{
+      if (draggingQuestId == null && !draggingQuestIds.length && !event.dataTransfer) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const questIds = droppedQuestIds(event);
+      journeyHiddenDrop.classList.remove("drag-over");
+      if (questIds.length) moveQuestIdsToHidden(questIds);
+      restorePreDragModeAfterDrop();
+    }}
+
     function handleBatchSummaryDragOver(event) {{
       if (!batchSummaryDropAvailable() || (draggingQuestId == null && !draggingQuestIds.length)) return;
       event.preventDefault();
@@ -9481,9 +10736,13 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     }}
 
     function filterableZones() {{
-      return DATA.zones
+      return ACTIVE_DATA.zones
         .filter((zone) => zone.questCount > 0)
         .sort(zoneSort);
+    }}
+
+    function zonesForSelectedWorld() {{
+      return filterableZones().filter((zone) => (zone.worldGroup || "azeroth") === (currentView.worldId || "azeroth"));
     }}
 
     function zoneOptionLabel(zone) {{
@@ -9492,15 +10751,24 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     }}
 
     function populateZoneSelect() {{
-      zoneSelect.innerHTML = '<option value="">Select zone</option>' + filterableZones()
+      zoneSelect.innerHTML = '<option value="">Select zone</option>' + zonesForSelectedWorld()
         .map((zone) => {{
           return `<option value="${{zone.id}}">${{zoneOptionLabel(zone)}}</option>`;
         }})
         .join("");
     }}
 
+    function populateWorldSelect() {{
+      const groups = ACTIVE_DATA.worldGroups || [{{ id: "azeroth", name: "Azeroth" }}];
+      worldSelect.innerHTML = groups.map((group) => `<option value="${{group.id}}">${{escapeHtml(group.name)}}</option>`).join("");
+      worldSelect.value = currentView.worldId || groups[0]?.id || "azeroth";
+      const hasMultipleWorlds = groups.length > 1;
+      worldSelect.hidden = !hasMultipleWorlds;
+      worldButton.hidden = hasMultipleWorlds;
+    }}
+
     function populateFilters() {{
-      levelFilter.innerHTML = '<option value="all">All levels</option><option value="batch" style="color:#55aaff">Batch level</option>' + Array.from({{ length: 60 }}, (_, index) => {{
+      levelFilter.innerHTML = '<option value="all">All levels</option><option value="batch" style="color:#55aaff">Batch level</option>' + Array.from({{ length: ACTIVE_DATA.maxLevel || 60 }}, (_, index) => {{
         const level = index + 1;
         return `<option value="${{level}}">Level ${{level}}</option>`;
       }}).join("");
@@ -9535,7 +10803,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
 
     function populateMainFilterMenu() {{
       const counts = new Map();
-      DATA.quests.forEach((quest) => {{
+      ACTIVE_DATA.quests.filter(questPassesGameVersion).forEach((quest) => {{
         (quest.typeIds || ["general"]).forEach((typeId) => {{
           counts.set(typeId, (counts.get(typeId) || 0) + 1);
         }});
@@ -9593,22 +10861,6 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       updateMainFilterButton();
     }}
 
-    function populateDisplayFilters() {{
-      displayFilterMenu.innerHTML = `
-        <div class="display-filter-title">Show on map</div>
-        ${{DISPLAY_FILTERS.map((filter) => `
-          <label class="quest-type-option">
-            <input type="checkbox" value="${{filter.id}}" ${{displayFilters.has(filter.id) ? "checked" : ""}}>
-            <span>${{escapeHtml(filter.label)}}</span>
-          </label>
-        `).join("")}}
-      `;
-      displayFilterMenu.querySelectorAll('input[type="checkbox"]').forEach((input) => {{
-        input.addEventListener("change", updateDisplayFiltersFromMenu);
-      }});
-      updateDisplayFilterButton();
-    }}
-
     function updateMainFiltersFromMenu() {{
       forcedCatalogueChainId = null;
       filters.factions = new Set([...mainFilterMenu.querySelectorAll('input[data-filter-kind="faction"]:checked')].map((input) => input.value));
@@ -9621,19 +10873,17 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       renderCurrentView({{ scrollTargetChainToTop: true }});
     }}
 
-    function updateDisplayFiltersFromMenu() {{
+    function updateMapQuestDisplayOption() {{
       displayFilters.clear();
-      displayFilterMenu.querySelectorAll('input[type="checkbox"]:checked').forEach((input) => {{
-        displayFilters.add(input.value);
-      }});
-      updateDisplayFilterButton();
+      if (showQuestsOnMapCheckbox.checked) displayFilters.add("available-pickups");
+      updateMapQuestDisplayToggle();
       renderCurrentView();
     }}
 
     function updateCatalogueAssignedOption() {{
       forcedCatalogueChainId = null;
       catalogueOptions.clear();
-      if (showAssignedCatalogueCheckbox.checked) catalogueOptions.add(CATALOGUE_SHOW_ASSIGNED_OPTION);
+      if (hideAssignedCatalogueCheckbox.checked) catalogueOptions.add(CATALOGUE_HIDE_ASSIGNED_OPTION);
       updateCatalogueAssignedToggle();
       renderCurrentView({{ scrollTargetChainToTop: true }});
     }}
@@ -9658,32 +10908,26 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       mainFilterButton.classList.toggle("active", active);
     }}
 
-    function updateDisplayFilterButton() {{
-      const enabledLabels = DISPLAY_FILTERS
-        .filter((filter) => displayFilters.has(filter.id))
-        .map((filter) => filter.label);
-      displayFilterCount.textContent = String(enabledLabels.length);
-      displayFilterButton.title = enabledLabels.length ? enabledLabels.join(", ") : "No map overlays selected";
-      displayFilterButton.classList.toggle("active", enabledLabels.length > 0);
+    function updateMapQuestDisplayToggle() {{
+      const enabled = displayFilters.has("available-pickups");
+      showQuestsOnMapCheckbox.checked = enabled;
+      mapQuestsToggle.classList.toggle("active", enabled);
+      mapQuestsToggle.title = enabled ? "Quest pickup points are shown on the map" : "Quest pickup points are hidden from the map";
     }}
 
     function updateCatalogueAssignedToggle() {{
-      const enabled = catalogueOptions.has(CATALOGUE_SHOW_ASSIGNED_OPTION);
-      showAssignedCatalogueCheckbox.checked = enabled;
+      const enabled = catalogueOptions.has(CATALOGUE_HIDE_ASSIGNED_OPTION);
+      hideAssignedCatalogueCheckbox.checked = enabled;
+      catalogueAssignedToggle.hidden = currentAppMode === "replay" || !activeJourney;
       catalogueAssignedToggle.classList.toggle("active", enabled);
       catalogueAssignedToggle.title = enabled
-        ? "Assigned and hidden quests are shown in the catalogue"
-        : "Assigned and hidden quests are hidden from the catalogue";
+        ? "Assigned, completed, and hidden quests are hidden from the map and Quest Search"
+        : "Assigned, completed, and hidden quests are shown on the map and in Quest Search";
     }}
 
     function setMainFilterMenuOpen(open) {{
       mainFilterMenu.hidden = !open;
       mainFilterButton.setAttribute("aria-expanded", String(open));
-    }}
-
-    function setDisplayFilterMenuOpen(open) {{
-      displayFilterMenu.hidden = !open;
-      displayFilterButton.setAttribute("aria-expanded", String(open));
     }}
 
     function selectedBatchLevelValue() {{
@@ -9697,6 +10941,21 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       if (!option) return;
       const level = selectedBatchLevelValue();
       option.textContent = level == null ? "Batch level" : `Batch: Lv ${{level}}`;
+    }}
+
+    function updateJourneyDependentControls() {{
+      const hasJourney = Boolean(activeJourney);
+      const batchOption = levelFilter.querySelector('option[value="batch"]');
+      if (batchOption) {{
+        batchOption.hidden = !hasJourney;
+        batchOption.disabled = !hasJourney;
+      }}
+      if (!hasJourney && levelFilter.value === "batch") {{
+        levelFilter.value = "all";
+        filters.level = null;
+      }}
+      updateCatalogueAssignedToggle();
+      updateFilterSelectColors();
     }}
 
     function updateFilterSelectColors() {{
@@ -9748,7 +11007,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
 
     function renderWorldTiles() {{
       worldLayer.innerHTML = "";
-      DATA.continents.forEach((continent) => {{
+      ACTIVE_DATA.continents.filter((continent) => continent.worldGroup === currentView.worldId).forEach((continent) => {{
         const continentEl = document.createElement("div");
         continentEl.className = "continent";
         continentEl.style.left = `${{continent.x}}%`;
@@ -9776,7 +11035,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     }}
 
     function continentLocalPoint(point) {{
-      const continent = DATA.continents.find((item) => (
+      const continent = ACTIVE_DATA.continents.find((item) => item.worldGroup === currentView.worldId && (
         point.x >= item.x &&
         point.x <= item.x + item.width &&
         point.y >= item.y &&
@@ -9853,9 +11112,13 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       setZoneView(hit.zone.id);
     }}
 
-    function setWorldView() {{
-      currentView = {{ type: "world", zoneId: null }};
+    function setWorldView(worldId = currentView.worldId || "azeroth") {{
+      const validWorld = (ACTIVE_DATA.worldGroups || []).some((group) => group.id === worldId) ? worldId : "azeroth";
+      currentView = {{ type: "world", zoneId: null, worldId: validWorld }};
       zoneSelect.value = "";
+      worldSelect.value = validWorld;
+      populateZoneSelect();
+      renderWorldTiles();
       renderCurrentView({{ scrollTargetChainToTop: filters.useCurrentMapZone }});
     }}
 
@@ -9863,7 +11126,9 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       const zone = zonesById.get(Number(zoneId));
       if (!zone) return;
       hideWorldZoneTooltip();
-      currentView = {{ type: "zone", zoneId: zone.id }};
+      currentView = {{ type: "zone", zoneId: zone.id, worldId: zone.worldGroup || "azeroth" }};
+      worldSelect.value = currentView.worldId;
+      populateZoneSelect();
       zoneSelect.value = String(zone.id);
       renderCurrentView({{ scrollTargetChainToTop: filters.useCurrentMapZone }});
     }}
@@ -9907,7 +11172,9 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     }}
 
     function questIsInCurrentView(quest) {{
-      return currentView.type === "world" || quest.zones.includes(currentView.zoneId);
+      if (currentView.type === "zone") return quest.zones.includes(currentView.zoneId);
+      const worldZoneIds = new Set(zonesForSelectedWorld().map((zone) => Number(zone.id)));
+      return (quest.zones || []).some((zoneId) => worldZoneIds.has(Number(zoneId)));
     }}
 
     function questGrayMaxLevel(questLevel) {{
@@ -10058,9 +11325,18 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       if (!quest) return true;
       const id = Number(quest.id);
       if (selectedId != null && Number(selectedId) === id) return true;
-      const showAssigned = catalogueOptions.has(CATALOGUE_SHOW_ASSIGNED_OPTION);
-      if (!showAssigned && (questIsCompletedByProfile(id) || assignedJourneyQuestIds().has(id) || unusedJourneyQuestIds().has(id))) return false;
+      if (catalogueOptions.has(CATALOGUE_HIDE_ASSIGNED_OPTION) && questHasAssignment(id)) return false;
       return true;
+    }}
+
+    function questHasAssignment(questOrId) {{
+      const id = Number(typeof questOrId === "object" ? questOrId?.id : questOrId);
+      if (!Number.isFinite(id)) return false;
+      return questIsCompletedByProfile(id) || assignedJourneyQuestIds().has(id) || unusedJourneyQuestIds().has(id);
+    }}
+
+    function questPassesMapAssignmentFilter(quest) {{
+      return !catalogueOptions.has(CATALOGUE_HIDE_ASSIGNED_OPTION) || !questHasAssignment(quest);
     }}
 
     function questJourneyStatus(quest) {{
@@ -10130,6 +11406,16 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       const manualZoneNames = manualZoneFiltered ? selectedZoneNameSet() : null;
       if (filters.useCurrentMapZone) {{
         if (currentView.type === "world") {{
+          if ((ACTIVE_DATA.worldGroups || []).length > 1) {{
+            const selectedZoneNames = new Set(zonesForSelectedWorld().map((zone) => zone.name));
+            const worldName = (ACTIVE_DATA.worldGroups || []).find((group) => group.id === currentView.worldId)?.name || "Azeroth";
+            return {{
+              zones,
+              zoneFiltered: true,
+              selectedZoneNames,
+              label: worldName,
+            }};
+          }}
           return {{
             zones,
             zoneFiltered: false,
@@ -10172,6 +11458,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
           const keepSelectionVisible = forceVisible || selectedCatalogueChainIsActive(chain);
           const bypassZoneFilter = keepSelectionVisible;
           const visibleQuests = chain.quests.filter((quest) => (
+            questPassesGameVersion(quest) &&
             questPassesRaceClass(quest) &&
             questPassesType(quest) &&
             questPassesCatalogueOptions(quest)
@@ -10196,7 +11483,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
         .filter((chain) => chain.keepSelectionVisible || chainPassesSearch(chain))
         .map((chain) => {{
           if (!chain.contextOpen) return chain;
-          const visibleQuests = chain.quests.slice();
+          const visibleQuests = chain.quests.filter(questPassesGameVersion);
           return {{
             ...chain,
             visibleQuests,
@@ -10213,7 +11500,11 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       currentChains().forEach((chain) => {{
         chain.visibleQuests.forEach((quest) => questIds.add(quest.id));
       }});
-      return DATA.quests.filter((quest) => questIds.has(quest.id));
+      return ACTIVE_DATA.quests.filter((quest) => questIds.has(quest.id));
+    }}
+
+    function currentMapDisplayQuests() {{
+      return currentQuests().filter(questPassesMapAssignmentFilter);
     }}
 
     function batchSummaryChains() {{
@@ -10222,7 +11513,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       const batchQuestIds = new Set((batch.questIds || []).map(Number));
       const chainIds = new Set(batchQuests(batch).map((quest) => Number(quest.chainId)));
       const targetedQuest = selectedId != null ? questsById.get(Number(selectedId)) : null;
-      const externalTargetQuest = targetedQuest && !batchQuestIds.has(Number(targetedQuest.id))
+      const externalTargetQuest = targetedQuest && questPassesGameVersion(targetedQuest) && !batchQuestIds.has(Number(targetedQuest.id))
         ? targetedQuest
         : null;
       if (externalTargetQuest) chainIds.add(Number(externalTargetQuest.chainId));
@@ -10236,7 +11527,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
         .map((chainId) => {{
           const chain = chainsById.get(Number(chainId));
           if (!chain) return null;
-          const summaryQuests = chain.quests.filter((quest) => batchQuestIds.has(Number(quest.id)));
+          const summaryQuests = chain.quests.filter((quest) => batchQuestIds.has(Number(quest.id)) && questPassesGameVersion(quest));
           const isExternalTargetChain = externalTargetQuest != null
             && Number(externalTargetQuest.chainId) === Number(chain.id);
           const contextOpen = Number(batchSummaryContextChainId) === Number(chain.id);
@@ -10244,7 +11535,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
             ? [externalTargetQuest, ...summaryQuests.filter((quest) => Number(quest.id) !== Number(externalTargetQuest.id))]
             : summaryQuests;
           const visibleQuests = contextOpen
-            ? chain.quests.slice()
+            ? chain.quests.filter(questPassesGameVersion)
             : isExternalTargetChain
               ? batchSearchQuests
               : summaryQuests;
@@ -10278,6 +11569,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       const isWorld = currentView.type === "world";
       const zone = isWorld ? null : zonesById.get(currentView.zoneId);
       worldButton.classList.toggle("active", isWorld);
+      worldSelect.classList.toggle("active", isWorld);
       zoneSelect.classList.toggle("active", !isWorld);
       worldLayer.style.display = isWorld ? "block" : "none";
       zoneImage.style.display = isWorld ? "none" : "block";
@@ -10347,6 +11639,8 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     }}
 
     function scrollQuestIntoCatalogueView(id) {{
+      const quest = questsById.get(Number(id));
+      if (quest) ensureVirtualChainRendered(quest.chainId);
       const target = document.querySelector(`.chain-quest-item[data-quest-id="${{id}}"]`) || document.querySelector(`.quest-icon[data-quest-id="${{id}}"]`);
       if (!target) return;
       const listRect = chainList.getBoundingClientRect();
@@ -10360,6 +11654,8 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     }}
 
     function focusCatalogueQuest(id) {{
+      const quest = questsById.get(Number(id));
+      if (quest) ensureVirtualChainRendered(quest.chainId);
       const target = document.querySelector(`.chain-quest-item[data-quest-id="${{id}}"]`) || document.querySelector(`.quest-icon[data-quest-id="${{id}}"]`);
       try {{
         target?.focus({{ preventScroll: true }});
@@ -10369,6 +11665,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     }}
 
     function focusCatalogueChain(chainId) {{
+      ensureVirtualChainRendered(chainId);
       const target = document.querySelector(`.chain-row[data-chain-id="${{chainId}}"]`);
       try {{
         target?.focus({{ preventScroll: true }});
@@ -10541,26 +11838,43 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       chainList.append(empty);
     }}
 
-    function renderInventory() {{
-      const chains = inventoryChains();
-      chainList.innerHTML = "";
-      if (inventoryTitle) inventoryTitle.textContent = inventoryMode === "batch" ? "Batch Summary" : "Quest Catalogue";
+    function inventoryVirtualHeightKey(chain) {{
+      const questIds = chain.visibleQuests.map((quest) => quest.id).join(".");
+      const selected = chain.visibleQuests.some((quest) => Number(quest.id) === Number(selectedId)) ? selectedId : "";
+      return `${{inventoryMode}}:${{chain.id}}:${{collapsedChainIds.has(chain.id) ? 0 : 1}}:${{questIds}}:${{selected}}:${{chain.contextOpen ? 1 : 0}}`;
+    }}
 
-      if (inventoryMode === "batch" && !activeJourney) {{
-        renderInventoryEmptyState("Create or import a Journey to use Batch Summary.");
-        return;
-      }}
-      if (inventoryMode === "batch" && !selectedBatch()) {{
-        renderInventoryEmptyState("Select a batch to see its quests.");
-        return;
-      }}
-      if (inventoryMode === "batch" && !chains.length) {{
-        renderInventoryEmptyState(filters.search ? "No quests in this batch match your search." : "This batch has no quests.");
-        return;
-      }}
+    function estimateInventoryChainHeight(chain) {{
+      const expanded = !collapsedChainIds.has(chain.id);
+      if (!expanded) return 92;
+      let groupBreaks = 0;
+      let previousGroupId = null;
+      chain.visibleQuests.forEach((quest) => {{
+        const groupId = quest.chainGroupId ?? 0;
+        if (previousGroupId !== null && groupId !== previousGroupId) groupBreaks += 1;
+        previousGroupId = groupId;
+      }});
+      const hasSelectedDetail = chain.visibleQuests.some((quest) => Number(quest.id) === Number(selectedId));
+      const dividerHeight = chain.externalTargetQuest ? 15 : 0;
+      return 58 + chain.visibleQuests.length * 44 + groupBreaks * 10 + (hasSelectedDetail ? 150 : 0) + dividerHeight;
+    }}
 
-      const fragment = document.createDocumentFragment();
-      chains.forEach((chain, chainIndex) => {{
+    function buildInventoryVirtualLayout(chains) {{
+      let offset = 0;
+      const entries = chains.map((chain, index) => {{
+        const key = inventoryVirtualHeightKey(chain);
+        const height = inventoryVirtualHeights.get(key) || estimateInventoryChainHeight(chain);
+        const entry = {{ chain, index, key, offset, height }};
+        offset += height;
+        return entry;
+      }});
+      return {{ chains, entries, totalHeight: offset, start: -1, end: -1 }};
+    }}
+
+    function createInventoryChainSlot(chain, chainIndex, chainCount) {{
+      const slot = document.createElement("div");
+      slot.className = "virtual-chain-slot";
+      slot.dataset.virtualChainIndex = chainIndex;
         const isExpanded = !collapsedChainIds.has(chain.id);
         const row = document.createElement("section");
         row.className = "chain-row";
@@ -10636,15 +11950,109 @@ def render_classic_html(records, chains, zones, continents, npc_names):
           }});
           row.append(expanded);
         }}
-        fragment.append(row);
-        if (chain.externalTargetQuest && chainIndex < chains.length - 1) {{
+        slot.append(row);
+        if (chain.externalTargetQuest && chainIndex < chainCount - 1) {{
           const divider = document.createElement("div");
           divider.className = "batch-summary-target-divider";
           divider.setAttribute("aria-hidden", "true");
-          fragment.append(divider);
+          slot.append(divider);
         }}
+      return slot;
+    }}
+
+    function updateInventoryVirtualSpacers() {{
+      const layout = inventoryVirtualLayout;
+      if (!layout || layout.start < 0) return;
+      const top = chainList.querySelector('[data-virtual-spacer="top"]');
+      const bottom = chainList.querySelector('[data-virtual-spacer="bottom"]');
+      const topHeight = layout.entries[layout.start]?.offset || 0;
+      const endOffset = layout.end < layout.entries.length
+        ? layout.entries[layout.end].offset
+        : layout.totalHeight;
+      if (top) top.style.height = `${{Math.max(0, topHeight)}}px`;
+      if (bottom) bottom.style.height = `${{Math.max(0, layout.totalHeight - endOffset)}}px`;
+    }}
+
+    function measureInventoryVirtualSlots() {{
+      const layout = inventoryVirtualLayout;
+      if (!layout) return;
+      let changed = false;
+      chainList.querySelectorAll(".virtual-chain-slot").forEach((slot) => {{
+        const index = Number(slot.dataset.virtualChainIndex);
+        const entry = layout.entries[index];
+        const measured = Math.ceil(slot.getBoundingClientRect().height);
+        if (!entry || !measured || Math.abs(measured - entry.height) < 1) return;
+        inventoryVirtualHeights.set(entry.key, measured);
+        entry.height = measured;
+        changed = true;
       }});
+      if (!changed) return;
+      let offset = 0;
+      layout.entries.forEach((entry) => {{
+        entry.offset = offset;
+        offset += entry.height;
+      }});
+      layout.totalHeight = offset;
+      updateInventoryVirtualSpacers();
+    }}
+
+    function renderInventoryWindow(force = false) {{
+      const layout = inventoryVirtualLayout;
+      if (!layout?.entries.length) return;
+      const viewportHeight = Math.max(360, chainList.clientHeight || 0);
+      const overscan = Math.max(650, viewportHeight * 1.25);
+      const minimum = Math.max(0, chainList.scrollTop - overscan);
+      const maximum = chainList.scrollTop + viewportHeight + overscan;
+      let start = 0;
+      while (start < layout.entries.length && layout.entries[start].offset + layout.entries[start].height < minimum) start += 1;
+      let end = start;
+      while (end < layout.entries.length && layout.entries[end].offset < maximum) end += 1;
+      if (!force && start === layout.start && end === layout.end) return;
+      layout.start = start;
+      layout.end = end;
+      chainList.innerHTML = "";
+      const fragment = document.createDocumentFragment();
+      const topSpacer = document.createElement("div");
+      topSpacer.className = "virtual-chain-spacer";
+      topSpacer.dataset.virtualSpacer = "top";
+      fragment.append(topSpacer);
+      for (let index = start; index < end; index += 1) {{
+        fragment.append(createInventoryChainSlot(layout.entries[index].chain, index, layout.entries.length));
+      }}
+      const bottomSpacer = document.createElement("div");
+      bottomSpacer.className = "virtual-chain-spacer";
+      bottomSpacer.dataset.virtualSpacer = "bottom";
+      fragment.append(bottomSpacer);
       chainList.append(fragment);
+      updateInventoryVirtualSpacers();
+      refreshRenderedCatalogueSelectionState();
+      cancelAnimationFrame(inventoryVirtualFrame);
+      inventoryVirtualFrame = requestAnimationFrame(measureInventoryVirtualSlots);
+    }}
+
+    function renderInventory() {{
+      const chains = inventoryChains();
+      chainList.innerHTML = "";
+      inventoryVirtualLayout = null;
+      if (inventoryTitle) inventoryTitle.textContent = inventoryMode === "batch" ? "Batch Summary" : "Quest Catalogue";
+
+      if (inventoryMode === "batch" && !activeJourney) {{
+        renderInventoryEmptyState("Create or import a Journey to use Batch Summary.");
+        return;
+      }}
+      if (inventoryMode === "batch" && !selectedBatch()) {{
+        renderInventoryEmptyState("Select a batch to see its quests.");
+        return;
+      }}
+      if (!chains.length) {{
+        const emptyMessage = inventoryMode === "batch"
+          ? (filters.search ? "No quests in this batch match your search." : "This batch has no quests.")
+          : "No quests match the current search filters.";
+        renderInventoryEmptyState(emptyMessage);
+        return;
+      }}
+      inventoryVirtualLayout = buildInventoryVirtualLayout(chains);
+      renderInventoryWindow(true);
     }}
 
     function createChainGroupBreak() {{
@@ -10760,7 +12168,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       const questLevel = Number(quest?.xpLevel ?? quest?.questLevel);
       const level = Number(characterLevel);
       if (!Number.isFinite(baseXp) || baseXp <= 0 || !Number.isFinite(questLevel) || questLevel <= 0 || !Number.isFinite(level)) return null;
-      if (level >= 60) return 0;
+      if (level >= (ACTIVE_DATA.maxLevel || 60)) return 0;
       const multiplier = Math.max(1, Math.min(10, (2 * (questLevel - level)) + 20));
       let xp = baseXp * multiplier / 10;
       if (xp <= 100) xp = 5 * Math.floor((xp + 2) / 5);
@@ -10891,7 +12299,12 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     }}
 
     function viewPoint(point) {{
-      if (currentView.type === "world" && Number.isFinite(point.worldX) && Number.isFinite(point.worldY)) {{
+      if (
+        currentView.type === "world" &&
+        (point.worldGroup || "azeroth") === (currentView.worldId || "azeroth") &&
+        Number.isFinite(point.worldX) &&
+        Number.isFinite(point.worldY)
+      ) {{
         return {{ x: point.worldX, y: point.worldY }};
       }}
       if (currentView.type === "zone" && point.zoneId === currentView.zoneId) {{
@@ -10934,6 +12347,39 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       return point?.sourceName || sourceNameFromLabel(quest?.startSources?.[0]) || "Quest pickup";
     }}
 
+    function pickupSourceKey(point, plotted, quest) {{
+      const sourceType = String(point?.sourceType || "").trim().toLowerCase();
+      const hasSourceId = point?.sourceId !== undefined && point?.sourceId !== null && Number.isFinite(Number(point.sourceId));
+      if (sourceType && hasSourceId) return `${{sourceType}}:${{Number(point.sourceId)}}`;
+      const sourceName = pointSourceName(point, quest).trim().toLowerCase();
+      if (sourceType && sourceName) return `${{sourceType}}:${{sourceName}}`;
+      return `coordinate:${{point?.zoneId ?? "world"}}:${{plotted.x.toFixed(2)}}:${{plotted.y.toFixed(2)}}`;
+    }}
+
+    function coordinateMedoid(points) {{
+      const candidates = (points || []).filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y));
+      if (!candidates.length) return null;
+      const center = candidates.reduce((sum, point) => ({{ x: sum.x + point.x, y: sum.y + point.y }}), {{ x: 0, y: 0 }});
+      center.x /= candidates.length;
+      center.y /= candidates.length;
+      return candidates.slice().sort((a, b) => (
+        Math.hypot(a.x - center.x, a.y - center.y) - Math.hypot(b.x - center.x, b.y - center.y) ||
+        a.y - b.y ||
+        a.x - b.x
+      ))[0];
+    }}
+
+    function refreshPickupAnchor(group) {{
+      const pickupGroups = group.pickupGroups || [group];
+      const origins = pickupGroups.flatMap((pickupGroup) => (
+        pickupGroup.originPoints?.length ? pickupGroup.originPoints : [{{ x: pickupGroup.x, y: pickupGroup.y }}]
+      ));
+      const anchor = coordinateMedoid(origins);
+      if (!anchor) return;
+      group.x = anchor.x;
+      group.y = anchor.y;
+    }}
+
     function pickupGroupTitle(group) {{
       const names = [...(group.sourceNames || [])].filter(Boolean);
       if (names.length === 1) return names[0];
@@ -10951,9 +12397,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       pickupGroup.sourceNames.forEach((name) => cluster.sourceNames.add(name));
       pickupGroup.alternateCounts.forEach((count, questId) => cluster.alternateCounts.set(questId, count));
       cluster.key = `${{cluster.key}}+${{pickupGroup.key}}`;
-      const weight = cluster.pickupGroups.length;
-      cluster.x = ((cluster.x * (weight - 1)) + pickupGroup.x) / weight;
-      cluster.y = ((cluster.y * (weight - 1)) + pickupGroup.y) / weight;
+      refreshPickupAnchor(cluster);
     }}
 
     function pickupClusterFromGroup(pickupGroup) {{
@@ -11010,7 +12454,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
 
     function displayPointGroups(pointField, role) {{
       const groups = new Map();
-      currentQuests().forEach((quest) => {{
+      currentMapDisplayQuests().forEach((quest) => {{
         visibleQuestDisplayPoints(quest, pointField).forEach(({{ point, plotted }}) => {{
           const key = `${{role}}:${{currentView.type}}:${{point.zoneId ?? "world"}}:${{plotted.x.toFixed(2)}}:${{plotted.y.toFixed(2)}}`;
           if (!groups.has(key)) {{
@@ -11053,7 +12497,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     }}
 
     function renderObjectivePointMarkers() {{
-      currentQuests().forEach((quest) => {{
+      currentMapDisplayQuests().forEach((quest) => {{
         visibleQuestDisplayPoints(quest, "objectivePoints").forEach(({{ point, plotted }}) => {{
           const group = {{
             key: `objective:${{quest.id}}:${{point.zoneId ?? "world"}}:${{plotted.x.toFixed(2)}}:${{plotted.y.toFixed(2)}}`,
@@ -11126,23 +12570,30 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       markerLayer.innerHTML = "";
       if (displayFilters.has("available-pickups")) {{
         const groups = new Map();
-        currentQuests().forEach((quest) => {{
+        currentMapDisplayQuests().forEach((quest) => {{
           const starts = visibleStartPoints(quest);
           const representative = representativeStartPoint(starts);
           if (!representative) return;
           const {{ point, plotted }} = representative;
-          const key = `${{currentView.type}}:${{point.zoneId ?? "world"}}:${{plotted.x.toFixed(2)}}:${{plotted.y.toFixed(2)}}`;
+          const key = `${{currentView.type}}:${{pickupSourceKey(point, plotted, quest)}}`;
           if (!groups.has(key)) {{
             groups.set(key, {{
               key,
               x: plotted.x,
               y: plotted.y,
+              originPoints: [],
               quests: new Map(),
               sourceNames: new Set(),
               alternateCounts: new Map(),
             }});
           }}
           const group = groups.get(key);
+          if (!group.originPoints.some((origin) => origin.x === plotted.x && origin.y === plotted.y)) {{
+            group.originPoints.push({{ x: plotted.x, y: plotted.y }});
+            const anchor = coordinateMedoid(group.originPoints);
+            group.x = anchor.x;
+            group.y = anchor.y;
+          }}
           group.quests.set(quest.id, quest);
           group.alternateCounts.set(quest.id, starts.length);
           group.sourceNames.add(pointSourceName(point, quest));
@@ -11195,20 +12646,18 @@ def render_classic_html(records, chains, zones, continents, npc_names):
           markerLayer.append(marker);
         }});
       }}
-      if (displayFilters.has("quest-objectives")) renderObjectivePointMarkers();
-      if (displayFilters.has("quest-handins")) renderDisplayPointMarkers("handin", "endPoints");
     }}
 
     function layoutPickupGroups(groups) {{
       const rect = markerLayer.getBoundingClientRect();
       const width = Math.max(1, rect.width);
       const height = Math.max(1, rect.height);
-      const minSeparation = currentView.type === "world" ? 30 : 36;
-      const maxDrift = currentView.type === "world" ? 18 : 86;
-      const mergeRadius = minSeparation + maxDrift + 8;
-      const pad = minSeparation / 2 + 5;
-      const maxRadius = currentView.type === "world" ? 74 : 190;
-      const cellSize = minSeparation;
+      const minSeparation = 30;
+      const maxDrift = currentView.type === "world" ? 8 : 14;
+      const mergeRadius = currentView.type === "world" ? 32 : 30;
+      const searchStep = 4;
+      const pad = minSeparation / 2 + 3;
+      const cellSize = Math.max(minSeparation, mergeRadius);
       const cells = new Map();
       const placedClusters = [];
 
@@ -11218,58 +12667,78 @@ def render_classic_html(records, chains, zones, continents, npc_names):
         const key = cellKey(node.x, node.y);
         if (!cells.has(key)) cells.set(key, []);
         cells.get(key).push(node);
+        node.cluster.gridCellKey = key;
       }};
-      const nearbyNodes = (x, y) => {{
+      const removeFromGrid = (cluster) => {{
+        const key = cluster.gridCellKey;
+        if (!key || !cells.has(key)) return;
+        const bucket = cells.get(key).filter((node) => node.cluster !== cluster);
+        if (bucket.length) cells.set(key, bucket);
+        else cells.delete(key);
+        cluster.gridCellKey = null;
+      }};
+      const nearbyNodes = (x, y, radius = minSeparation) => {{
         const cellX = Math.floor(x / cellSize);
         const cellY = Math.floor(y / cellSize);
         const nodes = [];
-        for (let dx = -1; dx <= 1; dx += 1) {{
-          for (let dy = -1; dy <= 1; dy += 1) {{
+        const reach = Math.max(1, Math.ceil(radius / cellSize));
+        for (let dx = -reach; dx <= reach; dx += 1) {{
+          for (let dy = -reach; dy <= reach; dy += 1) {{
             const bucket = cells.get(`${{cellX + dx}}:${{cellY + dy}}`);
             if (bucket) nodes.push(...bucket);
           }}
         }}
         return nodes;
       }};
-      const overlapScore = (x, y) => nearbyNodes(x, y).reduce((score, node) => {{
+      const overlapScore = (x, y, ignoredCluster = null) => nearbyNodes(x, y, minSeparation).reduce((score, node) => {{
+        if (node.cluster === ignoredCluster) return score;
         const distance = Math.hypot(node.x - x, node.y - y);
         return score + Math.max(0, minSeparation - distance);
       }}, 0);
-      const hasRoom = (x, y) => overlapScore(x, y) === 0;
-      const chooseSpot = (originX, originY, index) => {{
+      const hasRoom = (x, y, ignoredCluster = null) => overlapScore(x, y, ignoredCluster) === 0;
+      const chooseSpot = (originX, originY, index, ignoredCluster = null) => {{
         const startX = clamp(originX, pad, width - pad);
         const startY = clamp(originY, pad, height - pad);
         const startDrift = Math.hypot(startX - originX, startY - originY);
-        if (hasRoom(startX, startY)) return {{ x: startX, y: startY, drift: startDrift, overlap: 0, atStart: true }};
+        if (hasRoom(startX, startY, ignoredCluster)) return {{ x: startX, y: startY, drift: startDrift, overlap: 0, fits: true }};
 
-        let best = {{ x: startX, y: startY, score: overlapScore(startX, startY) * 1000 + startDrift, drift: startDrift, overlap: overlapScore(startX, startY), atStart: true }};
-        for (let radius = minSeparation; radius <= maxRadius; radius += minSeparation * 0.6) {{
-          const steps = Math.max(12, Math.ceil((Math.PI * 2 * radius) / (minSeparation * 0.72)));
-          let bestAtRadius = null;
+        const startOverlap = overlapScore(startX, startY, ignoredCluster);
+        let best = {{ x: startX, y: startY, score: startOverlap * 1000 + startDrift, drift: startDrift, overlap: startOverlap, fits: false }};
+        for (let radius = searchStep; radius <= maxDrift; radius += searchStep) {{
+          const steps = Math.max(12, Math.ceil((Math.PI * 2 * radius) / searchStep));
           for (let step = 0; step < steps; step += 1) {{
             const angle = ((Math.PI * 2) * step) / steps + index * 0.43;
             const x = clamp(startX + Math.cos(angle) * radius, pad, width - pad);
             const y = clamp(startY + Math.sin(angle) * radius, pad, height - pad);
-            const overlap = overlapScore(x, y);
+            const overlap = overlapScore(x, y, ignoredCluster);
             const drift = Math.hypot(x - originX, y - originY);
             const score = overlap * 1000 + drift;
-            if (!bestAtRadius || score < bestAtRadius.score) bestAtRadius = {{ x, y, score, overlap, drift, atStart: false }};
-            if (score < best.score) best = {{ x, y, score, overlap, drift, atStart: false }};
+            if (score < best.score) best = {{ x, y, score, overlap, drift, fits: overlap === 0 }};
           }}
-          if (bestAtRadius && bestAtRadius.overlap === 0 && bestAtRadius.drift <= maxDrift) return bestAtRadius;
+          if (best.overlap === 0) return {{ ...best, fits: true }};
         }}
         return best;
       }};
-      const nearestMergeTarget = (originX, originY) => {{
+      const clusterOrigins = (cluster) => (cluster.pickupGroups || [])
+        .flatMap((pickupGroup) => pickupGroup.originPoints?.length ? pickupGroup.originPoints : [{{ x: pickupGroup.x, y: pickupGroup.y }}])
+        .map((point) => ({{ x: (point.x / 100) * width, y: (point.y / 100) * height }}));
+      const pickupGroupOrigins = (pickupGroup) => (pickupGroup.originPoints?.length ? pickupGroup.originPoints : [{{ x: pickupGroup.x, y: pickupGroup.y }}])
+        .map((point) => ({{ x: (point.x / 100) * width, y: (point.y / 100) * height }}));
+      const nearestMergeTarget = (incomingOrigins, ignoredCluster = null) => {{
+        const incomingAnchor = coordinateMedoid(incomingOrigins);
+        if (!incomingAnchor) return null;
         const candidates = new Map();
-        nearbyNodes(originX, originY).forEach((node) => candidates.set(node.cluster.key, node.cluster));
-        placedClusters.forEach((cluster) => {{
-          const distance = Math.hypot(cluster.pixelX - originX, cluster.pixelY - originY);
-          if (distance <= mergeRadius) candidates.set(cluster.key, cluster);
+        nearbyNodes(incomingAnchor.x, incomingAnchor.y, mergeRadius * 2 + maxDrift).forEach((node) => {{
+          if (node.cluster !== ignoredCluster) candidates.set(node.cluster.key, node.cluster);
         }});
         return [...candidates.values()]
-          .map((cluster) => ({{ cluster, distance: Math.hypot(cluster.pixelX - originX, cluster.pixelY - originY) }}))
-          .filter((item) => item.distance <= mergeRadius)
+          .map((cluster) => {{
+            const combinedOrigins = [...incomingOrigins, ...clusterOrigins(cluster)];
+            const combinedAnchor = coordinateMedoid(combinedOrigins);
+            const bounded = combinedOrigins.every((point) => Math.hypot(point.x - combinedAnchor.x, point.y - combinedAnchor.y) <= mergeRadius);
+            return {{ cluster, bounded, distance: Math.hypot(cluster.anchorPixelX - incomingAnchor.x, cluster.anchorPixelY - incomingAnchor.y) }};
+          }})
+          .filter((item) => item.bounded)
           .sort((a, b) => a.distance - b.distance || b.cluster.quests.size - a.cluster.quests.size)[0]?.cluster || null;
       }};
 
@@ -11279,15 +12748,48 @@ def render_classic_html(records, chains, zones, continents, npc_names):
           const originX = (group.x / 100) * width;
           const originY = (group.y / 100) * height;
           const spot = chooseSpot(originX, originY, index);
-          const mergeTarget = spot.overlap === 0 && (spot.atStart || spot.drift <= maxDrift)
-            ? null
-            : nearestMergeTarget(originX, originY);
+          const mergeTarget = spot.fits ? null : nearestMergeTarget(pickupGroupOrigins(group));
           if (mergeTarget) {{
-            absorbPickupGroup(mergeTarget, group);
+            let activeCluster = mergeTarget;
+            let incomingGroups = [group];
+            while (activeCluster) {{
+              removeFromGrid(activeCluster);
+              incomingGroups.forEach((pickupGroup) => absorbPickupGroup(activeCluster, pickupGroup));
+              activeCluster.anchorPixelX = (activeCluster.x / 100) * width;
+              activeCluster.anchorPixelY = (activeCluster.y / 100) * height;
+              const mergedSpot = chooseSpot(activeCluster.anchorPixelX, activeCluster.anchorPixelY, index, activeCluster);
+              if (mergedSpot.fits) {{
+                activeCluster.pixelX = mergedSpot.x;
+                activeCluster.pixelY = mergedSpot.y;
+                activeCluster.displayX = (mergedSpot.x / width) * 100;
+                activeCluster.displayY = (mergedSpot.y / height) * 100;
+                addToGrid({{ x: mergedSpot.x, y: mergedSpot.y, cluster: activeCluster }});
+                break;
+              }}
+
+              const cascadeTarget = nearestMergeTarget(clusterOrigins(activeCluster), activeCluster);
+              if (!cascadeTarget) {{
+                activeCluster.pixelX = mergedSpot.x;
+                activeCluster.pixelY = mergedSpot.y;
+                activeCluster.displayX = (mergedSpot.x / width) * 100;
+                activeCluster.displayY = (mergedSpot.y / height) * 100;
+                addToGrid({{ x: mergedSpot.x, y: mergedSpot.y, cluster: activeCluster }});
+                break;
+              }}
+
+              removeFromGrid(cascadeTarget);
+              const absorbedCluster = activeCluster;
+              incomingGroups = absorbedCluster.pickupGroups.slice();
+              const absorbedIndex = placedClusters.indexOf(absorbedCluster);
+              if (absorbedIndex >= 0) placedClusters.splice(absorbedIndex, 1);
+              activeCluster = cascadeTarget;
+            }}
             return;
           }}
 
           const cluster = pickupClusterFromGroup(group);
+          cluster.anchorPixelX = originX;
+          cluster.anchorPixelY = originY;
           cluster.pixelX = spot.x;
           cluster.pixelY = spot.y;
           cluster.displayX = (spot.x / width) * 100;
@@ -11309,7 +12811,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       pickupPopoverCloseTimer = window.setTimeout(() => {{
         pickupPopoverCloseTimer = 0;
         closePickupQuestList();
-      }}, 220);
+      }}, 40);
     }}
 
     function closePickupQuestList() {{
@@ -11323,7 +12825,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
 
     function positionPickupPopover(popover, group) {{
       const margin = 8;
-      const gap = 14;
+      const gap = 0;
       const layerWidth = Math.max(1, markerLayer.clientWidth);
       const layerHeight = Math.max(1, markerLayer.clientHeight);
       const anchorX = ((group.displayX ?? group.x) / 100) * layerWidth;
@@ -11535,7 +13037,29 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       showJourneyMessage(`Showing ${{quest.chainName}} in the Quest Catalogue.`, "ok");
     }}
 
+    function virtualChainEntry(chainId) {{
+      return inventoryVirtualLayout?.entries.find((entry) => Number(entry.chain.id) === Number(chainId)) || null;
+    }}
+
+    function ensureVirtualChainRendered(chainId, alignment = "nearest") {{
+      const entry = virtualChainEntry(chainId);
+      if (!entry) return false;
+      const viewportHeight = Math.max(1, chainList.clientHeight);
+      const top = entry.offset;
+      const bottom = entry.offset + entry.height;
+      if (alignment === "top") {{
+        chainList.scrollTop = Math.max(0, top);
+      }} else if (top < chainList.scrollTop + 8) {{
+        chainList.scrollTop = Math.max(0, top - 8);
+      }} else if (bottom > chainList.scrollTop + viewportHeight - 8) {{
+        chainList.scrollTop = Math.max(0, bottom - viewportHeight + 8);
+      }}
+      renderInventoryWindow(true);
+      return true;
+    }}
+
     function scrollChainToTop(chainId) {{
+      if (ensureVirtualChainRendered(chainId, "top")) return;
       const row = document.querySelector(`.chain-row[data-chain-id="${{chainId}}"]`);
       if (!row) return;
       const listRect = chainList.getBoundingClientRect();
@@ -11544,6 +13068,7 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     }}
 
     function scrollChainIntoCatalogueView(chainId) {{
+      if (ensureVirtualChainRendered(chainId)) return;
       const row = document.querySelector(`.chain-row[data-chain-id="${{chainId}}"]`);
       if (!row) return;
       const listRect = chainList.getBoundingClientRect();
@@ -11605,6 +13130,23 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       return new Set();
     }}
 
+    function refreshRenderedCatalogueSelectionState() {{
+      const highlightedQuestIds = new Set(selectedHighlightedQuests().map((quest) => quest.id));
+      document.querySelectorAll(".quest-icon, .chain-quest-item").forEach((element) => {{
+        const questId = Number(element.dataset.questId);
+        element.classList.toggle("active", activeId === questId || highlightedQuestIds.has(questId));
+        element.classList.toggle("selected", selectedId !== null && questId === selectedId);
+        element.setAttribute("aria-pressed", String(selectedId !== null && questId === selectedId));
+      }});
+      const activeQuest = activeId != null ? questsById.get(Number(activeId)) : null;
+      document.querySelectorAll(".chain-row").forEach((row) => {{
+        const chainId = Number(row.dataset.chainId);
+        row.classList.toggle("active", selectedChainId === chainId || activeQuest?.chainId === chainId);
+        row.classList.toggle("selected", selectedChainId === chainId);
+        row.setAttribute("aria-pressed", String(selectedChainId === chainId));
+      }});
+    }}
+
     function refreshSelectionState() {{
       const overlayQuestIds = new Set(selectedOverlayQuests().map((quest) => quest.id));
       const highlightedQuestIds = new Set(selectedHighlightedQuests().map((quest) => quest.id));
@@ -11664,17 +13206,34 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     function renderSelectionOverlays() {{
       highlightLayer.innerHTML = "";
       const selectedQuest = selectedId != null ? questsById.get(Number(selectedId)) : null;
+      const visiblePickupQuestIds = new Set();
+      markerLayer.querySelectorAll(".map-marker.available-pickup").forEach((marker) => {{
+        String(marker.dataset.questIds || "")
+          .split("|")
+          .filter(Boolean)
+          .forEach((questId) => visiblePickupQuestIds.add(Number(questId)));
+      }});
       const rendered = new Set();
       const renderNormal = (quest) => {{
         if (!quest || rendered.has(quest.id)) return;
         rendered.add(quest.id);
-        renderOverlay(quest, {{ append: true, forcePickupPins: true, emphasis: false }});
+        renderOverlay(quest, {{
+          append: true,
+          pickupMode: visiblePickupQuestIds.has(Number(quest.id)) ? "alternates" : "pins",
+          emphasis: false,
+        }});
       }};
       if (selectedQuest) {{
         rendered.add(selectedQuest.id);
       }}
       selectedOverlayQuests().forEach(renderNormal);
-      if (selectedQuest) renderOverlay(selectedQuest, {{ append: true, forcePickupPins: true, emphasis: true }});
+      if (selectedQuest) {{
+        renderOverlay(selectedQuest, {{
+          append: true,
+          pickupMode: visiblePickupQuestIds.has(Number(selectedQuest.id)) ? "alternates" : "pins",
+          emphasis: true,
+        }});
+      }}
     }}
 
     function renderOverlay(quest, options = {{}}) {{
@@ -11683,8 +13242,15 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       highlightLayer.style.setProperty("--chain-color", color);
       const objectivePoints = relevantPoints(quest.objectivePoints);
       renderObjectiveLayer(objectivePoints, color, {{ quest, emphasis: options.emphasis }});
-      const startPoints = relevantPoints(quest.startPoints);
-      if (options.forcePickupPins) {{
+      const visibleStarts = visibleStartPoints(quest);
+      const startPoints = visibleStarts.map((item) => item.plotted);
+      if (options.pickupMode === "alternates") {{
+        const representative = representativeStartPoint(visibleStarts);
+        const alternateStartPoints = visibleStarts
+          .filter((item) => item !== representative)
+          .map((item) => item.plotted);
+        renderPickupDots(alternateStartPoints, {{ quest, emphasis: options.emphasis }});
+      }} else if (options.pickupMode === "pins" || options.forcePickupPins) {{
         renderPins(startPoints, "pickup", "!", "Quest pickup", {{ quest, role: "pickup", emphasis: options.emphasis }});
       }} else if (startPoints.length > 1) {{
         renderPickupDots(startPoints, {{ quest, emphasis: options.emphasis }});
@@ -11848,7 +13414,8 @@ def render_classic_html(records, chains, zones, continents, npc_names):
         .replaceAll("'", "&#039;");
     }}
 
-    worldButton.addEventListener("click", setWorldView);
+    worldButton.addEventListener("click", () => setWorldView("azeroth"));
+    worldSelect.addEventListener("change", (event) => setWorldView(event.target.value));
     mapViewButton.addEventListener("click", () => {{
       setAppMode("map");
       focusAppSurface();
@@ -11890,10 +13457,21 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     mapEl.addEventListener("mousemove", handleWorldZonePointerMove);
     mapEl.addEventListener("mouseleave", hideWorldZoneTooltip);
     mapEl.addEventListener("click", handleWorldZoneClick);
+    mapFrame.addEventListener("contextmenu", (event) => {{
+      if (currentAppMode !== "map" || mapModePanel.hidden || !mapModePanel.contains(event.target)) return;
+      event.preventDefault();
+      closePickupQuestList();
+      hideWorldZoneTooltip();
+      if (currentView.type !== "world") setWorldView();
+    }});
     collapseAllChainsButton.addEventListener("click", collapseAllChains);
     expandAllChainsButton.addEventListener("click", expandAllChains);
     chainList.addEventListener("dragstart", handleCatalogueDragStart);
     chainList.addEventListener("dragend", handleCatalogueDragEnd);
+    chainList.addEventListener("scroll", () => {{
+      cancelAnimationFrame(inventoryVirtualScrollFrame);
+      inventoryVirtualScrollFrame = requestAnimationFrame(() => renderInventoryWindow());
+    }}, {{ passive: true }});
     chainList.addEventListener("dragenter", handleBatchSummaryDragOver);
     chainList.addEventListener("dragover", handleBatchSummaryDragOver);
     chainList.addEventListener("dragleave", handleBatchSummaryDragLeave);
@@ -11913,9 +13491,16 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       if (!activeJourney) return;
       activeJourney.name = journeyNameEditor.value.trim() || activeJourney.name;
     }});
+    journeyVersionEditor.addEventListener("change", () => updateJourneyMetadata("version"));
+    journeyFactionEditor.addEventListener("change", () => updateJourneyMetadata("faction"));
+    journeyRaceEditor.addEventListener("change", () => updateJourneyMetadata("race"));
+    journeyClassEditor.addEventListener("change", () => updateJourneyMetadata("class"));
     journeySaveButton.addEventListener("click", saveJourneyJson);
     journeyCopyAddonButton.addEventListener("click", copyJourneyAddonString);
+    journeyConfigureButton.addEventListener("click", () => setJourneyConfigOpen(true));
+    journeyConfigCloseButton.addEventListener("click", () => setJourneyConfigOpen(false));
     journeyCloseButton.addEventListener("click", closeCurrentJourney);
+    settingsJourneyCloseButton.addEventListener("click", closeCurrentJourney);
     journeyImportButton.addEventListener("click", () => setJourneyStringImportOpen(journeyStringImport.hidden));
     journeyLoadButton.addEventListener("click", () => journeyLoadInput.click());
     journeyLoadInput.addEventListener("change", () => {{
@@ -11933,11 +13518,30 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       event.preventDefault();
       journeyStringSubmit.click();
     }});
+    settingsButton.addEventListener("click", () => setSettingsOpen(settingsOverlay.hidden));
+    settingsCloseButton.addEventListener("click", () => setSettingsOpen(false));
+    infoButton.addEventListener("click", () => setInfoOpen(infoOverlay.hidden));
+    infoCloseButton.addEventListener("click", () => setInfoOpen(false));
+    plannerOpenSettingsButton.addEventListener("click", () => setSettingsOpen(true));
+    settingsOverlay.addEventListener("click", (event) => {{
+      if (event.target === settingsOverlay) setSettingsOpen(false);
+    }});
+    infoOverlay.addEventListener("click", (event) => {{
+      if (event.target === infoOverlay) setInfoOpen(false);
+    }});
+    journeyConfigOverlay.addEventListener("click", (event) => {{
+      if (event.target === journeyConfigOverlay) setJourneyConfigOpen(false);
+    }});
+    gameVersionOptions.addEventListener("change", (event) => {{
+      const input = event.target.closest('input[name="game-version"]');
+      if (input?.checked) setGameVersion(input.value);
+    }});
     profileImportButton.addEventListener("click", () => profileImportInput.click());
     profileImportInput.addEventListener("change", () => {{
       importCharacterProfileFile(profileImportInput.files?.[0]);
       profileImportInput.value = "";
     }});
+    settingsProfileCloseButton.addEventListener("click", closeCharacterProfile);
     plannerBoard.addEventListener("dragstart", handleJourneyDragStart);
     plannerBoard.addEventListener("dragend", handleCatalogueDragEnd);
     plannerBoard.addEventListener("dragenter", handlePlannerDragOver);
@@ -11945,6 +13549,10 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     plannerBoard.addEventListener("dragleave", handlePlannerDragLeave);
     plannerBoard.addEventListener("drop", handlePlannerDrop);
     plannerBoard.addEventListener("wheel", handlePlannerWheel, {{ passive: false }});
+    journeyHiddenDrop.addEventListener("dragenter", handleJourneyHiddenDragOver);
+    journeyHiddenDrop.addEventListener("dragover", handleJourneyHiddenDragOver);
+    journeyHiddenDrop.addEventListener("dragleave", handleJourneyHiddenDragLeave);
+    journeyHiddenDrop.addEventListener("drop", handleJourneyHiddenDrop);
     plannerBoard.addEventListener("click", (event) => {{
       const insertTarget = event.target.closest(".journey-insert-target");
       if (insertTarget) {{
@@ -12002,13 +13610,12 @@ def render_classic_html(records, chains, zones, continents, npc_names):
     }});
     mainFilterButton.addEventListener("click", () => {{
       setMainFilterMenuOpen(mainFilterMenu.hidden);
-      setDisplayFilterMenuOpen(false);
     }});
-    displayFilterButton.addEventListener("click", () => {{
-      setDisplayFilterMenuOpen(displayFilterMenu.hidden);
+    showQuestsOnMapCheckbox.addEventListener("change", () => {{
+      updateMapQuestDisplayOption();
       setMainFilterMenuOpen(false);
     }});
-    showAssignedCatalogueCheckbox.addEventListener("change", updateCatalogueAssignedOption);
+    hideAssignedCatalogueCheckbox.addEventListener("change", updateCatalogueAssignedOption);
     document.addEventListener("click", (event) => {{
       const zoneLink = event.target.closest(".zone-link");
       if (!zoneLink) return;
@@ -12025,12 +13632,36 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       if (!mainFilterWrap.contains(event.target)) {{
         setMainFilterMenuOpen(false);
       }}
-      if (!displayFilterWrap.contains(event.target)) {{
-        setDisplayFilterMenuOpen(false);
+      const targetControl = event.target.closest([
+        "button",
+        "a",
+        "input",
+        "select",
+        "textarea",
+        "label",
+        "[contenteditable='true']",
+        ".chain-row",
+        ".chain-quest-item",
+        ".journey-quest",
+        ".pickup-choice-popover",
+        ".map-marker",
+        ".quest-pin",
+        ".objective-dot",
+        ".objective-area",
+        ".pickup-dot",
+      ].join(","));
+      if (!targetControl && (selectedId != null || selectedChainId != null || activeId != null)) {{
+        deselectCatalogueTarget();
       }}
     }});
     document.addEventListener("keydown", (event) => {{
       const key = event.key.toLowerCase();
+      if (!event.altKey && !event.ctrlKey && !event.metaKey && key === "f" && currentAppMode !== "replay" && settingsOverlay.hidden && infoOverlay.hidden && journeyConfigOverlay.hidden && canUsePlannerKeys(event.target)) {{
+        showQuestsOnMapCheckbox.checked = !showQuestsOnMapCheckbox.checked;
+        updateMapQuestDisplayOption();
+        event.preventDefault();
+        return;
+      }}
       if (!event.altKey && !event.ctrlKey && !event.metaKey && (key === "q" || key === "e" || key === "r") && canUsePlannerKeys(event.target)) {{
         setAppMode(key === "q" ? "map" : key === "e" ? "planner" : "replay");
         focusAppSurface();
@@ -12062,8 +13693,22 @@ def render_classic_html(records, chains, zones, continents, npc_names):
         }}
       }}
       if (event.key === "Escape") {{
+        if (!journeyConfigOverlay.hidden) {{
+          setJourneyConfigOpen(false);
+          event.preventDefault();
+          return;
+        }}
+        if (!infoOverlay.hidden) {{
+          setInfoOpen(false);
+          event.preventDefault();
+          return;
+        }}
+        if (!settingsOverlay.hidden) {{
+          setSettingsOpen(false);
+          event.preventDefault();
+          return;
+        }}
         setMainFilterMenuOpen(false);
-        setDisplayFilterMenuOpen(false);
         closePickupQuestList();
         if (selectedId != null || selectedChainId != null || activeId != null) {{
           deselectCatalogueTarget();
@@ -12078,10 +13723,12 @@ def render_classic_html(records, chains, zones, continents, npc_names):
       }}
     }});
 
+    settingsJourneyHost.append(journeySetup);
+    populateWorldSelect();
     populateZoneSelect();
     populateFilters();
     populateMainFilterMenu();
-    populateDisplayFilters();
+    updateMapQuestDisplayToggle();
     updateCatalogueAssignedToggle();
     updateProfileImportButton();
     populateJourneySetupControls();
@@ -12283,12 +13930,15 @@ def render_addon_quest_zones_lua(records, zones):
         race_mask = record.get("requiredRaceMask")
         class_mask = record.get("requiredClassMask")
         type_ids = record.get("typeIds") or []
+        game_versions = record.get("gameVersions") or ["era", "sod"]
         if isinstance(race_mask, int):
             fields.append(f"rm={race_mask}")
         if isinstance(class_mask, int):
             fields.append(f"cm={class_mask}")
         if type_ids:
             fields.append(f"t={lua_string_array(type_ids)}")
+        if game_versions == ["sod"]:
+            fields.append('gv="sod"')
         objective_details = record.get("objectiveDetails") or []
         if objective_details:
             fields.append(f"od={lua_objective_details(objective_details)}")
@@ -12328,9 +13978,12 @@ def render_addon_quest_zones_lua(records, zones):
 
 
 def main():
-    records, chains, zones, continents, npc_names = build_classic_records()
+    classic_bundle = build_classic_records()
+    tbc_bundle = build_version_records("tbc")
+    wotlk_bundle = build_version_records("wotlk")
+    records, chains, zones, continents, npc_names, _world_groups = classic_bundle
     output = ROOT / "questieplus.html"
-    output.write_text(render_classic_html(records, chains, zones, continents, npc_names), encoding="utf-8")
+    output.write_text(render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle), encoding="utf-8")
     addon_zones = ROOT / "QuestiePlus" / "QuestiePlusQuestZones.lua"
     addon_zones.write_text(render_addon_quest_zones_lua(records, zones), encoding="utf-8")
     print(f"Wrote {output}")
@@ -12338,6 +13991,10 @@ def main():
     print(f"Quest records: {len(records)}")
     print(f"Chains: {len(chains)}")
     print(f"Zone maps: {len(zones)}")
+    print(f"TBC quest records: {len(tbc_bundle[0])}")
+    print(f"TBC zone maps: {len(tbc_bundle[2])}")
+    print(f"WotLK quest records: {len(wotlk_bundle[0])}")
+    print(f"WotLK zone maps: {len(wotlk_bundle[2])}")
 
 
 if __name__ == "__main__":

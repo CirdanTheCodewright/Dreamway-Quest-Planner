@@ -38,6 +38,30 @@ local PANEL_BATCH_COLUMN_STEP_X = 182
 local PANEL_BATCH_ROW_STEP_Y = 372
 local PANEL_BATCH_VISIBLE_ROW_EXTRA = 1
 
+local function NormalizeQuestiePlusGameVersion(value)
+    value = string.lower(tostring(value or ""))
+    if value == "wotlk" or value == "wrath" then
+        return "wotlk"
+    end
+    if value == "tbc" then
+        return "tbc"
+    end
+    if value == "sod" then
+        return "sod"
+    end
+    return "era"
+end
+
+local function CurrentQuestiePlusGameVersion()
+    if Questie and Questie.IsWotlk then
+        return "wotlk"
+    end
+    if Questie and Questie.IsTBC then
+        return "tbc"
+    end
+    return Questie and Questie.IsSoD and "sod" or "era"
+end
+
 function QuestiePlusBitBand(a, b)
     if bit and bit.band then
         return bit.band(a, b)
@@ -218,6 +242,7 @@ function ProfileRecorder.EnsureCharacterProfile()
     QuestiePlusProfile.schemaVersion = 2
     QuestiePlusProfile.app = "QuestiePlus"
     QuestiePlusProfile.kind = "CharacterProfile"
+    QuestiePlusProfile.gameVersion = CurrentQuestiePlusGameVersion()
     QuestiePlusProfile.eventSchemaVersion = 2
     QuestiePlusProfile.events = QuestiePlusProfile.events or {}
     QuestiePlusProfile.character = QuestiePlusProfile.character or {}
@@ -2519,7 +2544,7 @@ function ParseJourneyDense(text)
         return nil, "That is not a valid QPJ2 Journey string."
     end
     local fields = QuestiePlusDenseSplit(text, separator)
-    if fields[1] ~= "QPJ2" or #fields ~= 7 then
+    if fields[1] ~= "QPJ2" or (#fields ~= 7 and #fields ~= 8 and #fields ~= 9) then
         return nil, "That is not a valid QPJ2 Journey string."
     end
 
@@ -2539,9 +2564,11 @@ function ParseJourneyDense(text)
     local journey = {
         id = journeyId ~= "" and journeyId or ("imported-" .. tostring(time())),
         name = journeyName,
+        gameVersion = NormalizeQuestiePlusGameVersion(fields[8]),
         character = {
             raceMask = raceMask,
             classMask = classMask,
+            faction = fields[9] == "a" and "Alliance" or fields[9] == "h" and "Horde" or "all",
         },
         batches = {},
         hiddenQuestIds = {},
@@ -2609,6 +2636,7 @@ local function ParseJourneyJson(text)
     local journey = {
         id = journeyId,
         name = journeyName,
+        gameVersion = JsonStringField(text, "gameVersion") or CurrentQuestiePlusGameVersion(),
         character = {
             race = JsonStringField(text, "race"),
             raceMask = JsonNumberField(text, "raceMask"),
@@ -4444,6 +4472,8 @@ function JourneyToDenseString(journey)
         tostring(tonumber(character.classMask) or 0),
         table.concat(batchParts, ";"),
         table.concat(hiddenIds, ","),
+        NormalizeQuestiePlusGameVersion(journey.gameVersion),
+        character.faction == "Alliance" and "a" or character.faction == "Horde" and "h" or "*",
     }, ":")
 end
 

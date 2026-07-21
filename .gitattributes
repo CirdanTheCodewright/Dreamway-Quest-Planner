@@ -7,5 +7,5 @@
 *.md text eol=lf
 *.json text eol=lf
 
-questieplus.html linguist-generated=true
+questieplus.html filter=lfs diff=lfs merge=lfs -text linguist-generated=true
 assets/** linguist-generated=true
