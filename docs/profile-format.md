@@ -1,6 +1,6 @@
 # Character Profile Format
 
-QuestiePlus stores one `QuestiePlusProfile` SavedVariables table per character. Schema version 2 adds a compact ordered replay event log alongside `completedQuestIds`.
+Dreamway stores one `DreamwayProfile` SavedVariables table per character. Schema version 2 adds a compact ordered replay event log alongside `completedQuestIds`.
 
 ```json
 {

@@ -1,10 +1,11 @@
 # Local automation / Codex state
 .agents/
 .codex/
+backups/
 
 # Generated verification output
 artifacts/
-questieplus-*-preview.png
+dreamway-*-preview.png
 
 # Python
 __pycache__/

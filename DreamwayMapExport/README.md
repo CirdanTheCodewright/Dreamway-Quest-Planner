@@ -1,4 +1,4 @@
-# QuestiePlus Map Export
+# Dreamway Map Export
 
 Temporary diagnostic addon for exporting Blizzard's own clickable map data from the
 Classic Era Kalimdor and Eastern Kingdoms continent maps.
@@ -11,7 +11,7 @@ Classic Era Kalimdor and Eastern Kingdoms continent maps.
 4. Run `/reload` or log out so WoW writes SavedVariables to disk.
 5. Retrieve:
 
-   `WTF/Account/<account>/SavedVariables/QuestiePlusMapExport.lua`
+   `WTF/Account/<account>/SavedVariables/DreamwayMapExport.lua`
 
 The export deliberately scans only UI map IDs `1414` (Kalimdor) and `1415`
 (Eastern Kingdoms), not world map `947`. It includes descendant zones and cities,

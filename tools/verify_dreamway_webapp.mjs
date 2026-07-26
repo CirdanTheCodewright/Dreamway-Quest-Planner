@@ -7,9 +7,9 @@ const require = createRequire(import.meta.url);
 const { chromium } = require("C:/Users/Dan/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/.pnpm/playwright-core@1.61.1/node_modules/playwright-core");
 
 const root = resolve(import.meta.dirname, "..");
-const htmlPath = resolve(root, "questieplus.html");
-const screenshotPath = resolve(root, "artifacts", "questieplus_duskwood.png");
-const worldScreenshotPath = resolve(root, "artifacts", "questieplus_world.png");
+const htmlPath = resolve(root, "dreamway.html");
+const screenshotPath = resolve(root, "artifacts", "dreamway_duskwood.png");
+const worldScreenshotPath = resolve(root, "artifacts", "dreamway_world.png");
 
 await mkdir(resolve(root, "artifacts"), { recursive: true });
 

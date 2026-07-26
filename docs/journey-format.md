@@ -7,7 +7,7 @@ The web app currently exports this shape:
 ```json
 {
   "schemaVersion": 1,
-  "app": "QuestiePlus",
+  "app": "Dreamway",
   "kind": "Journey",
   "savedAt": "2026-07-07T00:00:00.000Z",
   "id": "darkshore-12-18",
@@ -70,10 +70,10 @@ Journey imports are non-blocking for prerequisite failures. A quest whose prereq
 
 `expectedLevel` is computed from quest levels unless `expectedLevelManual` is true. `zones` is derived from all zones associated with the quests in that batch.
 
-`hiddenQuestIds` / `hiddenQuests` represent quests the user intentionally removed from progression. While Plus mode is active, the addon hides Questie pickup icons for these quests. The export currently also includes legacy `unusedQuestIds` / `unusedQuests` aliases for backward compatibility.
+`hiddenQuestIds` / `hiddenQuests` represent quests the user intentionally removed from progression. While Dreamway mode is active, the addon hides Questie pickup icons for these quests. The export currently also includes legacy `unusedQuestIds` / `unusedQuests` aliases for backward compatibility.
 
 Quests that are neither assigned to a batch nor hidden are omitted from the Journey export. The web app can always derive that ordinary unassigned state from the Questie dataset, which keeps addon import strings small enough for WoW's edit boxes.
 
-The downloadable Journey file remains JSON. For transfer through WoW edit boxes, the web app and addon use the compact positional `QPJ2` string format instead of embedding quest names, zone names, or JSON property labels. New strings use colon-delimited top-level fields because WoW treats pipe characters as UI markup; legacy pipe-delimited `QPJ2` strings remain importable. The addon stores the imported Journey as Lua SavedVariables.
+The downloadable Journey file remains JSON. For transfer through WoW edit boxes, the web app and addon use the compact positional `DWJ2` string format instead of embedding quest names, zone names, or JSON property labels. New strings use colon-delimited top-level fields because WoW treats pipe characters as UI markup. Pipe-delimited strings and pre-rename `QPJ2` strings remain importable. The addon stores the imported Journey as Lua SavedVariables.
 
 `preQuestSingle` means any one listed quest can satisfy the prerequisite; `preQuestGroup` means every listed quest must be complete.

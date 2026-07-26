@@ -66,7 +66,7 @@ def main():
     profile = {
         "schemaVersion": 2,
         "eventSchemaVersion": 2,
-        "app": "QuestiePlus",
+        "app": "Dreamway",
         "kind": "CharacterProfile",
         "character": {
             "name": "Daddylow",

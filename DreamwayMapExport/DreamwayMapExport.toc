@@ -1,0 +1,8 @@
+## Interface: 11508
+## Title: Dreamway Map Export
+## Notes: Exports Blizzard's Kalimdor and Eastern Kingdoms zone/city hitboxes for Dreamway development.
+## Author: Dreamway
+## Version: 0.1.0
+## SavedVariables: DreamwayMapExportDB
+
+DreamwayMapExport.lua

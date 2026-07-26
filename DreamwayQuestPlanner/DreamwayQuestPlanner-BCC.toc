@@ -1,0 +1,11 @@
+## Interface: 20506
+## Title: Dreamway Quest Planner
+## Notes: Plan and follow Dreamway Journeys in game.
+## Author: Codex
+## Version: 0.4.1
+## RequiredDeps: Questie
+## SavedVariables: DreamwayDB
+## SavedVariablesPerCharacter: DreamwayProfile
+
+DreamwayQuestZones-BCC.lua
+Dreamway.lua

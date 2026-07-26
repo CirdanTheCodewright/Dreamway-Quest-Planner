@@ -14,7 +14,7 @@ local exporter = CreateFrame("Frame")
 local scan
 
 local function Print(message)
-    DEFAULT_CHAT_FRAME:AddMessage("|cffffd100QuestiePlus Map Export:|r " .. tostring(message))
+    DEFAULT_CHAT_FRAME:AddMessage("|cffffd100Dreamway Map Export:|r " .. tostring(message))
 end
 
 local function IsCityMap(mapID)
@@ -167,8 +167,8 @@ local function CleanResult(result)
 end
 
 local function CompleteScan()
-    QuestiePlusMapExportDB.completed = true
-    QuestiePlusMapExportDB.completedAt = date("!%Y-%m-%dT%H:%M:%SZ")
+    DreamwayMapExportDB.completed = true
+    DreamwayMapExportDB.completedAt = date("!%Y-%m-%dT%H:%M:%SZ")
     scan = nil
     exporter:SetScript("OnUpdate", nil)
     Print("Export complete. Run |cffffffff/reload|r or log out to write the SavedVariables file to disk.")
@@ -176,7 +176,7 @@ end
 
 local function AdvanceContinent()
     CleanResult(scan.current.result)
-    QuestiePlusMapExportDB.continents[scan.current.result.mapID] = scan.current.result
+    DreamwayMapExportDB.continents[scan.current.result.mapID] = scan.current.result
     Print(scan.current.result.name .. " complete.")
 
     scan.continentIndex = scan.continentIndex + 1
@@ -246,7 +246,7 @@ local function StartScan()
     end
 
     local _, build, _, interfaceVersion = GetBuildInfo()
-    QuestiePlusMapExportDB = {
+    DreamwayMapExportDB = {
         schema = "QPHIT1",
         generatedBy = ADDON_NAME,
         clientBuild = build,
@@ -277,8 +277,8 @@ local function ShowStatus()
         local completed = ((state.y - 1) * state.result.width + state.x - 1)
         local total = state.result.width * state.result.height
         Print(string.format("Scanning %s: %.1f%%", state.result.name, completed / total * 100))
-    elseif QuestiePlusMapExportDB and QuestiePlusMapExportDB.completed then
-        Print("The export completed at " .. tostring(QuestiePlusMapExportDB.completedAt) .. ". Run /reload if it has not yet been written to disk.")
+    elseif DreamwayMapExportDB and DreamwayMapExportDB.completed then
+        Print("The export completed at " .. tostring(DreamwayMapExportDB.completedAt) .. ". Run /reload if it has not yet been written to disk.")
     else
         Print("No scan is running. Use |cffffffff/qphit scan|r to begin.")
     end
@@ -295,7 +295,7 @@ local function HandleSlashCommand(message)
             scan = nil
             exporter:SetScript("OnUpdate", nil)
         end
-        QuestiePlusMapExportDB = nil
+        DreamwayMapExportDB = nil
         Print("Saved export cleared.")
     else
         Print("Commands: |cffffffff/qphit scan|r, |cffffffff/qphit status|r, |cffffffff/qphit clear|r")
@@ -307,8 +307,8 @@ exporter:SetScript("OnEvent", function(_, _, loadedAddon)
     if loadedAddon ~= ADDON_NAME then
         return
     end
-    QuestiePlusMapExportDB = QuestiePlusMapExportDB or {}
-    SLASH_QUESTIEPLUSMAPEXPORT1 = "/qphit"
-    SlashCmdList.QUESTIEPLUSMAPEXPORT = HandleSlashCommand
+    DreamwayMapExportDB = DreamwayMapExportDB or {}
+    SLASH_DREAMWAYMAPEXPORT1 = "/qphit"
+    SlashCmdList.DREAMWAYMAPEXPORT = HandleSlashCommand
     Print("Ready. Use |cffffffff/qphit scan|r to export Kalimdor and Eastern Kingdoms zone/city hitboxes.")
 end)

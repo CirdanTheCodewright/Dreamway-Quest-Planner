@@ -1,8 +1,0 @@
-## Interface: 11508
-## Title: QuestiePlus Map Export
-## Notes: Exports Blizzard's Kalimdor and Eastern Kingdoms zone/city hitboxes for QuestiePlus development.
-## Author: QuestiePlus
-## Version: 0.1.0
-## SavedVariables: QuestiePlusMapExportDB
-
-QuestiePlusMapExport.lua
