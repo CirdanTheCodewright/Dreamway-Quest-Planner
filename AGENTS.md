@@ -111,3 +111,13 @@ $tmp = Join-Path $env:TEMP "dreamway-inline-check.js"
 & $node --check $tmp
 git -c safe.directory="C:/Users/Dan/Documents/WoW Quest Mapping" diff --check -- tools/build_dreamway_webapp.py dreamway.html DreamwayQuestPlanner/DreamwayQuestZones.lua
 ```
+
+## Addon Quest Search Performance
+
+Quest Search can contain thousands of rows. Preserve its virtualized rendering whenever changing search, chain grouping, filters, completion state, or drag behavior:
+
+- Keep only the visible rows plus a small overscan pool as live draggable frames. Reuse that pool while scrolling; never create a frame for every result.
+- `OnVerticalScroll` must only schedule/coalesce `UpdatePanelSearchVisibleRows`. It must not rebuild results or call `RefreshPanelSearchResults`.
+- Do not perform Questie database hydration, quest-completion API calls, prerequisite traversal, sorting, or filtering from the scrolling/rendering hot path. Resolve those when the result model is built and cache lightweight display values used by recycled rows.
+- Invalidate targeted caches only when their underlying state changes, such as player level, quest completion, Journey edits, game version, or filters.
+- Before deploying search-related changes, test an empty search with the largest practical result set and confirm mouse-wheel scrolling remains responsive while row frames remain bounded to the visible pool.

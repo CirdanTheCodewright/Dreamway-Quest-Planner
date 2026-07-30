@@ -25,6 +25,8 @@ local ProfileRecorder = {
     batchRenderedLastIndex = nil,
     searchRenderedFirstIndex = nil,
     searchRenderedRowCount = nil,
+    searchScrollRefreshPending = false,
+    searchDisplayTextByKey = {},
     dreamwayUiRefreshPending = false,
     dreamwayUiRefreshPanel = false,
     questieCallbackRegistered = false,
@@ -263,16 +265,40 @@ local function AnchorDreamwayTooltip(owner)
     GameTooltip:SetPoint("BOTTOMRIGHT", owner, "TOPLEFT", -2, 2)
 end
 
+function DreamwayCharacterSelection()
+    DreamwayProfile = DreamwayProfile or {}
+    DreamwayProfile.selection = DreamwayProfile.selection or {}
+    return DreamwayProfile.selection
+end
+
+function DreamwayActiveJourneyId()
+    return DreamwayCharacterSelection().activeJourneyId
+end
+
+function DreamwaySetActiveJourneyId(journeyId)
+    DreamwayCharacterSelection().activeJourneyId = journeyId
+end
+
 local function NormalizeDb()
     DreamwayDB = DreamwayDB or {}
     DreamwayDB.journeys = DreamwayDB.journeys or {}
     DreamwayDB.mode = DreamwayDB.mode or MODE_QUESTIE
     DreamwayDB.currentBatch = tonumber(DreamwayDB.currentBatch) or 1
+    local characterSelection = DreamwayCharacterSelection()
+    if characterSelection.migratedSharedSelection ~= true then
+        characterSelection.activeJourneyId = characterSelection.activeJourneyId or DreamwayDB.activeJourneyId
+        characterSelection.currentBatch = tonumber(characterSelection.currentBatch) or DreamwayDB.currentBatch
+        characterSelection.migratedSharedSelection = true
+    end
+    if characterSelection.activeJourneyId and not DreamwayDB.journeys[characterSelection.activeJourneyId] then
+        characterSelection.activeJourneyId = nil
+        characterSelection.currentBatch = 1
+    end
     DreamwayDB.showAssignedQuests = DreamwayDB.showAssignedQuests == true
     DreamwayDB.showPreviousBatchQuests = DreamwayDB.showPreviousBatchQuests == true
     DreamwayDB.suppressedUnusedPrevious = DreamwayDB.suppressedUnusedPrevious or {}
     mode = DreamwayDB.mode == MODE_DREAMWAY and MODE_DREAMWAY or MODE_QUESTIE
-    batchIndex = DreamwayDB.currentBatch
+    batchIndex = tonumber(characterSelection.currentBatch) or 1
     panelShowAssignedQuests = DreamwayDB.showAssignedQuests
     ProfileRecorder.showPreviousBatchQuests = DreamwayDB.showPreviousBatchQuests
 end
@@ -285,6 +311,8 @@ function ProfileRecorder.EnsureCharacterProfile()
     DreamwayProfile.gameVersion = CurrentDreamwayGameVersion()
     DreamwayProfile.eventSchemaVersion = 2
     DreamwayProfile.events = DreamwayProfile.events or {}
+    DreamwayProfile.recordedCompleteQuestIds = DreamwayProfile.recordedCompleteQuestIds or {}
+    DreamwayProfile.recordedCompleteObjectiveKeys = DreamwayProfile.recordedCompleteObjectiveKeys or {}
     DreamwayProfile.character = DreamwayProfile.character or {}
 
     local characterName = UnitName("player")
@@ -409,7 +437,9 @@ end
 
 local function SaveDb()
     DreamwayDB.mode = mode
-    DreamwayDB.currentBatch = batchIndex
+    local characterSelection = DreamwayCharacterSelection()
+    characterSelection.activeJourneyId = DreamwayActiveJourneyId()
+    characterSelection.currentBatch = batchIndex
     DreamwayDB.showAssignedQuests = panelShowAssignedQuests == true
     DreamwayDB.showPreviousBatchQuests = ProfileRecorder.showPreviousBatchQuests == true
 end
@@ -481,6 +511,8 @@ local function TrackerStyle()
         zoneSize = tonumber(profile.trackerFontSizeZone) or 12,
         manualWidth = tonumber(profile.TrackerWidth) or 0,
         widthRatio = tonumber(profile.trackerWidthRatio) or 0.20,
+        manualHeight = tonumber(profile.TrackerHeight) or 0,
+        heightRatio = tonumber(profile.trackerHeightRatio) or 0.50,
     }
 end
 
@@ -505,8 +537,9 @@ local function ApplyTrackerFont(fontString, fontKey, sizeKey)
 end
 
 local function ActiveJourney()
-    if DreamwayDB and DreamwayDB.activeJourneyId then
-        local journey = DreamwayDB.journeys[DreamwayDB.activeJourneyId]
+    local activeJourneyId = DreamwayActiveJourneyId()
+    if DreamwayDB and activeJourneyId then
+        local journey = DreamwayDB.journeys[activeJourneyId]
         if journey and journey.batches and #journey.batches > 0 then
             return journey
         end
@@ -960,22 +993,80 @@ local function ColoredQuestDisplayName(quest, showState)
 end
 
 local function ColoredQuestSearchDisplayName(quest)
-    local questId = tonumber(quest and quest.id)
-    if questId then
-        local QuestieLib = ImportQuestieModule("QuestieLib")
-        if QuestieLib and QuestieLib.GetColoredQuestName then
-            local ok, text = pcall(QuestieLib.GetColoredQuestName, QuestieLib, questId, true, false)
-            if ok and text then
-                return text
-            end
-        end
+    local questId = tonumber(quest and quest.id) or 0
+    local questLevel = tonumber(quest and quest.questLevel) or 0
+    local playerLevel = UnitLevel and tonumber(UnitLevel("player")) or 0
+    local cacheKey = tostring(questId) .. ":" .. tostring(questLevel) .. ":" .. tostring(playerLevel)
+    local cached = ProfileRecorder.searchDisplayTextByKey[cacheKey]
+    if cached then
+        return cached
     end
 
-    return ColoredQuestDisplayName(quest, false)
+    local isDungeon = false
+    local isElite = false
+    local isRepeatable = false
+    local isEvent = false
+    local isPvP = false
+    for _, typeId in ipairs(quest and quest.typeIds or {}) do
+        typeId = tostring(typeId)
+        isDungeon = isDungeon or typeId == "dungeon" or typeId == "raid"
+        isElite = isElite or typeId == "elite"
+        isRepeatable = isRepeatable or typeId == "repeatable"
+        isEvent = isEvent or typeId == "holiday" or typeId == "seasonal"
+        isPvP = isPvP or typeId == "pvp"
+    end
+    local levelTag = tostring(questLevel)
+    if isDungeon then
+        levelTag = levelTag .. "D"
+    elseif isElite then
+        levelTag = levelTag .. "+"
+    end
+    local text = "[" .. levelTag .. "] " .. tostring(quest and quest.name or ("Quest #" .. tostring(questId)))
+    local QuestieLib = ImportQuestieModule("QuestieLib")
+    if QuestieLib and QuestieLib.PrintDifficultyColor and questLevel > 0 then
+        local ok, colored = pcall(
+            QuestieLib.PrintDifficultyColor,
+            QuestieLib,
+            questLevel,
+            text,
+            isRepeatable,
+            isEvent,
+            isPvP
+        )
+        if ok and colored then
+            text = colored
+        end
+    end
+    ProfileRecorder.searchDisplayTextByKey[cacheKey] = text
+    return text
 end
 
 local function IsJourneyComplete(quest)
-    return quest and quest.id and IsQuestTurnedIn(quest.id)
+    local questId = tonumber(quest and quest.id)
+    if not questId then
+        return false
+    end
+    if not ProfileRecorder.completedQuestIds then
+        ProfileRecorder.completedQuestIds = {}
+        for _, completedQuestId in ipairs(DreamwayProfile and DreamwayProfile.completedQuestIds or {}) do
+            completedQuestId = tonumber(completedQuestId)
+            if completedQuestId then
+                ProfileRecorder.completedQuestIds[completedQuestId] = true
+            end
+        end
+    end
+    if ProfileRecorder.completedQuestIds[questId] then
+        return true
+    end
+    local questieCompleted = Questie
+        and Questie.db
+        and Questie.db.char
+        and Questie.db.char.complete
+    if questieCompleted and (questieCompleted[questId] or questieCompleted[tostring(questId)]) then
+        ProfileRecorder.completedQuestIds[questId] = true
+        return true
+    end
+    return false
 end
 
 local function GetQuestLogIndex(questId)
@@ -1186,6 +1277,63 @@ function ProfileRecorder.QuestObjectiveSnapshot(questId)
     return snapshot
 end
 
+function ProfileRecorder.HasRecordedQuestComplete(questId)
+    questId = tonumber(questId)
+    if not questId then
+        return false
+    end
+    local profile = ProfileRecorder.EnsureCharacterProfile()
+    for _, completedQuestId in ipairs(profile.completedQuestIds or {}) do
+        if tonumber(completedQuestId) == questId then
+            return true
+        end
+    end
+    for _, completedQuestId in ipairs(profile.recordedCompleteQuestIds or {}) do
+        if tonumber(completedQuestId) == questId then
+            return true
+        end
+    end
+    for _, event in ipairs(profile.events or {}) do
+        if tonumber(event[2]) == ProfileRecorder.EVENT_QUEST_COMPLETE and tonumber(event[6]) == questId then
+            return true
+        end
+    end
+    return false
+end
+
+function ProfileRecorder.RecordQuestCompleteEvent(questId)
+    questId = tonumber(questId)
+    if not questId or ProfileRecorder.HasRecordedQuestComplete(questId) then
+        return
+    end
+    ProfileRecorder.RecordEvent(ProfileRecorder.EVENT_QUEST_COMPLETE, questId)
+    local profile = ProfileRecorder.EnsureCharacterProfile()
+    profile.recordedCompleteQuestIds[#profile.recordedCompleteQuestIds + 1] = questId
+end
+
+function ProfileRecorder.HasRecordedObjectiveComplete(questId, objectiveIndex)
+    local key = tostring(tonumber(questId) or 0) .. ":" .. tostring(tonumber(objectiveIndex) or 0)
+    local profile = ProfileRecorder.EnsureCharacterProfile()
+    for _, recordedKey in ipairs(profile.recordedCompleteObjectiveKeys or {}) do
+        if tostring(recordedKey) == key then
+            return true
+        end
+    end
+    for _, event in ipairs(profile.events or {}) do
+        local eventCurrent = tonumber(event[8]) or 0
+        local eventTotal = tonumber(event[9]) or 0
+        if tonumber(event[2]) == ProfileRecorder.EVENT_OBJECTIVE
+            and tonumber(event[6]) == tonumber(questId)
+            and tonumber(event[7]) == tonumber(objectiveIndex)
+            and eventTotal > 0
+            and eventCurrent >= eventTotal
+        then
+            return true
+        end
+    end
+    return false
+end
+
 function ProfileRecorder.RecordObjectiveEvent(questId, objectiveIndex, objective)
     questId = tonumber(questId)
     objectiveIndex = tonumber(objectiveIndex)
@@ -1195,6 +1343,10 @@ function ProfileRecorder.RecordObjectiveEvent(questId, objectiveIndex, objective
     objective = objective or {}
     local current = tonumber(objective.current) or 0
     local total = tonumber(objective.total) or 0
+    local isComplete = objective.finished == true or (total > 0 and current >= total)
+    if isComplete and ProfileRecorder.HasRecordedObjectiveComplete(questId, objectiveIndex) then
+        return
+    end
     local signature = tostring(current) .. ":" .. tostring(total) .. ":" .. tostring(objective.text or "")
     local key = tostring(questId) .. ":" .. tostring(objectiveIndex)
     local timestamp = GetTime and GetTime() or 0
@@ -1213,6 +1365,11 @@ function ProfileRecorder.RecordObjectiveEvent(questId, objectiveIndex, objective
         current,
         total
     )
+    if isComplete then
+        local profile = ProfileRecorder.EnsureCharacterProfile()
+        profile.recordedCompleteObjectiveKeys[#profile.recordedCompleteObjectiveKeys + 1] =
+            tostring(questId) .. ":" .. tostring(objectiveIndex)
+    end
 end
 
 function ProfileRecorder.NormalizeObjectiveText(text)
@@ -1382,7 +1539,7 @@ function ProfileRecorder.RecordQuestWatchUpdate(questId)
 
         local complete = IsQuestCompleteInLog(questId)
         if complete and ProfileRecorder.questCompleteState[questId] == false then
-            ProfileRecorder.RecordEvent(ProfileRecorder.EVENT_QUEST_COMPLETE, questId)
+            ProfileRecorder.RecordQuestCompleteEvent(questId)
         end
         ProfileRecorder.questCompleteState[questId] = complete and true or false
     end)
@@ -1410,7 +1567,7 @@ function ProfileRecorder.RecordQuestieObjectiveUpdate(questId, objectiveIndex, a
 
     local complete = IsQuestCompleteInLog(questId)
     if complete and ProfileRecorder.questCompleteState[questId] ~= true then
-        ProfileRecorder.RecordEvent(ProfileRecorder.EVENT_QUEST_COMPLETE, questId)
+        ProfileRecorder.RecordQuestCompleteEvent(questId)
     end
     ProfileRecorder.questCompleteState[questId] = complete and true or false
 end
@@ -1504,7 +1661,7 @@ function ProfileRecorder.RefreshQuestObjectiveEventState(recordChanges)
 
         local complete = IsQuestCompleteInLog(questId)
         if recordChanges and complete and ProfileRecorder.questCompleteState[questId] == false then
-            ProfileRecorder.RecordEvent(ProfileRecorder.EVENT_QUEST_COMPLETE, questId)
+            ProfileRecorder.RecordQuestCompleteEvent(questId)
         end
         ProfileRecorder.questCompleteState[questId] = complete and true or false
     end
@@ -2582,7 +2739,11 @@ local function RefreshDreamwayTracker()
 
     HideUnusedTrackerLines()
 
-    local height = math.max(60, math.abs(y) + 12)
+    local contentHeight = math.max(60, math.abs(y) + 12)
+    local configuredHeight = style.manualHeight > 0
+        and style.manualHeight
+        or (GetScreenHeight() * style.heightRatio)
+    local height = math.min(contentHeight, math.max(60, configuredHeight - 12))
     dreamwayFrame:SetHeight(height)
     if baseFrame then
         baseFrame:SetWidth(width)
@@ -2760,6 +2921,9 @@ local function CreateDreamwayTracker()
     dreamwayFrame = CreateFrame("Frame", "Dreamway_TrackerFrame", baseFrame)
     dreamwayFrame:SetPoint("TOPLEFT", baseFrame, "TOPLEFT", 0, -4)
     dreamwayFrame:SetFrameLevel((baseFrame:GetFrameLevel() or 0) + 60)
+    if dreamwayFrame.SetClipsChildren then
+        dreamwayFrame:SetClipsChildren(true)
+    end
     dreamwayFrame.lines = {}
     dreamwayFrame.lineIndex = 0
     dreamwayFrame.itemButtons = {}
@@ -2768,6 +2932,9 @@ local function CreateDreamwayTracker()
     if trackerItemButton and trackerItemButton.New then
         for index = 1, 16 do
             dreamwayFrame.itemButtons[index] = trackerItemButton.New("Dreamway_TrackerItemButton" .. tostring(index))
+            if dreamwayFrame.itemButtons[index] and dreamwayFrame.itemButtons[index].SetParent then
+                dreamwayFrame.itemButtons[index]:SetParent(dreamwayFrame)
+            end
         end
     end
 
@@ -3348,7 +3515,7 @@ end
 function DreamwayInstallImportedJourney(journey)
     RefreshJourneyDerivedData(journey)
     DreamwayDB.journeys[journey.id] = journey
-    DreamwayDB.activeJourneyId = journey.id
+    DreamwaySetActiveJourneyId(journey.id)
     batchIndex = 1
     SaveDb()
     ApplyUnusedQuestSuppression()
@@ -4681,11 +4848,12 @@ local function AddQuestToUnused(journey, quest)
 end
 
 local function EditableJourney()
-    if not DreamwayDB or not DreamwayDB.activeJourneyId then
+    local activeJourneyId = DreamwayActiveJourneyId()
+    if not DreamwayDB or not activeJourneyId then
         return nil, "Import a Journey before editing it in game."
     end
 
-    local journey = DreamwayDB.journeys and DreamwayDB.journeys[DreamwayDB.activeJourneyId]
+    local journey = DreamwayDB.journeys and DreamwayDB.journeys[activeJourneyId]
     if not journey or journey == fallbackJourney then
         return nil, "Import a Journey before editing it in game."
     end
@@ -4704,7 +4872,7 @@ local function CommitJourneyCandidate(candidate, message)
 
     candidate.savedAt = ProfileRecorder.UpdatedAt(ProfileRecorder.ServerTimestamp())
     DreamwayDB.journeys[candidate.id] = candidate
-    DreamwayDB.activeJourneyId = candidate.id
+    DreamwaySetActiveJourneyId(candidate.id)
     panelJourneyManager.selectedJourneyId = candidate.id
     SaveDb()
     ApplyUnusedQuestSuppression()
@@ -5323,7 +5491,7 @@ function DreamwaySortedJourneys()
 end
 
 function DreamwayManagerSelectedJourney()
-    local journeyId = panelJourneyManager.selectedJourneyId or (DreamwayDB and DreamwayDB.activeJourneyId)
+    local journeyId = panelJourneyManager.selectedJourneyId or DreamwayActiveJourneyId()
     local journey = journeyId and DreamwayDB and DreamwayDB.journeys and DreamwayDB.journeys[journeyId]
     if journey then
         panelJourneyManager.selectedJourneyId = journey.id
@@ -5456,7 +5624,7 @@ function DreamwayActivateManagedJourney()
     if not journey then
         return
     end
-    DreamwayDB.activeJourneyId = journey.id
+    DreamwaySetActiveJourneyId(journey.id)
     batchIndex = 1
     SaveDb()
     ApplyUnusedQuestSuppression()
@@ -5542,7 +5710,7 @@ function DreamwayCreateNewJourney()
 
     RefreshJourneyDerivedData(journey)
     DreamwayDB.journeys[id] = journey
-    DreamwayDB.activeJourneyId = id
+    DreamwaySetActiveJourneyId(id)
     panelJourneyManager.selectedJourneyId = id
     batchIndex = 1
     SaveDb()
@@ -5580,14 +5748,15 @@ function DreamwayDeleteManagedJourney()
     end
 
     local journeyName = tostring(journey.name or journeyId)
-    local wasActive = DreamwayDB.activeJourneyId == journeyId
+    local wasActive = DreamwayActiveJourneyId() == journeyId
     DreamwayDB.journeys[journeyId] = nil
     panelJourneyManager.pendingDeleteJourneyId = nil
     panelJourneyManager.selectedJourneyId = nil
     if wasActive then
         local remaining = DreamwaySortedJourneys()
-        DreamwayDB.activeJourneyId = remaining[1] and remaining[1].id or nil
-        panelJourneyManager.selectedJourneyId = DreamwayDB.activeJourneyId
+        local nextJourneyId = remaining[1] and remaining[1].id or nil
+        DreamwaySetActiveJourneyId(nextJourneyId)
+        panelJourneyManager.selectedJourneyId = nextJourneyId
         batchIndex = 1
     end
     SaveDb()
@@ -5628,7 +5797,7 @@ function DreamwayRefreshJourneyManager()
         row:ClearAllPoints()
         row:SetPoint("TOPLEFT", panelJourneyManager.listContent, "TOPLEFT", 0, -((index - 1) * 28))
         row.label:SetText(tostring(journey.name or journeyId))
-        row.activeLabel:SetShown(journeyId == DreamwayDB.activeJourneyId)
+        row.activeLabel:SetShown(journeyId == DreamwayActiveJourneyId())
         row:SetActive(selected and journeyId == selected.id)
         row:SetScript("OnClick", function()
             DreamwayCloseJourneyMetadataMenu()
@@ -5650,7 +5819,7 @@ function DreamwayRefreshJourneyManager()
     else
         panelJourneyManager.exportButton:Disable()
     end
-    if hasSelected and selected.id ~= DreamwayDB.activeJourneyId then
+    if hasSelected and selected.id ~= DreamwayActiveJourneyId() then
         panelJourneyManager.activateButton:Enable()
     else
         panelJourneyManager.activateButton:Disable()
@@ -5673,8 +5842,9 @@ function DreamwayRefreshJourneyManager()
     panelJourneyManager.classButton.label:SetText(DreamwayJourneyClassLabel(selected) .. "  v")
     local savedText = selected.savedAt and selected.savedAt ~= "" and ("  |  Saved " .. tostring(selected.savedAt)) or ""
     panelJourneyManager.countText:SetText(tostring(#(selected.batches or {})) .. " batches  |  " .. tostring(questCount) .. " assigned quests  |  " .. tostring(hiddenCount) .. " hidden" .. savedText)
-    panelJourneyManager.activeText:SetText(selected.id == DreamwayDB.activeJourneyId and "Currently active" or "Not active")
-    panelJourneyManager.activeText:SetTextColor(selected.id == DreamwayDB.activeJourneyId and 0.35 or 0.75, selected.id == DreamwayDB.activeJourneyId and 1 or 0.75, selected.id == DreamwayDB.activeJourneyId and 0.35 or 0.75)
+    local isActive = selected.id == DreamwayActiveJourneyId()
+    panelJourneyManager.activeText:SetText(isActive and "Currently active" or "Not active")
+    panelJourneyManager.activeText:SetTextColor(isActive and 0.35 or 0.75, isActive and 1 or 0.75, isActive and 0.35 or 0.75)
 end
 
 function DreamwayCreateJourneyManager()
@@ -5905,7 +6075,7 @@ function DreamwayCreateJourneyManager()
         if panelJourneyManager.toggleButton then
             panelJourneyManager.toggleButton.label:SetText("Return to Planner")
         end
-        panelJourneyManager.selectedJourneyId = DreamwayDB.activeJourneyId
+        panelJourneyManager.selectedJourneyId = DreamwayActiveJourneyId()
         DreamwayRefreshJourneyManager()
     end)
     frame:SetScript("OnHide", function()
@@ -7386,6 +7556,17 @@ UpdatePanelSearchVisibleRows = function(force)
     end
 end
 
+function SchedulePanelSearchVisibleRowsUpdate()
+    if ProfileRecorder.searchScrollRefreshPending then
+        return
+    end
+    ProfileRecorder.searchScrollRefreshPending = true
+    C_Timer.After(0, function()
+        ProfileRecorder.searchScrollRefreshPending = false
+        UpdatePanelSearchVisibleRows()
+    end)
+end
+
 RefreshPanelSearchResults = function()
     if not panelSearchResults or not panelSearchResultsContent then
         return
@@ -8040,7 +8221,7 @@ local function CreateJourneyPanel()
     panelSearchResultsScroll:SetPoint("TOPLEFT", panelSearchBox, "BOTTOMLEFT", 0, -6)
     panelSearchResultsScroll:SetPoint("BOTTOMRIGHT", panelSearchResults, "BOTTOMRIGHT", -28, 8)
     panelSearchResultsScroll:HookScript("OnVerticalScroll", function()
-        UpdatePanelSearchVisibleRows()
+        SchedulePanelSearchVisibleRowsUpdate()
     end)
 
     panelSearchResultsContent = CreateFrame("Frame", nil, panelSearchResultsScroll)

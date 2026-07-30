@@ -44,6 +44,15 @@ function New-TransparentMaster {
             $byteCount = [Math]::Abs($data.Stride) * $bitmap.Height
             $pixels = New-Object byte[] $byteCount
             [System.Runtime.InteropServices.Marshal]::Copy($data.Scan0, $pixels, 0, $byteCount)
+            $keyPixel = $sourceBitmap.GetPixel(0, 0)
+            $keyBlue = [int]$keyPixel.B
+            $keyGreen = [int]$keyPixel.G
+            $keyRed = [int]$keyPixel.R
+            $isMagentaKey = (
+                $keyRed -gt 200 -and
+                $keyBlue -gt 200 -and
+                $keyGreen -lt 80
+            )
 
             for ($y = 0; $y -lt $bitmap.Height; $y++) {
                 $row = $y * $data.Stride
@@ -52,29 +61,74 @@ function New-TransparentMaster {
                     $blue = [int]$pixels[$offset]
                     $green = [int]$pixels[$offset + 1]
                     $red = [int]$pixels[$offset + 2]
-                    $maximum = [Math]::Max($red, [Math]::Max($green, $blue))
-                    $minimum = [Math]::Min($red, [Math]::Min($green, $blue))
-                    $chroma = $maximum - $minimum
-
-                    if ($maximum -gt 140) {
-                        $alpha = [Math]::Max(0, [Math]::Min(255, ($chroma - 3) * 8))
-                        if ($alpha -lt 72) {
+                    if ($isMagentaKey) {
+                        # The subject is green stone with a black contour, so
+                        # any distinctly magenta-dominant pixel is background
+                        # or key-colored antialiasing. Drop those pixels and let
+                        # the resize pass antialias the clean contour.
+                        if (
+                            $red -gt ($green + 20) -and
+                            $blue -gt ($green + 20)
+                        ) {
                             $alpha = 0
                         }
-                        $pixels[$offset + 3] = [byte]$alpha
-                        if ($alpha -eq 0) {
-                            $pixels[$offset] = 0
-                            $pixels[$offset + 1] = 0
-                            $pixels[$offset + 2] = 0
-                        }
-                        elseif ($chroma -lt 100) {
-                            $pixels[$offset] = 0
-                            $pixels[$offset + 1] = [byte][Math]::Max($green, 220)
-                            $pixels[$offset + 2] = [byte][Math]::Min($red, [int]($green * 0.45))
+                        else {
+                            $alpha = 255
                         }
                     }
                     else {
-                        $pixels[$offset + 3] = 255
+                        $redDelta = $red - $keyRed
+                        $greenDelta = $green - $keyGreen
+                        $blueDelta = $blue - $keyBlue
+                        $distance = [Math]::Sqrt(
+                            ($redDelta * $redDelta) +
+                            ($greenDelta * $greenDelta) +
+                            ($blueDelta * $blueDelta)
+                        )
+                        if ($distance -le 8.0) {
+                            $alpha = 0
+                        }
+                        elseif ($distance -ge 110.0) {
+                            $alpha = 255
+                        }
+                        else {
+                            $progress = ($distance - 8.0) / 102.0
+                            $progress = $progress * $progress * (3.0 - (2.0 * $progress))
+                            $alpha = [int][Math]::Round(255.0 * $progress)
+                        }
+                    }
+
+                    if ($alpha -lt 16) {
+                        $alpha = 0
+                    }
+
+                    $pixels[$offset + 3] = [byte]$alpha
+                    if ($alpha -eq 0) {
+                        $pixels[$offset] = 0
+                        $pixels[$offset + 1] = 0
+                        $pixels[$offset + 2] = 0
+                    }
+                    elseif ($alpha -lt 255) {
+                        $opacity = $alpha / 255.0
+                        $inverseOpacity = 1.0 - $opacity
+                        $pixels[$offset] = [byte][Math]::Max(
+                            0,
+                            [Math]::Min(255, [Math]::Round(
+                                ($blue - ($inverseOpacity * $keyBlue)) / $opacity
+                            ))
+                        )
+                        $pixels[$offset + 1] = [byte][Math]::Max(
+                            0,
+                            [Math]::Min(255, [Math]::Round(
+                                ($green - ($inverseOpacity * $keyGreen)) / $opacity
+                            ))
+                        )
+                        $pixels[$offset + 2] = [byte][Math]::Max(
+                            0,
+                            [Math]::Min(255, [Math]::Round(
+                                ($red - ($inverseOpacity * $keyRed)) / $opacity
+                            ))
+                        )
                     }
                 }
             }
