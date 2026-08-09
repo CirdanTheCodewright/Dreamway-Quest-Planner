@@ -657,10 +657,14 @@ def item_name(items, item_id):
     return row[0] if isinstance(row, list) and row else f"Item {item_id}"
 
 
-def source_zone_suffix(points, zones, subzones, limit=2):
+def source_zone_suffix(points, zones, subzones, limit=2, known_zone_ids=None):
     if not zones:
         return ""
     counts = Counter()
+    for zone_id in known_zone_ids or []:
+        normalized_zone_id = resolve_zone_id(zone_id, zones, subzones)
+        if normalized_zone_id in zones:
+            counts[normalized_zone_id] += 1
     for point in points:
         zone_id = resolve_zone_id(point.get("zoneId"), zones, subzones)
         if zone_id in zones:
@@ -675,8 +679,44 @@ def source_zone_suffix(points, zones, subzones, limit=2):
     return f" [{', '.join(names[:limit])} +{len(names) - limit}]"
 
 
-def source_label(name, points, zones, subzones):
-    return f"{name}{source_zone_suffix(points, zones, subzones)}"
+def source_label(name, points, zones, subzones, known_zone_ids=None):
+    return f"{name}{source_zone_suffix(points, zones, subzones, known_zone_ids=known_zone_ids)}"
+
+
+def spawn_zone_ids(spawn_table, zones, subzones):
+    if not zones or not isinstance(spawn_table, dict):
+        return []
+    zone_ids = set()
+    for raw_zone_id in spawn_table:
+        try:
+            zone_id = resolve_zone_id(int(raw_zone_id), zones, subzones)
+        except (TypeError, ValueError):
+            continue
+        if zone_id in zones:
+            zone_ids.add(zone_id)
+    return sorted(zone_ids)
+
+
+def npc_spawn_zone_ids(npcs, npc_id, zones, subzones):
+    row = npcs.get(npc_id)
+    return spawn_zone_ids(table_value(row, 6), zones, subzones) if isinstance(row, list) else []
+
+
+def object_spawn_zone_ids(objects, object_id, zones, subzones):
+    row = objects.get(object_id)
+    return spawn_zone_ids(table_value(row, 3), zones, subzones) if isinstance(row, list) else []
+
+
+def item_source_zone_ids(items, npcs, objects, item_id, zones, subzones):
+    row = items.get(item_id)
+    if not isinstance(row, list):
+        return []
+    zone_ids = set()
+    for npc_id in flatten_numbers(table_value(row, 1)):
+        zone_ids.update(npc_spawn_zone_ids(npcs, npc_id, zones, subzones))
+    for object_id in flatten_numbers(table_value(row, 2)):
+        zone_ids.update(object_spawn_zone_ids(objects, object_id, zones, subzones))
+    return sorted(zone_ids)
 
 
 def npc_spawn_points(npcs, npc_id, kind="objective"):
@@ -709,11 +749,11 @@ def describe_start(quest, items, npcs, objects, zones=None, subzones=None):
     starts = table_value(quest, 1)
     parts = []
     for npc_id in source_refs(starts, 0):
-        parts.append(source_label(npc_name(npcs, npc_id), npc_all_spawn_points(npcs, npc_id), zones, subzones))
+        parts.append(source_label(npc_name(npcs, npc_id), npc_all_spawn_points(npcs, npc_id), zones, subzones, npc_spawn_zone_ids(npcs, npc_id, zones, subzones)))
     for object_id in source_refs(starts, 1):
-        parts.append(source_label(object_name(objects, object_id), object_all_spawn_points(objects, object_id), zones, subzones))
+        parts.append(source_label(object_name(objects, object_id), object_all_spawn_points(objects, object_id), zones, subzones, object_spawn_zone_ids(objects, object_id, zones, subzones)))
     for item_id in source_refs(starts, 2):
-        parts.append(source_label(f"{item_name(items, item_id)} drop", item_all_source_points(items, npcs, objects, item_id), zones, subzones))
+        parts.append(source_label(f"{item_name(items, item_id)} drop", item_all_source_points(items, npcs, objects, item_id), zones, subzones, item_source_zone_ids(items, npcs, objects, item_id, zones, subzones)))
     return parts or ["Unknown starter"]
 
 
@@ -721,9 +761,9 @@ def describe_end(quest, npcs, objects, zones=None, subzones=None):
     ends = table_value(quest, 2)
     parts = []
     for npc_id in source_refs(ends, 0):
-        parts.append(source_label(npc_name(npcs, npc_id), npc_all_spawn_points(npcs, npc_id), zones, subzones))
+        parts.append(source_label(npc_name(npcs, npc_id), npc_all_spawn_points(npcs, npc_id), zones, subzones, npc_spawn_zone_ids(npcs, npc_id, zones, subzones)))
     for object_id in source_refs(ends, 1):
-        parts.append(source_label(object_name(objects, object_id), object_all_spawn_points(objects, object_id), zones, subzones))
+        parts.append(source_label(object_name(objects, object_id), object_all_spawn_points(objects, object_id), zones, subzones, object_spawn_zone_ids(objects, object_id, zones, subzones)))
     return parts or ["Auto-complete / unknown"]
 
 
@@ -2608,12 +2648,18 @@ CSV_DIR = ROOT / "Questie" / "ExternalScripts(DONOTINCLUDEINRELEASE)" / "DBC - W
 WORLDMAPAREA_CLASSIC = CSV_DIR / "worldmaparea_classic.csv"
 UIMAP_CLASSIC = CSV_DIR / "uimap_classic.csv"
 QUESTSORT_CLASSIC = CSV_DIR / "questsort_classic.csv"
+AREATABLE_CLASSIC = CSV_DIR / "areatable_classic.csv"
+MAP_CLASSIC = CSV_DIR / "map_classic.csv"
 WORLDMAPAREA_TBC = CSV_DIR / "worldmaparea_tbc.csv"
 UIMAP_TBC = CSV_DIR / "uimap_tbc.csv"
 QUESTSORT_TBC = CSV_DIR / "questsort_tbc.csv"
+AREATABLE_TBC = CSV_DIR / "areatable_tbc.csv"
+MAP_TBC = CSV_DIR / "map_tbc.csv"
 WORLDMAPAREA_WOTLK = CSV_DIR / "worldmaparea_wotlk.csv"
 UIMAP_WOTLK = CSV_DIR / "uimap_wotlk.csv"
 QUESTSORT_WOTLK = CSV_DIR / "questsort_wotlk.csv"
+AREATABLE_WOTLK = CSV_DIR / "areatable_wotlk.csv"
+MAP_WOTLK = CSV_DIR / "map_wotlk.csv"
 AREA_ID_TO_UI_MAP = ROOT / "Questie" / "Database" / "Zones" / "data" / "areaIdToUiMapId.lua"
 SUBZONE_TO_PARENT = ROOT / "Questie" / "Database" / "Zones" / "data" / "subZoneToParentZone.lua"
 QUEST_TAG_INFO_CORRECTIONS = ROOT / "Questie" / "Database" / "Corrections" / "questTagInfoCorrections.lua"
@@ -2650,6 +2696,52 @@ QUEST_FLAGS_WEEKLY = 32768
 QUEST_FLAGS_MONTHLY = 65536
 SPECIAL_FLAGS_REPEATABLE = 1
 SPECIAL_FLAGS_MONTHLY = 4
+
+LOCATION_CATEGORY_ORDER = {
+    "unknown": 0,
+    "city": 1,
+    "zone": 2,
+    "dungeon": 3,
+    "raid": 4,
+    "battleground": 5,
+    "other": 6,
+}
+CITY_ZONE_IDS = {
+    1497,  # Undercity
+    1519,  # Stormwind City
+    1537,  # Ironforge
+    1637,  # Orgrimmar
+    1638,  # Thunder Bluff
+    1657,  # Darnassus
+    3487,  # Silvermoon City
+    3557,  # The Exodar
+    3703,  # Shattrath City
+    4395,  # Dalaran
+}
+SOD_LOCATION_CATEGORY_OVERRIDES = {
+    719: "raid",    # Blackfathom Deeps
+    721: "raid",    # Gnomeregan
+    1417: "raid",   # Sunken Temple
+    1477: "raid",   # The Temple of Atal'Hakkar
+    15475: "dungeon",  # Demon Fall Canyon
+    15531: "raid",     # The Tainted Scar
+    16074: "dungeon",  # Karazhan Crypts
+    16236: "raid",     # Scarlet Enclave
+}
+SOD_LOCATION_LEVEL_RANGES = {
+    719: (25, 25),
+    721: (40, 40),
+    1417: (50, 50),
+    1477: (50, 50),
+    15475: (60, 60),
+    15531: (60, 60),
+    16074: (60, 60),
+    16236: (60, 60),
+}
+SOD_LOCATION_NAME_OVERRIDES = {
+    1417: "Sunken Temple",
+    1477: "Sunken Temple",
+}
 
 QUEST_TYPE_FILTERS = [
     {"id": "general", "label": "General progression", "defaultEnabled": True},
@@ -2866,6 +2958,102 @@ def load_uimap_names(path=UIMAP_CLASSIC):
             except (TypeError, ValueError):
                 continue
     return names
+
+
+def canonical_zone_id(zone_id, subzones):
+    seen = set()
+    current = zone_id
+    while current in subzones and current not in seen:
+        seen.add(current)
+        current = subzones[current]
+    return current
+
+
+def load_map_location_categories(map_table_path):
+    categories = {}
+    instance_type_categories = {
+        1: "dungeon",
+        2: "raid",
+        3: "battleground",
+    }
+    with map_table_path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            try:
+                map_id = int(row["ID"])
+                instance_type = int(row.get("InstanceType") or 0)
+            except (TypeError, ValueError):
+                continue
+            categories[map_id] = instance_type_categories.get(instance_type, "other")
+    return categories
+
+
+def load_map_instance_areas(map_table_path):
+    instances = {}
+    categories = load_map_location_categories(map_table_path)
+    with map_table_path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            try:
+                map_id = int(row["ID"])
+                area_id = int(row.get("AreaTableID") or 0)
+                instance_type = int(row.get("InstanceType") or 0)
+            except (TypeError, ValueError):
+                continue
+            if area_id > 0 and instance_type > 0:
+                instances[area_id] = {
+                    "mapId": map_id,
+                    "locationCategory": categories.get(map_id, "other"),
+                }
+    return instances
+
+
+def load_instance_zone_data(area_table_path, map_table_path, subzones, world_continent_ids):
+    area_to_ui = load_lua_return_table_merge(AREA_ID_TO_UI_MAP)
+    map_categories = load_map_location_categories(map_table_path)
+    map_instance_areas = load_map_instance_areas(map_table_path)
+    area_rows = {}
+    with area_table_path.open(encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for row in reader:
+            try:
+                area_rows[int(row["ID"])] = row
+            except (TypeError, ValueError):
+                continue
+
+    instances = {}
+    for area_id, row in area_rows.items():
+        canonical_id = canonical_zone_id(area_id, subzones)
+        if canonical_id != area_id or canonical_id not in area_to_ui:
+            continue
+        try:
+            map_id = int(row["ContinentID"])
+        except (TypeError, ValueError):
+            continue
+        map_instance = map_instance_areas.get(canonical_id)
+        if map_instance:
+            map_id = map_instance["mapId"]
+        if map_id in world_continent_ids:
+            continue
+        name = str(row.get("AreaName_lang") or "").strip()
+        if not name or "unused" in name.lower() or name.lower().startswith("not used"):
+            continue
+        instances[canonical_id] = {
+            "id": canonical_id,
+            "uiMapId": area_to_ui.get(canonical_id),
+            "name": name,
+            "continentId": map_id,
+            "worldContinentId": map_id,
+            "worldGroup": "instance",
+            "image": "",
+            "isInstance": True,
+            "locationCategory": (
+                map_instance["locationCategory"]
+                if map_instance
+                else map_categories.get(map_id, "other")
+            ),
+        }
+    return instances
 
 
 def load_quest_sort_names(path=QUESTSORT_CLASSIC):
@@ -3484,7 +3672,7 @@ def resolve_zone_id(zone_id, zones, subzones):
         current = subzones[current]
         if current in zones:
             return current
-    return zone_id
+    return current
 
 
 def all_spawn_points_from_table(spawn_table, kind):
@@ -3636,6 +3824,8 @@ def project_point(point, zones, continents, subzones):
     zone = zones.get(zone_id)
     if not zone:
         return projected
+    if zone.get("isInstance"):
+        return projected
     world_continent_id = zone.get("worldContinentId", zone["continentId"])
     continent = continents.get(world_continent_id)
     if not continent:
@@ -3690,6 +3880,29 @@ def zone_ids_from_points(points, zones, subzones):
 def objective_zone_ids_from_points(points, zones, subzones):
     zone_ids = zone_ids_from_points(points, zones, subzones)
     return zone_ids if len(zone_ids) == 1 else []
+
+
+def objective_source_zone_ids(quest, items, npcs, objects, zones, subzones):
+    objectives = table_value(quest, 9)
+    zone_ids = set()
+    if isinstance(objectives, list):
+        for npc_id in [*objective_ids(objectives, 0), *objective_ids(objectives, 4)]:
+            zone_ids.update(npc_spawn_zone_ids(npcs, npc_id, zones, subzones))
+        for object_id in objective_ids(objectives, 1):
+            zone_ids.update(object_spawn_zone_ids(objects, object_id, zones, subzones))
+        for item_id in objective_ids(objectives, 2):
+            zone_ids.update(item_source_zone_ids(items, npcs, objects, item_id, zones, subzones))
+
+    trigger_end = table_value(quest, 8)
+    if isinstance(trigger_end, list) and len(trigger_end) > 1:
+        zone_ids.update(spawn_zone_ids(trigger_end[1], zones, subzones))
+
+    extra_objectives = table_value(quest, 28)
+    if isinstance(extra_objectives, list):
+        for extra in extra_objectives:
+            if isinstance(extra, list) and extra:
+                zone_ids.update(spawn_zone_ids(extra[0], zones, subzones))
+    return sorted(zone_ids)
 
 
 def dedupe_spatial_points(points):
@@ -3970,15 +4183,27 @@ def build_version_records(version="classic"):
         reputation_corrections.update(load_reputation_corrections(CLASSIC_QUEST_FIXES, faction_ids))
     item_fixes = WOTLK_ITEM_FIXES if is_wotlk else TBC_ITEM_FIXES if is_tbc else CLASSIC_ITEM_FIXES
     quest_item_rewards = item_rewards_by_quest(items, item_fixes)
+    world_continent_ids = (0, 1, 530, 571) if is_wotlk else (0, 1, 530) if is_tbc else (0, 1)
     zones, continents = load_world_area_data(
         world_area_path=WORLDMAPAREA_WOTLK if is_wotlk else WORLDMAPAREA_TBC if is_tbc else WORLDMAPAREA_CLASSIC,
         ui_map_path=UIMAP_WOTLK if is_wotlk else UIMAP_TBC if is_tbc else UIMAP_CLASSIC,
         zone_asset_dir=WOTLK_MAP_ASSET_DIR if is_wotlk else TBC_MAP_ASSET_DIR if is_tbc else MAP_ASSET_DIR,
         continent_asset_dir=WOTLK_CONTINENT_MAP_ASSET_DIR if is_wotlk else TBC_CONTINENT_MAP_ASSET_DIR if is_tbc else CONTINENT_MAP_ASSET_DIR,
-        continent_ids=(0, 1, 530, 571) if is_wotlk else (0, 1, 530) if is_tbc else (0, 1),
+        continent_ids=world_continent_ids,
         version="wotlk" if is_wotlk else "tbc" if is_tbc else "era",
     )
     subzones = load_lua_return_table_merge(SUBZONE_TO_PARENT)
+    zones.update(load_instance_zone_data(
+        AREATABLE_WOTLK if is_wotlk else AREATABLE_TBC if is_tbc else AREATABLE_CLASSIC,
+        MAP_WOTLK if is_wotlk else MAP_TBC if is_tbc else MAP_CLASSIC,
+        subzones,
+        world_continent_ids,
+    ))
+    for zone_id, zone in zones.items():
+        if not zone.get("locationCategory"):
+            zone["locationCategory"] = "city" if zone_id in CITY_ZONE_IDS else "zone"
+        if not is_expansion and zone_id in SOD_LOCATION_CATEGORY_OVERRIDES:
+            zone["sodLocationCategory"] = SOD_LOCATION_CATEGORY_OVERRIDES[zone_id]
     quest_sort_names = load_quest_sort_names(QUESTSORT_WOTLK if is_wotlk else QUESTSORT_TBC if is_tbc else QUESTSORT_CLASSIC)
     quest_tag_corrections = load_quest_tag_corrections("wotlk" if is_wotlk else "tbc" if is_tbc else "era")
     holiday_events = load_holiday_event_quests()
@@ -4023,7 +4248,9 @@ def build_version_records(version="classic"):
         zone_or_sort = table_value(quest, 16)
         start_zone_ids = zone_ids_from_points(start_points, zones, subzones)
         end_zone_ids = zone_ids_from_points(end_points, zones, subzones)
-        objective_zone_ids = objective_zone_ids_from_points(raw_objective_points, zones, subzones)
+        objective_zone_candidates = set(zone_ids_from_points(raw_objective_points, zones, subzones))
+        objective_zone_candidates.update(objective_source_zone_ids(quest, items, npcs, objects, zones, subzones))
+        objective_zone_ids = sorted(objective_zone_candidates) if len(objective_zone_candidates) == 1 else []
 
         quest_zones = set([*start_zone_ids, *objective_zone_ids, *end_zone_ids])
         range_zones = set(quest_zones)
@@ -4109,14 +4336,23 @@ def build_version_records(version="classic"):
         **{zone_id: level_range for zone_id, level_range in (WOTLK_ZONE_LEVEL_RANGES if is_wotlk else TBC_ZONE_LEVEL_RANGES if is_tbc else CLASSIC_ZONE_LEVEL_RANGES).items() if zone_id in zones},
     }
 
+    max_level = 80 if is_wotlk else 70 if is_tbc else 60
     serializable_zones = []
     for zone_id, zone in sorted(zones.items(), key=lambda item: (
+        LOCATION_CATEGORY_ORDER.get(item[1].get("locationCategory", "other"), 99),
         level_ranges.get(item[0], (999, 999))[0],
         level_ranges.get(item[0], (999, 999))[1],
         item[1]["continentId"],
         item[1]["name"],
     )):
+        location_category = zone.get("locationCategory", "other")
         level_range = level_ranges.get(zone_id)
+        if location_category in {"city", "battleground"}:
+            level_range = None
+        elif location_category == "raid":
+            level_range = (max_level, max_level)
+        sod_location_category = zone.get("sodLocationCategory")
+        sod_level_range = SOD_LOCATION_LEVEL_RANGES.get(zone_id) if not is_expansion else None
         serializable_zones.append({
             "id": zone_id,
             "uiMapId": zone.get("uiMapId"),
@@ -4125,6 +4361,10 @@ def build_version_records(version="classic"):
             "worldContinentId": zone.get("worldContinentId", zone["continentId"]),
             "worldGroup": zone.get("worldGroup", "azeroth"),
             "image": zone["image"],
+            "isInstance": bool(zone.get("isInstance")),
+            "locationCategory": location_category,
+            "sodLocationCategory": sod_location_category,
+            "sodName": SOD_LOCATION_NAME_OVERRIDES.get(zone_id) if not is_expansion else None,
             "worldRect": zone.get("worldRect"),
             "questCount": zone_counts[zone_id],
             "chainCount": len(zone_chain_ids[zone_id]),
@@ -4134,6 +4374,13 @@ def build_version_records(version="classic"):
                 str(level_range[0])
                 if level_range and level_range[0] == level_range[1]
                 else f"{level_range[0]}-{level_range[1]}" if level_range else ""
+            ),
+            "sodMinLevel": sod_level_range[0] if sod_level_range else None,
+            "sodMaxLevel": sod_level_range[1] if sod_level_range else None,
+            "sodLevelRange": (
+                str(sod_level_range[0])
+                if sod_level_range and sod_level_range[0] == sod_level_range[1]
+                else f"{sod_level_range[0]}-{sod_level_range[1]}" if sod_level_range else ""
             ),
         })
 
@@ -4231,7 +4478,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Dreamway</title>
-  <link rel="icon" type="image/png" sizes="64x64" href="assets/branding/dreamway-favicon-64.png?v=emerald-statue-1">
+  <link rel="icon" type="image/png" sizes="64x64" href="assets/branding/dreamway-favicon-64.png?v=emerald-statue-2">
   <style>
     :root {{
       color-scheme: dark;
@@ -4259,6 +4506,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       overflow: hidden;
       background: linear-gradient(180deg, #151711 0%, #080a08 100%);
       color: var(--ink);
+      text-rendering: geometricPrecision;
     }}
 
     main {{
@@ -4336,13 +4584,18 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     }}
 
     .settings-button-glyph {{
+      width: 1em;
+      height: 1em;
+      display: grid;
+      place-items: center;
       font-size: 1.22rem;
-      transform: translateY(-0.5px);
+      line-height: 1;
+      transform: translateY(-1px);
     }}
 
     .header-side .inventory-mode-toggle button {{
       padding-inline: 7px;
-      font-size: 0.7rem;
+      font-size: 0.74rem;
     }}
 
     .batch-map-toggle {{
@@ -4438,15 +4691,16 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       flex: 0 0 auto;
       display: inline-flex;
       align-items: center;
-      gap: 6px;
+      gap: 4px;
     }}
 
     .brand-icon {{
       display: block;
-      width: 34px;
-      height: 34px;
+      width: 38px;
+      height: 38px;
       object-fit: contain;
-      flex: 0 0 34px;
+      flex: 0 0 38px;
+      filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.65));
     }}
 
     h1 {{
@@ -4927,7 +5181,8 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
 
     .settings-overlay,
     .info-overlay,
-    .journey-config-overlay {{
+    .journey-config-overlay,
+    .journey-warnings-overlay {{
       position: fixed;
       z-index: 240;
       inset: 0;
@@ -4940,13 +5195,15 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
 
     .settings-overlay[hidden],
     .info-overlay[hidden],
-    .journey-config-overlay[hidden] {{
+    .journey-config-overlay[hidden],
+    .journey-warnings-overlay[hidden] {{
       display: none;
     }}
 
     .settings-dialog,
     .info-dialog,
-    .journey-config-dialog {{
+    .journey-config-dialog,
+    .journey-warnings-dialog {{
       width: min(1180px, calc(100vw - 36px));
       max-height: min(820px, calc(100vh - 48px));
       display: grid;
@@ -5018,6 +5275,99 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       grid-template-rows: auto minmax(0, 1fr);
     }}
 
+    .journey-warnings-dialog {{
+      width: min(780px, calc(100vw - 36px));
+      height: min(720px, calc(100vh - 48px));
+    }}
+
+    .journey-warnings-body {{
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      gap: 14px;
+      padding: 16px;
+    }}
+
+    .journey-warning-summary-grid {{
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 9px;
+    }}
+
+    .journey-warning-summary-item {{
+      min-width: 0;
+      padding: 10px 12px;
+      border: 1px solid rgba(255, 184, 77, 0.3);
+      border-radius: 6px;
+      background: rgba(88, 49, 10, 0.2);
+    }}
+
+    .journey-warning-summary-item strong,
+    .journey-warning-summary-item span {{
+      display: block;
+    }}
+
+    .journey-warning-summary-item strong {{
+      color: #ffd08a;
+      font-size: 1.08rem;
+    }}
+
+    .journey-warning-summary-item span {{
+      margin-top: 2px;
+      color: #b9aa91;
+      font-size: 0.72rem;
+      line-height: 1.3;
+    }}
+
+    .journey-warning-list {{
+      min-height: 0;
+      overflow-y: auto;
+      padding-right: 6px;
+    }}
+
+    .journey-warning-group + .journey-warning-group {{
+      margin-top: 16px;
+    }}
+
+    .journey-warning-group h3 {{
+      margin: 0 0 7px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid rgba(255, 211, 79, 0.24);
+      color: #fff0c7;
+      font-size: 0.82rem;
+      letter-spacing: 0;
+    }}
+
+    .journey-warning-row {{
+      padding: 9px 10px;
+      border-left: 3px solid #d89939;
+      background: rgba(255, 255, 255, 0.035);
+    }}
+
+    .journey-warning-row + .journey-warning-row {{
+      margin-top: 5px;
+    }}
+
+    .journey-warning-row-title {{
+      color: #fff2cf;
+      font-size: 0.78rem;
+      font-weight: 850;
+    }}
+
+    .journey-warning-row-id {{
+      margin-left: 6px;
+      color: #897e6b;
+      font-size: 0.67rem;
+      font-weight: 700;
+    }}
+
+    .journey-warning-row-message {{
+      margin-top: 3px;
+      color: #c8baa0;
+      font-size: 0.72rem;
+      line-height: 1.38;
+    }}
+
     .journey-config-body {{
       display: grid;
       gap: 16px;
@@ -5055,31 +5405,68 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       padding: 20px 22px 22px;
     }}
 
-    .info-dialog-body section + section {{
-      margin-top: 20px;
-      padding-top: 18px;
-      border-top: 1px solid rgba(255, 235, 196, 0.16);
+    .info-accordion {{
+      border: 1px solid rgba(255, 235, 196, 0.18);
+      border-radius: 6px;
+      background: rgba(7, 9, 7, 0.42);
+      overflow: hidden;
     }}
 
-    .info-dialog-body h3 {{
-      margin: 0 0 8px;
+    .info-accordion + .info-accordion {{
+      margin-top: 10px;
+    }}
+
+    .info-accordion summary {{
+      min-height: 42px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      cursor: pointer;
+      list-style: none;
       color: #ffd34f;
       font-size: 0.94rem;
+      font-weight: 800;
       letter-spacing: 0;
     }}
 
-    .info-dialog-body p {{
+    .info-accordion summary::-webkit-details-marker {{
+      display: none;
+    }}
+
+    .info-accordion summary::before {{
+      content: "+";
+      width: 18px;
+      color: #ffe48c;
+      font-size: 1rem;
+      text-align: center;
+    }}
+
+    .info-accordion[open] summary {{
+      border-bottom: 1px solid rgba(255, 235, 196, 0.14);
+      background: rgba(255, 211, 79, 0.055);
+    }}
+
+    .info-accordion[open] summary::before {{
+      content: "-";
+    }}
+
+    .info-accordion-content {{
+      padding: 13px 16px 15px 40px;
+    }}
+
+    .info-accordion-content p {{
       margin: 0;
       color: #d7c8ad;
       font-size: 0.86rem;
       line-height: 1.55;
     }}
 
-    .info-dialog-body p + p {{
+    .info-accordion-content p + p {{
       margin-top: 9px;
     }}
 
-    .info-dialog-body a {{
+    .info-accordion-content a {{
       color: #8fc8ff;
       font-weight: 800;
     }}
@@ -5443,6 +5830,16 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       margin-top: 12px;
     }}
 
+    .zone-filter-group-title {{
+      margin: 10px 0 4px;
+      padding: 5px 6px 4px;
+      border-bottom: 1px solid rgba(255, 235, 196, 0.12);
+      color: #d7bf7a;
+      font-size: 0.7rem;
+      font-weight: 850;
+      text-transform: uppercase;
+    }}
+
     .filter-actions {{
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -5455,6 +5852,23 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     .filter-actions button {{
       min-height: 28px;
       padding: 0 8px;
+      font-size: 0.76rem;
+    }}
+
+    .zone-scope-options {{
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 4px;
+      margin: 0 0 8px;
+      padding: 0 0 8px;
+      border-bottom: 1px solid rgba(255, 235, 196, 0.14);
+    }}
+
+    .zone-scope-options .quest-type-option {{
+      grid-template-columns: 16px minmax(0, 1fr);
+      gap: 5px;
+      min-height: 28px;
+      padding: 4px;
       font-size: 0.76rem;
     }}
 
@@ -5737,11 +6151,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       display: grid;
       gap: 8px;
       min-width: 0;
-      padding-right: 124px;
-    }}
-
-    body.dragging-quest .journey-head {{
-      padding-right: 232px;
+      padding-right: 170px;
     }}
 
     .journey-title-tools {{
@@ -5752,6 +6162,15 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       flex-wrap: wrap;
     }}
 
+    .journey-saved-at {{
+      min-width: 0;
+      color: #a99f8c;
+      font-size: 0.78rem;
+      font-weight: 700;
+      line-height: 1.2;
+      white-space: nowrap;
+    }}
+
     .journey-global-actions {{
       position: absolute;
       top: 16px;
@@ -5760,6 +6179,36 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       display: flex;
       align-items: center;
       gap: 8px;
+    }}
+
+    .journey-warning-button {{
+      width: 34px;
+      min-width: 34px;
+      min-height: 34px;
+      display: inline-grid;
+      place-items: center;
+      padding: 0;
+      border: 1px solid rgba(255, 184, 77, 0.58);
+      border-radius: 7px;
+      background: rgba(88, 49, 10, 0.4);
+      color: #ffd08a;
+      font: inherit;
+      font-size: 1.05rem;
+      font-weight: 900;
+      line-height: 1;
+      cursor: pointer;
+    }}
+
+    .journey-warning-button:hover,
+    .journey-warning-button:focus-visible {{
+      outline: 2px solid rgba(255, 184, 77, 0.42);
+      outline-offset: 1px;
+      background: rgba(122, 68, 14, 0.5);
+      color: #ffe1a8;
+    }}
+
+    .journey-warning-button[hidden] {{
+      display: none;
     }}
 
     .journey-name-editor {{
@@ -5829,18 +6278,49 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     }}
 
     .journey-hidden-drop {{
-      min-width: 102px;
-      min-height: 34px;
-      display: inline-grid;
+      min-width: 0;
+      min-height: 0;
+      display: grid;
       place-items: center;
-      padding: 0 12px;
+      padding: 10px 0;
       border: 1px dashed rgba(255, 116, 116, 0.72);
       border-radius: 7px;
-      background: rgba(129, 24, 24, 0.5);
+      background: rgba(116, 18, 18, 0.48);
       color: #ffb0a8;
-      font-size: 0.8rem;
-      font-weight: 850;
       cursor: copy;
+    }}
+
+    .journey-hidden-trash {{
+      position: relative;
+      display: block;
+      width: 14px;
+      height: 13px;
+      margin-top: 5px;
+      border-radius: 1px 1px 2px 2px;
+      background: currentColor;
+    }}
+
+    .journey-hidden-trash::before,
+    .journey-hidden-trash::after {{
+      position: absolute;
+      left: 50%;
+      content: "";
+      background: currentColor;
+      transform: translateX(-50%);
+    }}
+
+    .journey-hidden-trash::before {{
+      top: -5px;
+      width: 18px;
+      height: 3px;
+      border-radius: 1px;
+    }}
+
+    .journey-hidden-trash::after {{
+      top: -8px;
+      width: 7px;
+      height: 3px;
+      border-radius: 2px 2px 0 0;
     }}
 
     .journey-hidden-drop[hidden] {{
@@ -5853,6 +6333,15 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       background: rgba(180, 35, 35, 0.72);
       color: #fff4ef;
       box-shadow: 0 0 0 2px rgba(255, 116, 116, 0.2), 0 0 20px rgba(255, 60, 60, 0.28);
+    }}
+
+    .planner-board-shell {{
+      min-width: 0;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 42px;
+      gap: 4px;
+      overflow: hidden;
     }}
 
     .journey-message {{
@@ -5901,6 +6390,12 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       color: #b7f2bc;
     }}
 
+    .journey-message.warning {{
+      border-color: rgba(255, 184, 77, 0.42);
+      background: rgba(88, 49, 10, 0.34);
+      color: #ffd08a;
+    }}
+
     .journey-message[hidden] {{
       display: none;
     }}
@@ -5911,7 +6406,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       align-items: stretch;
       gap: 4px;
       overflow: auto;
-      padding: 2px 2px 8px;
+      padding: 2px;
       scrollbar-color: rgba(255, 255, 255, 0.24) transparent;
       scrollbar-width: thin;
     }}
@@ -6137,17 +6632,21 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     }}
 
     .journey-insert-target {{
-      display: grid;
-      place-items: center;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       width: 20px;
       height: 100%;
       min-height: 180px;
+      padding: 0;
       border: 1px dashed rgba(255, 235, 196, 0.34);
       border-radius: 8px;
       background: rgba(255, 255, 255, 0.045);
       color: #ffd34f;
       font-size: 1rem;
       font-weight: 850;
+      line-height: 1;
+      text-align: center;
       cursor: pointer;
     }}
 
@@ -6875,6 +7374,8 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     }}
 
     .inventory-mode-toggle button {{
+      appearance: none;
+      -webkit-appearance: none;
       min-height: 28px;
       min-width: 0;
       padding: 0 9px;
@@ -6882,10 +7383,13 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       border-radius: 999px;
       background: transparent;
       color: #c9baa0;
-      font-size: 0.74rem;
-      font-weight: 850;
+      font-family: inherit;
+      font-size: 0.76rem;
+      font-weight: 700;
+      line-height: 1;
       white-space: nowrap;
       box-shadow: none;
+      text-shadow: 0 1px 1px rgba(0, 0, 0, 0.72);
       cursor: pointer;
     }}
 
@@ -6910,15 +7414,31 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     }}
 
     .inventory-action {{
+      appearance: none;
+      -webkit-appearance: none;
       display: grid;
       place-items: center;
       width: 30px;
       height: 30px;
       padding: 0;
+      border: 1px solid rgba(255, 235, 196, 0.22);
       border-radius: 7px;
+      background: rgba(7, 9, 7, 0.72);
+      color: #d8ccb6;
+      font-family: inherit;
       font-size: 1rem;
       font-weight: 900;
       line-height: 1;
+      box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
+      cursor: pointer;
+    }}
+
+    .inventory-action:hover,
+    .inventory-action:focus-visible {{
+      border-color: rgba(255, 211, 79, 0.62);
+      background: rgba(255, 211, 79, 0.1);
+      color: #fff1bf;
+      outline: none;
     }}
 
     .inventory-search {{
@@ -7043,6 +7563,8 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
 
     .virtual-chain-slot {{
       min-width: 0;
+      overflow: hidden;
+      contain: layout paint;
     }}
 
     .chain-list.batch-drop-over {{
@@ -7246,6 +7768,27 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       font-size: 1rem;
       font-weight: 950;
       line-height: 1;
+    }}
+
+    .replay-session-glyph {{
+      display: block;
+      color: currentColor;
+    }}
+
+    .replay-session-glyph.login {{
+      width: 0;
+      height: 0;
+      border-top: 6px solid transparent;
+      border-bottom: 6px solid transparent;
+      border-left: 9px solid currentColor;
+      transform: translateX(1px);
+    }}
+
+    .replay-session-glyph.logout {{
+      width: 10px;
+      height: 10px;
+      border-radius: 1px;
+      background: currentColor;
     }}
 
     .replay-event-description {{
@@ -7512,7 +8055,8 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     }}
 
     .chain-requirement-reference:hover,
-    .chain-requirement-reference:focus-visible {{
+    .chain-requirement-reference:focus-visible,
+    .chain-requirement-reference.requirement-peer-highlight {{
       outline: none;
       background: color-mix(in srgb, var(--requirement-color) 18%, transparent);
       box-shadow: 0 0 0 2px color-mix(in srgb, var(--requirement-color) 38%, transparent);
@@ -8096,17 +8640,25 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
 
     @media (max-width: 820px) {{
       .settings-overlay,
-      .info-overlay {{
+      .info-overlay,
+      .journey-config-overlay,
+      .journey-warnings-overlay {{
         padding: 10px;
       }}
 
       .settings-dialog,
-      .info-dialog {{
+      .info-dialog,
+      .journey-config-dialog,
+      .journey-warnings-dialog {{
         width: calc(100vw - 20px);
         max-height: calc(100vh - 20px);
       }}
 
       .settings-grid {{
+        grid-template-columns: 1fr;
+      }}
+
+      .journey-warning-summary-grid {{
         grid-template-columns: 1fr;
       }}
 
@@ -8122,7 +8674,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     <header>
       <div class="header-main">
         <div class="brand-lockup">
-          <img class="brand-icon" src="assets/branding/dreamway-icon-400.png?v=emerald-statue-1" alt="" aria-hidden="true">
+          <img class="brand-icon" src="assets/branding/dreamway-icon-header-128.png?v=emerald-statue-2" alt="" aria-hidden="true">
           <h1 class="brand"><span class="brand-name">Dreamway</span></h1>
         </div>
         <div class="toolbar">
@@ -8220,6 +8772,9 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
               <button class="journey-load-button" id="journey-load-button" type="button">Load Journey</button>
               <input class="journey-import-input" id="journey-load-input" type="file" accept="application/json,.json">
             </div>
+            <div class="journey-setup-actions">
+              <button class="journey-load-button" id="journey-example-button" type="button">Load Example Journey</button>
+            </div>
             <div class="journey-string-import" id="journey-string-import" hidden>
               <label for="journey-string-input">Journey string</label>
               <textarea id="journey-string-input" spellcheck="false" autocomplete="off"></textarea>
@@ -8257,7 +8812,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
           </div>
           <div class="journey-workspace" id="journey-workspace" hidden>
             <div class="journey-global-actions">
-              <div class="journey-hidden-drop" id="journey-hidden-drop" role="button" aria-label="Move dragged quests to Hidden" hidden>Hidden</div>
+              <button class="journey-warning-button" id="journey-warning-button" type="button" aria-label="Show Journey warnings" title="Show Journey warnings" hidden>&#9888;</button>
               <button class="journey-close-button" id="journey-close-button" type="button">Close Journey</button>
             </div>
             <div class="journey-head">
@@ -8266,10 +8821,16 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
                 <button class="journey-save-button" id="journey-save-button" type="button">Save Journey</button>
                 <button class="journey-save-button" id="journey-copy-addon-button" type="button">Copy Addon String</button>
                 <button class="journey-save-button" id="journey-configure-button" type="button">Configure Journey</button>
+                <span class="journey-saved-at" id="journey-saved-at"></span>
               </div>
             </div>
             <div class="journey-message" id="journey-message" hidden></div>
-            <div class="planner-board" id="planner-board" aria-label="Journey batches"></div>
+            <div class="planner-board-shell">
+              <div class="planner-board" id="planner-board" aria-label="Journey batches"></div>
+              <div class="journey-hidden-drop" id="journey-hidden-drop" role="button" aria-label="Move dragged quests to Hidden" title="Move dragged quests to Hidden">
+                <span class="journey-hidden-trash" aria-hidden="true"></span>
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -8379,6 +8940,18 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
         </div>
       </section>
     </div>
+    <div class="journey-warnings-overlay" id="journey-warnings-overlay" hidden>
+      <section class="journey-warnings-dialog" role="dialog" aria-modal="true" aria-labelledby="journey-warnings-title">
+        <div class="settings-dialog-head">
+          <h2 id="journey-warnings-title">Journey Warnings</h2>
+          <button type="button" class="settings-close-button" id="journey-warnings-close-button" aria-label="Close Journey Warnings">x</button>
+        </div>
+        <div class="journey-warnings-body">
+          <div class="journey-warning-summary-grid" id="journey-warning-summary-grid"></div>
+          <div class="journey-warning-list" id="journey-warning-list"></div>
+        </div>
+      </section>
+    </div>
     <div class="info-overlay" id="info-overlay" hidden>
       <section class="info-dialog" role="dialog" aria-modal="true" aria-labelledby="info-title">
         <div class="settings-dialog-head">
@@ -8386,20 +8959,27 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
           <button type="button" class="settings-close-button" id="info-close-button" aria-label="Close About Dreamway">x</button>
         </div>
         <div class="info-dialog-body">
-          <section>
-            <h3>What Dreamway Is</h3>
-            <p>Dreamway is a planning companion for Classic World of Warcraft across Classic Era, Season of Discovery, The Burning Crusade, and Wrath of the Lich King. It combines a geographic quest browser, a Journey planner for grouping quests into practical batches, an in-game Journey tracker, and a Replay view built from your character's recorded progress.</p>
-          </section>
-          <section>
-            <h3>How To Use It</h3>
-            <p>Choose your game version in Settings, then create or load a Journey. Search and filter the quest catalogue, inspect quest locations on the map, and drag quests into Planner batches in the order you want to complete them.</p>
-            <p>Copy the addon string to use that Journey in game. Import a Dreamway character profile to recognize completed quests and replay recorded pickups, objectives, hand-ins, kills, deaths, and levels.</p>
-          </section>
-          <section>
-            <h3>Acknowledgements</h3>
-            <p>Dreamway is built on quest data and conventions from <a href="https://github.com/Questie/Questie" target="_blank" rel="noopener noreferrer">Questie</a>. Deep thanks to the Questie team and its contributors for maintaining the database and addon that make this project possible.</p>
-            <p>World of Warcraft and its related assets are trademarks of Blizzard Entertainment. Dreamway is an independent community project and is not affiliated with Blizzard Entertainment or the Questie team.</p>
-          </section>
+          <!-- ABOUT COPY: Edit these accordion headings and paragraphs. -->
+          <details class="info-accordion" open>
+            <summary>What Dreamway Is</summary>
+            <div class="info-accordion-content">
+              <p>Dreamway is a planning companion for Classic World of Warcraft across Classic Era, Season of Discovery, The Burning Crusade, and Wrath of the Lich King. It combines a geographic quest browser, a Journey planner for grouping quests into practical batches, an in-game Journey tracker, and a Replay view built from your character's recorded progress.</p>
+            </div>
+          </details>
+          <details class="info-accordion">
+            <summary>How To Use It</summary>
+            <div class="info-accordion-content">
+              <p>Choose your game version in Settings, then create or load a Journey. Search and filter the quest catalogue, inspect quest locations on the map, and drag quests into Planner batches in the order you want to complete them.</p>
+              <p>Copy the addon string to use that Journey in game. Import a Dreamway character profile to recognize completed quests and replay recorded pickups, objectives, hand-ins, kills, deaths, and levels.</p>
+            </div>
+          </details>
+          <details class="info-accordion">
+            <summary>Acknowledgements</summary>
+            <div class="info-accordion-content">
+              <p>Dreamway is built on quest data and conventions from <a href="https://github.com/Questie/Questie" target="_blank" rel="noopener noreferrer">Questie</a>. Deep thanks to the Questie team and its contributors for maintaining the database and addon that make this project possible.</p>
+              <p>World of Warcraft and its related assets are trademarks of Blizzard Entertainment. Dreamway is an independent community project and is not affiliated with Blizzard Entertainment or the Questie team.</p>
+            </div>
+          </details>
         </div>
       </section>
     </div>
@@ -8528,6 +9108,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       ]),
       zoneIds: new Set(),
       useCurrentMapZone: true,
+      zoneScopes: new Set(["starts", "objectives", "ends"]),
     }};
     const DISPLAY_FILTERS = [
       {{ id: "available-pickups", label: "Quest pickups", defaultEnabled: true }},
@@ -8629,8 +9210,13 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     const journeyWorkspace = document.querySelector("#journey-workspace");
     const journeyNameEditor = document.querySelector("#journey-name-editor");
     const journeyConfigureButton = document.querySelector("#journey-configure-button");
+    const journeySavedAt = document.querySelector("#journey-saved-at");
     const journeyConfigOverlay = document.querySelector("#journey-config-overlay");
     const journeyConfigCloseButton = document.querySelector("#journey-config-close-button");
+    const journeyWarningsOverlay = document.querySelector("#journey-warnings-overlay");
+    const journeyWarningsCloseButton = document.querySelector("#journey-warnings-close-button");
+    const journeyWarningSummaryGrid = document.querySelector("#journey-warning-summary-grid");
+    const journeyWarningList = document.querySelector("#journey-warning-list");
     const journeyVersionEditor = document.querySelector("#journey-version-editor");
     const journeyFactionEditor = document.querySelector("#journey-faction-editor");
     const journeyRaceEditor = document.querySelector("#journey-race-editor");
@@ -8640,6 +9226,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     const journeyCloseButton = document.querySelector("#journey-close-button");
     const journeyImportButton = document.querySelector("#journey-import-button");
     const journeyLoadButton = document.querySelector("#journey-load-button");
+    const journeyExampleButton = document.querySelector("#journey-example-button");
     const journeyLoadInput = document.querySelector("#journey-load-input");
     const journeyStringImport = document.querySelector("#journey-string-import");
     const journeyStringInput = document.querySelector("#journey-string-input");
@@ -8648,6 +9235,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     const journeyHiddenDrop = document.querySelector("#journey-hidden-drop");
     const journeySetupMessage = document.querySelector("#journey-setup-message");
     const journeyMessage = document.querySelector("#journey-message");
+    const journeyWarningButton = document.querySelector("#journey-warning-button");
     const plannerBoard = document.querySelector("#planner-board");
     const mapEl = document.querySelector("#map");
     const worldLayer = document.querySelector("#world-layer");
@@ -8697,12 +9285,26 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     const inventorySearchValues = {{ search: "", batch: "" }};
     const inventoryVirtualHeights = new Map();
     let inventoryVirtualLayout = null;
-    let inventoryVirtualFrame = 0;
     let inventoryVirtualScrollFrame = 0;
+    let inventoryVirtualMeasureTimer = 0;
     let pendingCatalogueInteractionAnchor = null;
     let pendingCataloguePointerScrollTop = null;
     let currentGameVersion = "era";
     let activeJourney = null;
+    const EXAMPLE_JOURNEYS = Object.freeze([{{
+      schemaVersion: 1,
+      gameVersion: "era",
+      savedAt: "",
+      savedAction: "",
+      id: "example-journey-test",
+      name: "Example Journey Test",
+      character: {{ race: "Human", raceMask: 1, faction: "Alliance", class: "All classes", classMask: 0 }},
+      hiddenQuestIds: [],
+      batches: [
+        {{ id: "example-elwynn-1", name: "Northshire Start", autoName: false, questIds: [783, 7, 5261, 33] }},
+        {{ id: "example-elwynn-2", name: "Northshire Finish", autoName: false, questIds: [18, 6] }},
+      ],
+    }}]);
     let journeyBatchCounter = 0;
     let selectedBatchId = null;
     let showSelectedBatchOnMap = true;
@@ -8730,6 +9332,283 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       visibleLogEvents: [],
       panelMode: "events",
     }};
+    const WORKSPACE_DB_NAME = "DreamwayWorkspace";
+    const WORKSPACE_DB_VERSION = 1;
+    const WORKSPACE_STORE_NAME = "records";
+    const WORKSPACE_UI_KEY = "ui";
+    const WORKSPACE_JOURNEY_KEY = "journey";
+    const WORKSPACE_PROFILE_KEY = "profile";
+    let workspaceDatabasePromise = null;
+    let workspaceSaveTimer = 0;
+    let workspaceWriteQueue = Promise.resolve();
+    let workspaceRestoreInProgress = true;
+    let workspaceJourneyDirty = false;
+    let workspaceProfileDirty = false;
+
+    function openWorkspaceDatabase() {{
+      if (!("indexedDB" in globalThis)) return Promise.resolve(null);
+      if (workspaceDatabasePromise) return workspaceDatabasePromise;
+      workspaceDatabasePromise = new Promise((resolve, reject) => {{
+        const request = indexedDB.open(WORKSPACE_DB_NAME, WORKSPACE_DB_VERSION);
+        request.onupgradeneeded = () => {{
+          const database = request.result;
+          if (!database.objectStoreNames.contains(WORKSPACE_STORE_NAME)) {{
+            database.createObjectStore(WORKSPACE_STORE_NAME, {{ keyPath: "id" }});
+          }}
+        }};
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error || new Error("Dreamway could not open browser storage."));
+        request.onblocked = () => reject(new Error("Dreamway browser storage is blocked by another tab."));
+      }}).catch((error) => {{
+        workspaceDatabasePromise = null;
+        console.warn("Dreamway workspace recovery is unavailable.", error);
+        return null;
+      }});
+      return workspaceDatabasePromise;
+    }}
+
+    function workspaceTransactionDone(transaction) {{
+      return new Promise((resolve, reject) => {{
+        transaction.oncomplete = () => resolve();
+        transaction.onabort = () => reject(transaction.error || new Error("Dreamway workspace transaction was aborted."));
+        transaction.onerror = () => reject(transaction.error || new Error("Dreamway workspace transaction failed."));
+      }});
+    }}
+
+    async function readWorkspaceRecords() {{
+      const database = await openWorkspaceDatabase();
+      if (!database) return null;
+      return new Promise((resolve, reject) => {{
+        const transaction = database.transaction(WORKSPACE_STORE_NAME, "readonly");
+        const store = transaction.objectStore(WORKSPACE_STORE_NAME);
+        const keys = [WORKSPACE_UI_KEY, WORKSPACE_JOURNEY_KEY, WORKSPACE_PROFILE_KEY];
+        const records = {{}};
+        let remaining = keys.length;
+        keys.forEach((key) => {{
+          const request = store.get(key);
+          request.onsuccess = () => {{
+            records[key] = request.result?.value ?? null;
+            remaining -= 1;
+            if (!remaining) resolve(records);
+          }};
+          request.onerror = () => reject(request.error || new Error(`Dreamway could not read ${{key}} state.`));
+        }});
+        transaction.onabort = () => reject(transaction.error || new Error("Dreamway could not read browser storage."));
+      }});
+    }}
+
+    function workspaceUiSnapshot() {{
+      inventoryScrollTop[inventoryMode] = chainList.scrollTop;
+      inventorySearchValues[inventoryMode] = questSearch.value;
+      return {{
+        schemaVersion: 1,
+        savedAt: new Date().toISOString(),
+        gameVersion: currentGameVersion,
+        appMode: currentAppMode,
+        currentView: {{ ...currentView }},
+        inventoryMode,
+        filters: {{
+          factions: [...filters.factions],
+          raceMasks: [...filters.raceMasks],
+          classMasks: [...filters.classMasks],
+          level: filters.level,
+          levelValue: levelFilter.value || (filters.level == null ? "all" : String(filters.level)),
+          search: questSearch.value,
+          typeIds: [...filters.typeIds],
+          zoneIds: [...filters.zoneIds],
+          useCurrentMapZone: filters.useCurrentMapZone,
+          zoneScopes: [...filters.zoneScopes],
+        }},
+        displayFilters: [...displayFilters],
+        catalogueOptions: [...catalogueOptions],
+        selected: {{
+          questId: selectedId,
+          chainId: selectedChainId,
+          batchId: selectedBatchId,
+          multiQuestIds: [...multiSelectedQuestIds],
+          multiAnchor: multiSelectionAnchor,
+        }},
+        collapsedChainIds: [...collapsedChainIds],
+        inventory: {{
+          scrollTop: {{ ...inventoryScrollTop }},
+          searchValues: {{ ...inventorySearchValues }},
+          plannerScrollLeft: plannerBoard.scrollLeft,
+          plannerScrollTop: plannerBoard.scrollTop,
+          batchSummaryContextChainId,
+          questSearchContextChainId,
+        }},
+        journeyUi: {{
+          journeyBatchCounter,
+          showSelectedBatchOnMap,
+          preBatchLevelValue,
+          undoState: journeyUndoState,
+        }},
+        replay: {{
+          currentTime: replayState.currentTime,
+          speed: replayState.speed,
+          paused: replayState.paused,
+          scope: replayState.scope,
+          panelMode: replayState.panelMode,
+          eventLogScrollTop: replayEventLogViewport.scrollTop,
+        }},
+        overlays: {{
+          settings: !settingsOverlay.hidden,
+          info: !infoOverlay.hidden,
+          journeyConfig: !journeyConfigOverlay.hidden,
+          journeyWarnings: !journeyWarningsOverlay.hidden,
+        }},
+      }};
+    }}
+
+    function scheduleWorkspaceSave(options = {{}}) {{
+      if (workspaceRestoreInProgress) return;
+      if (options.journey) workspaceJourneyDirty = true;
+      if (options.profile) workspaceProfileDirty = true;
+      window.clearTimeout(workspaceSaveTimer);
+      workspaceSaveTimer = window.setTimeout(() => {{
+        workspaceSaveTimer = 0;
+        persistWorkspaceNow();
+      }}, Number(options.delay) >= 0 ? Number(options.delay) : 300);
+    }}
+
+    function persistWorkspaceNow(options = {{}}) {{
+      if (workspaceRestoreInProgress) return workspaceWriteQueue;
+      window.clearTimeout(workspaceSaveTimer);
+      workspaceSaveTimer = 0;
+      const saveJourney = Boolean(options.forceAll || workspaceJourneyDirty);
+      const saveProfile = Boolean(options.forceAll || workspaceProfileDirty);
+      workspaceJourneyDirty = false;
+      workspaceProfileDirty = false;
+      const records = [
+        {{ id: WORKSPACE_UI_KEY, value: workspaceUiSnapshot() }},
+      ];
+      if (saveJourney) records.push({{ id: WORKSPACE_JOURNEY_KEY, value: activeJourney }});
+      if (saveProfile) records.push({{ id: WORKSPACE_PROFILE_KEY, value: activeCharacterProfile }});
+      workspaceWriteQueue = workspaceWriteQueue
+        .catch(() => undefined)
+        .then(async () => {{
+          const database = await openWorkspaceDatabase();
+          if (!database) return;
+          const transaction = database.transaction(WORKSPACE_STORE_NAME, "readwrite");
+          const store = transaction.objectStore(WORKSPACE_STORE_NAME);
+          records.forEach((record) => store.put(record));
+          await workspaceTransactionDone(transaction);
+        }})
+        .catch((error) => {{
+          if (saveJourney) workspaceJourneyDirty = true;
+          if (saveProfile) workspaceProfileDirty = true;
+          console.warn("Dreamway could not save its recovery state.", error);
+        }});
+      return workspaceWriteQueue;
+    }}
+
+    function restoreSet(target, values, transform = (value) => value) {{
+      target.clear();
+      if (!Array.isArray(values)) return;
+      values.forEach((value) => {{
+        const normalized = transform(value);
+        if (normalized != null) target.add(normalized);
+      }});
+    }}
+
+    async function restoreWorkspaceState() {{
+      let records;
+      try {{
+        records = await readWorkspaceRecords();
+      }} catch (error) {{
+        console.warn("Dreamway could not restore its previous workspace.", error);
+        return null;
+      }}
+      const ui = records?.[WORKSPACE_UI_KEY];
+      if (!ui || typeof ui !== "object") return null;
+
+      const restoredVersion = normalizeGameVersion(ui.gameVersion || "era");
+      ACTIVE_DATA = await ensureVersionDataLoaded(restoredVersion);
+      currentGameVersion = restoredVersion;
+      rebuildActiveIndexes();
+
+      const storedJourney = records[WORKSPACE_JOURNEY_KEY];
+      if (storedJourney && typeof storedJourney === "object" && Array.isArray(storedJourney.batches)) {{
+        activeJourney = {{
+          ...storedJourney,
+          batches: storedJourney.batches.map((batch) => ({{
+            ...batch,
+            questIds: Array.isArray(batch.questIds) ? [...batch.questIds] : [],
+          }})),
+          unusedQuestIds: Array.isArray(storedJourney.unusedQuestIds) ? [...storedJourney.unusedQuestIds] : [],
+        }};
+      }}
+
+      const storedProfile = records[WORKSPACE_PROFILE_KEY];
+      if (storedProfile) {{
+        try {{
+          activeCharacterProfile = characterProfileFromObject(storedProfile);
+          completedProfileQuestIds.clear();
+          activeCharacterProfile.completedQuestIds.forEach((questId) => completedProfileQuestIds.add(questId));
+        }} catch (error) {{
+          console.warn("Dreamway ignored an invalid recovered character profile.", error);
+          activeCharacterProfile = null;
+          completedProfileQuestIds.clear();
+        }}
+      }}
+
+      const savedFilters = ui.filters || {{}};
+      restoreSet(filters.factions, savedFilters.factions);
+      restoreSet(filters.raceMasks, savedFilters.raceMasks, (value) => Number.isFinite(Number(value)) ? Number(value) : null);
+      restoreSet(filters.classMasks, savedFilters.classMasks, (value) => Number.isFinite(Number(value)) ? Number(value) : null);
+      restoreSet(filters.typeIds, savedFilters.typeIds, (value) => String(value || "") || null);
+      restoreSet(filters.zoneIds, savedFilters.zoneIds, (value) => Number.isFinite(Number(value)) ? Number(value) : null);
+      if (Array.isArray(savedFilters.zoneScopes)) {{
+        restoreSet(filters.zoneScopes, savedFilters.zoneScopes, (value) => ["starts", "objectives", "ends"].includes(value) ? value : null);
+      }}
+      filters.level = savedFilters.level == null ? null : Number(savedFilters.level);
+      filters.search = String(savedFilters.search || "").trim().toLowerCase();
+      filters.useCurrentMapZone = savedFilters.useCurrentMapZone !== false;
+      restoreSet(displayFilters, ui.displayFilters, (value) => String(value || "") || null);
+      restoreSet(catalogueOptions, ui.catalogueOptions, (value) => String(value || "") || null);
+
+      currentAppMode = ["map", "planner", "replay"].includes(ui.appMode) ? ui.appMode : "map";
+      inventoryMode = ui.inventoryMode === "batch" ? "batch" : "search";
+      const savedView = ui.currentView || {{}};
+      currentView = {{
+        type: savedView.type === "zone" ? "zone" : "world",
+        zoneId: savedView.zoneId == null ? null : Number(savedView.zoneId),
+        worldId: String(savedView.worldId || "azeroth"),
+      }};
+      const validWorldIds = new Set((ACTIVE_DATA.worldGroups || []).map((group) => group.id));
+      if (!validWorldIds.has(currentView.worldId)) currentView = {{ type: "world", zoneId: null, worldId: "azeroth" }};
+      if (currentView.type === "zone" && !zonesById.has(currentView.zoneId)) currentView = {{ type: "world", zoneId: null, worldId: currentView.worldId }};
+
+      const selected = ui.selected || {{}};
+      selectedId = questsById.has(Number(selected.questId)) ? Number(selected.questId) : null;
+      selectedChainId = chainsById.has(Number(selected.chainId)) ? Number(selected.chainId) : null;
+      selectedBatchId = activeJourney?.batches.some((batch) => batch.id === selected.batchId) || selected.batchId === "hidden"
+        ? selected.batchId
+        : null;
+      restoreSet(multiSelectedQuestIds, selected.multiQuestIds, (value) => questsById.has(Number(value)) ? Number(value) : null);
+      multiSelectionAnchor = questsById.has(Number(selected.multiAnchor)) ? Number(selected.multiAnchor) : null;
+      restoreSet(collapsedChainIds, ui.collapsedChainIds, (value) => chainsById.has(Number(value)) ? Number(value) : null);
+
+      const savedInventory = ui.inventory || {{}};
+      Object.assign(inventoryScrollTop, savedInventory.scrollTop || {{}});
+      Object.assign(inventorySearchValues, savedInventory.searchValues || {{}});
+      batchSummaryContextChainId = savedInventory.batchSummaryContextChainId ?? null;
+      questSearchContextChainId = savedInventory.questSearchContextChainId ?? null;
+
+      const journeyUi = ui.journeyUi || {{}};
+      journeyBatchCounter = Math.max(Number(journeyUi.journeyBatchCounter) || 0, activeJourney?.batches.length || 0);
+      showSelectedBatchOnMap = journeyUi.showSelectedBatchOnMap !== false;
+      preBatchLevelValue = journeyUi.preBatchLevelValue ?? null;
+      journeyUndoState = journeyUi.undoState || null;
+
+      const replay = ui.replay || {{}};
+      replayState.currentTime = Number(replay.currentTime) || 0;
+      replayState.speed = REPLAY_SPEEDS.includes(Number(replay.speed)) ? Number(replay.speed) : 60;
+      replayState.paused = replay.paused !== false;
+      replayState.scope = replay.scope === "world" ? "world" : "local";
+      replayState.panelMode = replay.panelMode === "progress" ? "progress" : "events";
+      return ui;
+    }}
 
     function updateWorkbenchColumns() {{
       if (!workbench) return;
@@ -8843,7 +9722,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
         input.checked = input.value === currentGameVersion;
       }});
       journeySettingsStatus.textContent = activeJourney
-        ? `${{activeJourney.name}} - ${{gameVersionLabel(activeJourney.gameVersion)}} - ${{activeJourney.batches.length}} batch${{activeJourney.batches.length === 1 ? "" : "es"}}`
+        ? `${{activeJourney.name}}${{activeJourney.exampleSourceId ? " (packaged example)" : ""}} - ${{gameVersionLabel(activeJourney.gameVersion)}} - ${{activeJourney.batches.length}} batch${{activeJourney.batches.length === 1 ? "" : "es"}}`
         : "No Journey is open.";
       journeySetup.hidden = Boolean(activeJourney);
       settingsJourneyCloseButton.hidden = !activeJourney;
@@ -8863,6 +9742,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
         infoOverlay.hidden = true;
         infoButton.setAttribute("aria-expanded", "false");
         journeyConfigOverlay.hidden = true;
+        journeyWarningsOverlay.hidden = true;
       }}
       settingsOverlay.hidden = !open;
       settingsButton.setAttribute("aria-expanded", String(open));
@@ -8882,6 +9762,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
         settingsButton.setAttribute("aria-expanded", "false");
         infoOverlay.hidden = true;
         infoButton.setAttribute("aria-expanded", "false");
+        journeyWarningsOverlay.hidden = true;
         syncJourneyMetadataControls();
       }}
       journeyConfigOverlay.hidden = !shouldOpen;
@@ -8894,6 +9775,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
         settingsOverlay.hidden = true;
         settingsButton.setAttribute("aria-expanded", "false");
         journeyConfigOverlay.hidden = true;
+        journeyWarningsOverlay.hidden = true;
       }}
       infoOverlay.hidden = !open;
       infoButton.setAttribute("aria-expanded", String(open));
@@ -8928,6 +9810,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       renderJourney();
       renderCurrentView({{ scrollTargetChainToTop: true }});
       updateSettingsStatus();
+      scheduleWorkspaceSave();
     }}
 
     function setAppMode(mode) {{
@@ -9163,7 +10046,8 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       activeJourney = {{
         schemaVersion: 1,
         gameVersion,
-        savedAt: new Date().toISOString(),
+        savedAt: "",
+        savedAction: "",
         id: slugify(name) || `journey-${{Date.now().toString(36)}}`,
         name,
         race: race.label,
@@ -9260,20 +10144,20 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
         .filter((id) => Number.isFinite(id) && id > 0))];
       const idSet = new Set(ids);
       const chainIds = new Set(ids
-        .map((id) => questsById.get(id)?.chainId)
+        .map((id) => journeyQuestForCurrentVersion(id)?.chainId)
         .filter((chainId) => chainId != null));
       const sortedIds = [...chainIds]
         .map((chainId) => chainsById.get(Number(chainId)))
         .filter(Boolean)
         .sort(compareQuestChainOrder)
         .flatMap((chain) => chain.quests
-          .filter((quest) => idSet.has(Number(quest.id)))
+          .filter((quest) => idSet.has(Number(quest.id)) && journeyQuestForCurrentVersion(quest.id))
           .map((quest) => Number(quest.id)));
       const sortedSet = new Set(sortedIds);
       ids.filter((id) => !sortedSet.has(id))
         .sort((a, b) => {{
-          const questA = questsById.get(a);
-          const questB = questsById.get(b);
+          const questA = journeyQuestForCurrentVersion(a);
+          const questB = journeyQuestForCurrentVersion(b);
           return (questA?.requiredLevel ?? Number.MAX_SAFE_INTEGER) - (questB?.requiredLevel ?? Number.MAX_SAFE_INTEGER) ||
             (questA?.questLevel ?? Number.MAX_SAFE_INTEGER) - (questB?.questLevel ?? Number.MAX_SAFE_INTEGER) ||
             String(questA?.name || "").localeCompare(String(questB?.name || "")) ||
@@ -9290,8 +10174,13 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       return batches;
     }}
 
+    function journeyQuestForCurrentVersion(questId) {{
+      const quest = questsById.get(Number(questId));
+      return quest && questPassesGameVersion(quest) ? quest : null;
+    }}
+
     function batchQuests(batch) {{
-      return sortedBatchQuestIds(batch?.questIds || []).map((id) => questsById.get(id)).filter(Boolean);
+      return sortedBatchQuestIds(batch?.questIds || []).map(journeyQuestForCurrentVersion).filter(Boolean);
     }}
 
     function computedBatchExpectedLevel(batch) {{
@@ -9344,6 +10233,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     }}
 
     function renumberNumericBatches(batches) {{
+      if (activeJourney && normalizeGameVersion(activeJourney.gameVersion) !== currentGameVersion) return;
       const autoRows = batches
         .map((batch, index) => ({{
           batch,
@@ -9420,21 +10310,32 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       return removeQuestFromUnusedCopies(hiddenQuestIds, questId);
     }}
 
+    function journeyCharacterCompatibilityWarning(quest) {{
+      if (!activeJourney || !quest) return "";
+      const supportsExpansionRaces = currentGameVersion === "tbc" || currentGameVersion === "wotlk";
+      const allianceMask = supportsExpansionRaces ? 1101 : 77;
+      const hordeMask = supportsExpansionRaces ? 690 : 178;
+      const allRaceMask = supportsExpansionRaces ? 2047 : 255;
+      const journeyRaceMask = Number(activeJourney.raceMask) || (activeJourney.faction === "Alliance" ? allianceMask : activeJourney.faction === "Horde" ? hordeMask : allRaceMask);
+      if (quest.requiredRaceMask && !(quest.requiredRaceMask & journeyRaceMask)) {{
+        return `${{quest.name}} may not be available to the selected Journey faction or race in ${{gameVersionLabel(currentGameVersion)}}.`;
+      }}
+      if (quest.requiredClassMask && activeJourney.classMask && !(quest.requiredClassMask & activeJourney.classMask)) {{
+        return `${{quest.name}} may not be available to the selected Journey class in ${{gameVersionLabel(currentGameVersion)}}.`;
+      }}
+      return "";
+    }}
+
     function questAllowedForJourney(quest) {{
       if (!activeJourney) return {{ ok: false, message: "Create a Journey before adding quests." }};
       if (!quest) return {{ ok: false, message: "Unknown quest." }};
-      const journeyRaceMask = Number(activeJourney.raceMask) || (activeJourney.faction === "Alliance" ? 77 : activeJourney.faction === "Horde" ? 178 : 255);
-      if (quest.requiredRaceMask && !(quest.requiredRaceMask & journeyRaceMask)) {{
-        return {{ ok: false, message: `${{quest.name}} is not available to the selected Journey character settings.` }};
-      }}
-      if (quest.requiredClassMask && activeJourney.classMask && !(quest.requiredClassMask & activeJourney.classMask)) {{
-        return {{ ok: false, message: `${{quest.name}} is not available to the selected Journey class.` }};
-      }}
+      const warning = journeyCharacterCompatibilityWarning(quest);
+      if (warning) return {{ ok: false, message: warning }};
       return {{ ok: true }};
     }}
 
     function questName(id) {{
-      const quest = questsById.get(Number(id));
+      const quest = journeyQuestForCurrentVersion(id);
       return quest ? `${{quest.name}} (#${{quest.id}})` : `#${{id}}`;
     }}
 
@@ -9443,8 +10344,8 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     }}
 
     function questPrerequisiteFailure(quest, availableIds) {{
-      const groupPrereqs = (quest.preQuestGroup || []).map(Number).filter(Boolean);
-      const singlePrereqs = (quest.preQuestSingle || []).map(Number).filter(Boolean);
+      const groupPrereqs = (quest.preQuestGroup || []).map(Number).filter((id) => id && journeyQuestForCurrentVersion(id));
+      const singlePrereqs = (quest.preQuestSingle || []).map(Number).filter((id) => id && journeyQuestForCurrentVersion(id));
       const missingGroup = groupPrereqs.filter((id) => !availableIds.has(id));
       if (missingGroup.length) {{
         return `${{quest.name}} requires ${{questNames(missingGroup)}} in the same or an earlier batch.`;
@@ -9458,26 +10359,145 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       return "";
     }}
 
-    function journeyPrerequisiteWarnings(batches = activeJourney?.batches || []) {{
-      const warnings = new Map();
-      const availableIds = new Set(completedProfileQuestIds);
+    function journeyWarningSummary(batches = activeJourney?.batches || [], hiddenIds = activeJourney?.unusedQuestIds || []) {{
+      const unavailable = new Map();
+      const character = new Map();
+      const placement = new Map();
+      const availableIds = new Set([...completedProfileQuestIds].map(Number).filter((id) => journeyQuestForCurrentVersion(id)));
+      const assignedIds = new Set();
+      batches.forEach((batch) => batch.questIds.forEach((questId) => assignedIds.add(Number(questId))));
+      assignedIds.forEach((questId) => {{
+        const quest = journeyQuestForCurrentVersion(questId);
+        if (!quest) {{
+          unavailable.set(questId, `Unknown quest #${{questId}} is not available in ${{gameVersionLabel(currentGameVersion)}}.`);
+          return;
+        }}
+        const warning = journeyCharacterCompatibilityWarning(quest);
+        if (warning) character.set(questId, warning);
+      }});
+      cloneUnusedQuestIds(hiddenIds).forEach((questId) => {{
+        const id = Number(questId);
+        if (!journeyQuestForCurrentVersion(id)) {{
+          unavailable.set(id, `Unknown quest #${{id}} is not available in ${{gameVersionLabel(currentGameVersion)}}.`);
+        }}
+      }});
       for (const batch of batches) {{
-        batch.questIds.forEach((questId) => availableIds.add(Number(questId)));
+        batch.questIds.forEach((questId) => {{
+          const id = Number(questId);
+          if (journeyQuestForCurrentVersion(id)) availableIds.add(id);
+        }});
         for (const questId of batch.questIds) {{
-          const quest = questsById.get(Number(questId));
-          if (!quest) {{
-            warnings.set(Number(questId), `Quest #${{questId}} is not present in this Dreamway database.`);
-            continue;
-          }}
-          if (!questPassesGameVersion(quest)) {{
-            warnings.set(Number(questId), `${{quest.name}} is not available in ${{gameVersionLabel(currentGameVersion)}}.`);
-            continue;
-          }}
+          const quest = journeyQuestForCurrentVersion(questId);
+          if (!quest) continue;
           const message = questPrerequisiteFailure(quest, availableIds);
-          if (message) warnings.set(Number(questId), message);
+          if (message) placement.set(Number(questId), message);
         }}
       }}
-      return warnings;
+      return {{ unavailable, character, placement }};
+    }}
+
+    function journeyPrerequisiteWarnings(batches = activeJourney?.batches || []) {{
+      return journeyWarningSummary(batches).placement;
+    }}
+
+    function journeyDisplayWarnings(batches = activeJourney?.batches || []) {{
+      const summary = journeyWarningSummary(batches);
+      return new Map([...summary.unavailable, ...summary.character, ...summary.placement]);
+    }}
+
+    function journeyWarningSummaryText(summary = journeyWarningSummary(activeJourney?.batches || [], activeJourney?.unusedQuestIds || [])) {{
+      if (!activeJourney) return "";
+      const unavailableCount = summary.unavailable.size;
+      const characterCount = summary.character.size;
+      const placementCount = summary.placement.size;
+      return [
+        `${{unavailableCount}} quest${{unavailableCount === 1 ? "" : "s"}} unavailable in ${{gameVersionLabel(currentGameVersion)}}`,
+        `${{characterCount}} character compatibility warning${{characterCount === 1 ? "" : "s"}}`,
+        `${{placementCount}} invalid prerequisite placement${{placementCount === 1 ? "" : "s"}}`,
+      ].join(" | ");
+    }}
+
+    function updateJourneyWarningSummary() {{
+      if (!journeyWarningButton) return;
+      if (!activeJourney) {{
+        journeyWarningButton.hidden = true;
+        journeyWarningButton.removeAttribute("title");
+        return;
+      }}
+      const summary = journeyWarningSummary(activeJourney.batches, activeJourney.unusedQuestIds);
+      const unavailableCount = summary.unavailable.size;
+      const characterCount = summary.character.size;
+      const placementCount = summary.placement.size;
+      const hasWarnings = unavailableCount > 0 || characterCount > 0 || placementCount > 0;
+      journeyWarningButton.hidden = !hasWarnings;
+      const summaryText = journeyWarningSummaryText(summary);
+      journeyWarningButton.title = hasWarnings ? summaryText : "";
+      journeyWarningButton.setAttribute("aria-label", hasWarnings ? `Show Journey warnings: ${{summaryText}}` : "Show Journey warnings");
+    }}
+
+    function renderJourneyWarnings(summary = journeyWarningSummary(activeJourney?.batches || [], activeJourney?.unusedQuestIds || [])) {{
+      const summaryItems = [
+        [summary.unavailable.size, `Unavailable in ${{gameVersionLabel(currentGameVersion)}}`],
+        [summary.character.size, "Character compatibility"],
+        [summary.placement.size, "Invalid prerequisite placement"],
+      ];
+      journeyWarningSummaryGrid.innerHTML = summaryItems.map(([count, label]) => `
+        <div class="journey-warning-summary-item">
+          <strong>${{count}}</strong>
+          <span>${{escapeHtml(label)}}</span>
+        </div>
+      `).join("");
+
+      const groups = [
+        ["Unavailable quests", summary.unavailable],
+        ["Character compatibility", summary.character],
+        ["Invalid prerequisite placements", summary.placement],
+      ];
+      journeyWarningList.innerHTML = groups.filter(([, warnings]) => warnings.size).map(([title, warnings]) => {{
+        const rows = [...warnings.entries()].map(([questId, message]) => {{
+          const id = Number(questId);
+          const quest = journeyQuestForCurrentVersion(id);
+          return {{ id, name: quest?.name || `Unknown quest #${{id}}`, message: String(message || "") }};
+        }}).sort((left, right) => left.name.localeCompare(right.name) || left.id - right.id);
+        return `
+          <section class="journey-warning-group">
+            <h3>${{escapeHtml(title)}} (${{rows.length}})</h3>
+            ${{rows.map((row) => `
+              <article class="journey-warning-row">
+                <div class="journey-warning-row-title">${{escapeHtml(row.name)}}<span class="journey-warning-row-id">#${{row.id}}</span></div>
+                <div class="journey-warning-row-message">${{escapeHtml(row.message)}}</div>
+              </article>
+            `).join("")}}
+          </section>
+        `;
+      }}).join("");
+      journeyWarningList.scrollTop = 0;
+    }}
+
+    function setJourneyWarningsOpen(open, summary = null) {{
+      const shouldOpen = Boolean(open && activeJourney);
+      if (shouldOpen) {{
+        settingsOverlay.hidden = true;
+        settingsButton.setAttribute("aria-expanded", "false");
+        infoOverlay.hidden = true;
+        infoButton.setAttribute("aria-expanded", "false");
+        journeyConfigOverlay.hidden = true;
+        renderJourneyWarnings(summary || journeyWarningSummary(activeJourney.batches, activeJourney.unusedQuestIds));
+      }}
+      journeyWarningsOverlay.hidden = !shouldOpen;
+      if (shouldOpen) requestAnimationFrame(() => journeyWarningsCloseButton.focus());
+      else if (activeJourney) journeyWarningButton.focus({{ preventScroll: true }});
+    }}
+
+    function showJourneyWarnings(prefix = "") {{
+      if (!activeJourney) return;
+      const summary = journeyWarningSummary(activeJourney.batches, activeJourney.unusedQuestIds);
+      if (!summary.unavailable.size && !summary.character.size && !summary.placement.size) {{
+        showJourneyMessage(prefix || "This Journey has no warnings.", "ok");
+        return;
+      }}
+      if (prefix) showJourneyMessage(prefix, "ok");
+      setJourneyWarningsOpen(true, summary);
     }}
 
     function validateJourneyBatches(batches, options = {{}}) {{
@@ -9493,17 +10513,6 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       const allIds = allJourneyQuestIds(batches);
       if (allIds.size !== batches.reduce((sum, batch) => sum + batch.questIds.length, 0)) {{
         return {{ ok: false, message: "That quest is already in this Journey. Drag it from its current batch to move it." }};
-      }}
-      for (let index = 0; index < batches.length; index += 1) {{
-        for (const questId of batches[index].questIds) {{
-          const quest = questsById.get(Number(questId));
-          if (!quest) {{
-            if (options.allowUnknown === true) continue;
-            return {{ ok: false, message: `Unknown quest #${{questId}} in Batch ${{index + 1}}.` }};
-          }}
-          const availability = questAllowedForJourney(quest);
-          if (!availability.ok) return availability;
-        }}
       }}
       const warnings = journeyPrerequisiteWarnings(batches);
       if (options.checkPrerequisites !== false && warnings.size) {{
@@ -9521,7 +10530,23 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       return validateJourneyBatches(batches, {{ baselineBatches: activeJourney?.batches || [] }});
     }}
 
+    function journeySavedAtLabel(value, action = "saved") {{
+      const raw = String(value || "").trim();
+      if (!raw) return "Not saved yet";
+      const verb = action === "exported" ? "Exported" : "Saved";
+      const timestamp = new Date(raw);
+      if (!Number.isFinite(timestamp.getTime())) return `${{verb}} ${{raw}}`;
+      return `${{verb}} ${{timestamp.toLocaleString(undefined, {{
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      }})}}`;
+    }}
+
     function renderJourney() {{
+      scheduleWorkspaceSave({{ journey: true }});
       const hasJourney = Boolean(activeJourney);
       updateJourneyDependentControls();
       updateSettingsStatus();
@@ -9531,27 +10556,36 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       journeyWorkspace.hidden = !hasJourney;
       journeySaveButton.disabled = !hasJourney;
       journeyCopyAddonButton.disabled = !hasJourney;
+      journeySaveButton.textContent = activeJourney?.exampleSourceId ? "Save as New Journey" : "Save Journey";
       journeyConfigureButton.disabled = !hasJourney;
       journeyCloseButton.disabled = !hasJourney;
       journeyImportButton.disabled = false;
       updateBatchNavigator();
       if (!hasJourney) {{
         plannerBoard.innerHTML = "";
+        journeySavedAt.textContent = "";
+        journeySavedAt.removeAttribute("title");
+        updateJourneyWarningSummary();
         return;
       }}
       sortJourneyBatchQuestIds(activeJourney.batches);
       renumberNumericBatches(activeJourney.batches);
       journeyNameEditor.value = activeJourney.name;
+      journeySavedAt.textContent = journeySavedAtLabel(activeJourney.savedAt, activeJourney.savedAction);
+      journeySavedAt.title = activeJourney.savedAt
+        ? `Journey ${{activeJourney.savedAction === "exported" ? "exported" : "saved"}} at ${{activeJourney.savedAt}}`
+        : "This Journey has not been saved or exported yet.";
       syncJourneyMetadataControls();
       plannerBoard.innerHTML = "";
       if (activeCharacterProfile) plannerBoard.append(createCompletedColumnElement());
-      const prerequisiteWarnings = journeyPrerequisiteWarnings(activeJourney.batches);
+      const prerequisiteWarnings = journeyDisplayWarnings(activeJourney.batches);
       activeJourney.batches.forEach((batch, index) => {{
         plannerBoard.append(createJourneyBatchElement(batch, index, prerequisiteWarnings));
         plannerBoard.append(createJourneyInsertElement(index + 1));
       }});
       plannerBoard.append(createHiddenColumnElement());
       updateBatchNavigator();
+      updateJourneyWarningSummary();
     }}
 
     function createJourneyBatchElement(batch, index, prerequisiteWarnings = new Map()) {{
@@ -9604,7 +10638,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
         drop.append(empty);
       }} else {{
         batch.questIds.forEach((questId) => {{
-          const quest = questsById.get(Number(questId)) || journeyPlaceholderQuest(questId);
+          const quest = journeyQuestForCurrentVersion(questId) || journeyPlaceholderQuest(questId);
           drop.append(createJourneyQuestElement(quest, batch.id, {{
             prerequisiteWarning: prerequisiteWarnings.get(Number(questId)) || "",
           }}));
@@ -9688,12 +10722,10 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
         drop.append(empty);
       }} else {{
         unusedIds.forEach((questId) => {{
-          const quest = questsById.get(Number(questId)) || journeyPlaceholderQuest(questId);
-          const warning = !questsById.has(Number(questId))
-            ? `Quest #${{questId}} is not present in this Dreamway database.`
-            : !questPassesGameVersion(quest)
-              ? `${{quest.name}} is not available in ${{gameVersionLabel(currentGameVersion)}}.`
-              : "";
+          const quest = journeyQuestForCurrentVersion(questId) || journeyPlaceholderQuest(questId);
+          const warning = journeyQuestForCurrentVersion(questId)
+            ? ""
+            : `Unknown quest #${{questId}} is not available in ${{gameVersionLabel(currentGameVersion)}}.`;
           drop.append(createJourneyQuestElement(quest, "hidden", {{ hidden: true, prerequisiteWarning: warning }}));
         }});
       }}
@@ -9726,7 +10758,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
         ? '<span class="journey-warning-mark" aria-hidden="true">!</span>'
         : `<span>${{quest.chainStep ?? "?"}}</span>`;
       item.innerHTML = `
-        <span class="${{stepClass}}" ${{prerequisiteWarning ? `title="${{escapeHtml(prerequisiteWarning)}}" aria-label="Prerequisite warning: ${{escapeHtml(prerequisiteWarning)}}"` : ""}}>${{stepContent}}${{questTypeBadgesHtml(quest)}}${{questCompletionMarkHtml(quest, "icon")}}</span>
+        <span class="${{stepClass}}" ${{prerequisiteWarning ? `title="${{escapeHtml(prerequisiteWarning)}}" aria-label="Journey warning: ${{escapeHtml(prerequisiteWarning)}}"` : ""}}>${{stepContent}}${{questTypeBadgesHtml(quest)}}${{questCompletionMarkHtml(quest, "icon")}}</span>
         <span class="journey-quest-name" ${{questDifficultyAttrs(quest)}}>${{escapeHtml(quest.name)}}</span>
         <span class="journey-quest-level">${{quest.requiredLevel ?? "?"}} / ${{quest.questLevel ?? "?"}}</span>
         ${{options.completed
@@ -9741,7 +10773,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     function journeyPlaceholderQuest(questId) {{
       return {{
         id: Number(questId),
-        name: `Quest #${{questId}}`,
+        name: `Unknown quest #${{questId}}`,
         chainStep: "?",
         chainColor: "#d3a64b",
         requiredLevel: null,
@@ -9946,7 +10978,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       }}
       const target = activeJourney ? journeyMessage : journeySetupMessage;
       target.hidden = false;
-      target.className = `journey-message ${{type === "ok" ? "ok" : ""}}`;
+      target.className = `journey-message ${{type === "ok" ? "ok" : type === "warning" ? "warning" : ""}}`;
       const showUndo = type === "ok" && journeyUndoState?.pending;
       target.innerHTML = `
         <span class="journey-message-text">${{escapeHtml(message)}}</span>
@@ -9979,7 +11011,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       const ids = Array.isArray(questIds) ? questIds : [questIds];
       return [...new Set(ids
         .map((id) => Number(id))
-        .filter((id) => Number.isFinite(id) && questsById.has(id)))];
+        .filter((id) => Number.isFinite(id) && id > 0))];
     }}
 
     function moveQuestIdsToBatch(questIds, targetBatchIndex, options = {{}}) {{
@@ -9994,15 +11026,17 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       }}
       const candidate = cloneBatches();
       for (const questId of ids) {{
-        const quest = questsById.get(Number(questId));
-        const availability = questAllowedForJourney(quest);
-        if (!availability.ok) {{
-          showJourneyMessage(availability.message);
-          return false;
-        }}
         const existingIndex = findQuestBatchIndex(questId, candidate);
+        const quest = journeyQuestForCurrentVersion(questId);
+        if (quest && existingIndex < 0) {{
+          const availability = questAllowedForJourney(quest);
+          if (!availability.ok) {{
+            showJourneyMessage(availability.message);
+            return false;
+          }}
+        }}
         if (existingIndex >= 0 && !options.moveExisting) {{
-          showJourneyMessage(`${{quest.name}} is already in Batch ${{existingIndex + 1}}. Drag it from that batch to move it.`);
+          showJourneyMessage(`${{quest?.name || `Unknown quest #${{questId}}`}} is already in Batch ${{existingIndex + 1}}. Drag it from that batch to move it.`);
           return false;
         }}
       }}
@@ -10012,7 +11046,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       ids.forEach((questId) => {{
         if (!target.questIds.some((item) => Number(item) === Number(questId))) target.questIds.push(Number(questId));
       }});
-      const moved = commitJourneyBatches(candidate, `${{ids.length === 1 ? questsById.get(ids[0])?.name : `${{ids.length}} quests`}} added to Batch ${{targetBatchIndex + 1}}.`);
+      const moved = commitJourneyBatches(candidate, `${{ids.length === 1 ? (journeyQuestForCurrentVersion(ids[0])?.name || `Unknown quest #${{ids[0]}}`) : `${{ids.length}} quests`}} added to Batch ${{targetBatchIndex + 1}}.`);
       if (moved) {{
         ids.forEach((questId) => {{
           activeJourney.unusedQuestIds = removeQuestFromUnusedCopies(activeJourney.unusedQuestIds, questId);
@@ -10056,15 +11090,17 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       const ids = questIds == null ? [] : normalizeQuestIdList(questIds);
       if (ids.length) {{
         for (const questId of ids) {{
-        const quest = questsById.get(Number(questId));
-        const availability = questAllowedForJourney(quest);
-        if (!availability.ok) {{
-          showJourneyMessage(availability.message);
-          return false;
-        }}
         const existingIndex = findQuestBatchIndex(questId, candidate);
+        const quest = journeyQuestForCurrentVersion(questId);
+        if (quest && existingIndex < 0) {{
+          const availability = questAllowedForJourney(quest);
+          if (!availability.ok) {{
+            showJourneyMessage(availability.message);
+            return false;
+          }}
+        }}
         if (existingIndex >= 0 && draggingJourneyQuestId == null) {{
-          showJourneyMessage(`${{quest.name}} is already in Batch ${{existingIndex + 1}}. Drag it from that batch to move it.`);
+          showJourneyMessage(`${{quest?.name || `Unknown quest #${{questId}}`}} is already in Batch ${{existingIndex + 1}}. Drag it from that batch to move it.`);
           return false;
         }}
         }}
@@ -10086,7 +11122,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
 
     function removeQuestFromJourney(questId) {{
       if (!activeJourney) return;
-      const quest = questsById.get(Number(questId));
+      const quest = journeyQuestForCurrentVersion(questId);
       const candidate = cloneBatches();
       removeQuestFromBatchCopies(candidate, questId);
       const validation = validateJourneyCandidateBatches(candidate);
@@ -10133,6 +11169,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       const ok = window.confirm("Close the current Journey? Make sure you have saved it first. Unsaved changes will be lost.");
       if (!ok) return;
       journeyConfigOverlay.hidden = true;
+      journeyWarningsOverlay.hidden = true;
       activeJourney = null;
       selectedBatchId = null;
       preBatchLevelValue = null;
@@ -10170,7 +11207,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
         showJourneyMessage(`Cannot mark selected quests Hidden. ${{validation.message}}`);
         return false;
       }}
-      captureJourneyUndo(`marking ${{ids.length === 1 ? questsById.get(ids[0])?.name : `${{ids.length}} quests`}} Hidden`);
+      captureJourneyUndo(`marking ${{ids.length === 1 ? (journeyQuestForCurrentVersion(ids[0])?.name || `Unknown quest #${{ids[0]}}`) : `${{ids.length}} quests`}} Hidden`);
       activeJourney.batches = candidate;
       let unused = cloneUnusedQuestIds(activeJourney.unusedQuestIds || []);
       ids.forEach((questId) => {{
@@ -10179,7 +11216,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       activeJourney.unusedQuestIds = [...ids, ...unused];
       renumberNumericBatches(activeJourney.batches);
       renderJourneyWithEffectiveLevel();
-      showJourneyMessage(`${{ids.length === 1 ? questsById.get(ids[0])?.name : `${{ids.length}} quests`}} marked Hidden.`, "ok");
+      showJourneyMessage(`${{ids.length === 1 ? (journeyQuestForCurrentVersion(ids[0])?.name || `Unknown quest #${{ids[0]}}`) : `${{ids.length}} quests`}} marked Hidden.`, "ok");
       return true;
     }}
 
@@ -10193,7 +11230,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
 
     function restoreUnusedQuest(questId) {{
       if (!activeJourney) return;
-      const quest = questsById.get(Number(questId));
+      const quest = journeyQuestForCurrentVersion(questId);
       captureJourneyUndo(`unhiding ${{quest?.name || questName(questId)}}`);
       activeJourney.unusedQuestIds = removeQuestFromUnusedCopies(activeJourney.unusedQuestIds, questId);
       renderJourneyWithEffectiveLevel();
@@ -10201,7 +11238,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     }}
 
     function questJourneyExportRow(questId, extra = {{}}) {{
-      const quest = questsById.get(Number(questId));
+      const quest = journeyQuestForCurrentVersion(questId);
       return {{
         id: Number(questId),
         name: quest?.name || "",
@@ -10231,6 +11268,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
         kind: "Journey",
         gameVersion: normalizeGameVersion(activeJourney.gameVersion || currentGameVersion),
         savedAt: activeJourney.savedAt,
+        savedAction: activeJourney.savedAction === "exported" ? "exported" : "saved",
         id: activeJourney.id,
         name: activeJourney.name,
         character: {{
@@ -10258,10 +11296,32 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       }};
     }}
 
+    function forkExampleJourneyForSave() {{
+      if (!activeJourney?.exampleSourceId) return true;
+      const sourceName = activeJourney.exampleSourceName || activeJourney.name || "Example Journey";
+      const newName = journeyNameEditor.value.trim();
+      if (!newName || newName === sourceName) {{
+        showJourneyMessage("Rename this packaged example before saving it as a new Journey.");
+        journeyNameEditor.focus();
+        journeyNameEditor.select();
+        return false;
+      }}
+      activeJourney.name = newName;
+      activeJourney.id = `${{slugify(newName) || "journey"}}-${{Date.now().toString(36)}}`;
+      delete activeJourney.exampleSourceId;
+      delete activeJourney.exampleSourceName;
+      journeyNameEditor.value = newName;
+      renderJourney();
+      showJourneyMessage(`Created editable Journey "${{newName}}" from the example.`, "ok");
+      return true;
+    }}
+
     function saveJourneyJson() {{
       if (!activeJourney) return;
+      if (!forkExampleJourneyForSave()) return;
       activeJourney.name = journeyNameEditor.value.trim() || activeJourney.name;
       activeJourney.savedAt = new Date().toISOString();
+      activeJourney.savedAction = "saved";
       renderJourney();
       const data = journeyExportData();
       const blob = new Blob([JSON.stringify(data, null, 2)], {{ type: "application/json" }});
@@ -10370,6 +11430,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
         id: decodeJourneyTransportText(fields[1]) || slugify(name),
         name,
         savedAt: fields[9] ? decodeJourneyTransportText(fields[9]) : "",
+        savedAction: "exported",
         gameVersion: normalizeGameVersion(fields[7] || "era"),
         character: {{
           raceMask,
@@ -10403,8 +11464,10 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
 
     async function copyJourneyAddonString() {{
       if (!activeJourney) return;
+      if (!forkExampleJourneyForSave()) return;
       activeJourney.name = journeyNameEditor.value.trim() || activeJourney.name;
       activeJourney.savedAt = new Date().toISOString();
+      activeJourney.savedAction = "exported";
       renderJourney();
       try {{
         await copyTextToClipboard(journeyTransportString());
@@ -10485,13 +11548,25 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
         showJourneyMessage("Import failed: Journey must include a name, race, and class.");
         return false;
       }}
+      const importedGameVersion = normalizeGameVersion(data.gameVersion || data.gameFlavor || data.version || "era");
+      if (importedGameVersion !== currentGameVersion) {{
+        const accepted = window.confirm(
+          `This Journey was created for ${{gameVersionLabel(importedGameVersion)}}, but Dreamway is currently displaying ${{gameVersionLabel(currentGameVersion)}}.\n\n` +
+          `Import it without changing the displayed version? Quests unavailable in ${{gameVersionLabel(currentGameVersion)}} will be preserved as unknown quests and ignored by prerequisite, level, zone, and naming calculations.`
+        );
+        if (!accepted) {{
+          showJourneyMessage("Journey import cancelled.");
+          return false;
+        }}
+      }}
       const rawBatches = Array.isArray(data.batches) && data.batches.length ? data.batches : [{{ name: "1", questIds: [] }}];
       const unusedQuestIds = questIdsFromImportedUnused(data);
       journeyBatchCounter = 0;
       const importedJourney = {{
         schemaVersion: Number(data.schemaVersion) || 1,
-        gameVersion: normalizeGameVersion(data.gameVersion || data.gameFlavor || data.version || "era"),
+        gameVersion: importedGameVersion,
         savedAt: String(data.savedAt || ""),
+        savedAction: data.savedAt ? (data.savedAction === "exported" ? "exported" : "saved") : "",
         id: String(data.id || slugify(name) || `journey-${{Date.now().toString(36)}}`),
         name,
         race: race.label,
@@ -10530,11 +11605,25 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       applyJourneyIdentityToFilters(race, klass, faction);
       updateFiltersFromControls();
       renderJourney();
-      const warningCount = journeyPrerequisiteWarnings(importedJourney.batches).size;
-      const warningText = warningCount
-        ? ` with ${{warningCount}} warning${{warningCount === 1 ? "" : "s"}}`
-        : "";
-      showJourneyMessage(`Imported Journey "${{name}}"${{warningText}}.`, "ok");
+      showJourneyMessage(`Imported Journey "${{name}}".`, "ok");
+      return true;
+    }}
+
+    function loadExampleJourney(exampleId = "example-journey-test") {{
+      const template = EXAMPLE_JOURNEYS.find((journey) => journey.id === exampleId);
+      if (!template) {{
+        showJourneyMessage("That packaged example Journey is unavailable.");
+        return false;
+      }}
+      const source = JSON.parse(JSON.stringify(template));
+      if (!importJourneyData(source)) return false;
+      activeJourney.exampleSourceId = template.id;
+      activeJourney.exampleSourceName = template.name;
+      activeJourney.savedAt = "";
+      activeJourney.savedAction = "";
+      renderJourney();
+      updateSettingsStatus();
+      showJourneyMessage(`Loaded example Journey "${{template.name}}". Save it as a new Journey to keep changes.`, "ok");
       return true;
     }}
 
@@ -10805,6 +11894,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       renderJourney();
       renderCurrentView({{ scrollTargetChainToTop: true }});
       if (currentAppMode === "replay") initializeReplay();
+      scheduleWorkspaceSave({{ profile: true }});
       return true;
     }}
 
@@ -10832,6 +11922,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       updateProfileImportButton();
       renderJourney();
       renderCurrentView({{ scrollTargetChainToTop: true }});
+      scheduleWorkspaceSave({{ profile: true }});
     }}
 
     function replayEventType(event) {{
@@ -10932,8 +12023,11 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
         row.className = `replay-event-row${{index === 0 ? " current" : ""}}`;
         row.style.top = `${{index * REPLAY_EVENT_ROW_HEIGHT + 2}}px`;
         row.style.setProperty("--event-color", type.color);
+        const eventIcon = type.id === "login" || type.id === "logout"
+          ? `<span class="replay-session-glyph ${{type.id}}"></span>`
+          : type.icon;
         row.innerHTML = `
-          <span class="replay-event-icon" aria-hidden="true">${{type.icon}}</span>
+          <span class="replay-event-icon" aria-hidden="true">${{eventIcon}}</span>
           <div>
             <div class="replay-event-description">${{escapeHtml(replayEventDescription(event))}}</div>
             <div class="replay-event-meta">${{escapeHtml(replayEventMeta(event))}}</div>
@@ -11425,7 +12519,6 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
         setQuestDragPreview(event.dataTransfer, dragIds);
         chainNode.classList.add("dragging");
         document.body.classList.add("dragging-quest");
-        journeyHiddenDrop.hidden = false;
         if (currentAppMode === "map") setAppMode("planner");
         return;
       }}
@@ -11450,7 +12543,6 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       setQuestDragPreview(event.dataTransfer, dragIds);
       questNode.classList.add("dragging");
       document.body.classList.add("dragging-quest");
-      journeyHiddenDrop.hidden = false;
       if (isMapTooltipQuest) document.body.classList.add("dragging-map-tooltip");
       if (currentAppMode === "map") {{
         if (isMapTooltipQuest) {{
@@ -11512,7 +12604,6 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       setQuestDragPreview(event.dataTransfer, dragIds);
       questNode.classList.add("dragging");
       document.body.classList.add("dragging-quest");
-      journeyHiddenDrop.hidden = false;
     }}
 
     function handleCatalogueDragEnd() {{
@@ -11523,7 +12614,6 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       document.body.classList.remove("dragging-batch");
       document.body.classList.remove("dragging-map-tooltip");
       clearQuestDragPreview();
-      journeyHiddenDrop.hidden = true;
       journeyHiddenDrop.classList.remove("drag-over");
       clearPlannerDragTargets();
       clearBatchSummaryDragTarget();
@@ -11714,8 +12804,44 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       restorePreDragModeAfterDrop();
     }}
 
+    const ZONE_CATEGORY_ORDER = ["unknown", "city", "zone", "dungeon", "raid", "battleground", "other"];
+    const ZONE_CATEGORY_LABELS = {{
+      unknown: "Unknown",
+      city: "Cities",
+      zone: "Zones",
+      dungeon: "Dungeons",
+      raid: "Raids",
+      battleground: "Battlegrounds",
+      other: "Other",
+    }};
+
+    function zoneLocationCategory(zone) {{
+      return currentGameVersion === "sod" && zone.sodLocationCategory
+        ? zone.sodLocationCategory
+        : zone.locationCategory || (zone.isInstance ? "other" : "zone");
+    }}
+
+    function zoneDisplayLevelRange(zone) {{
+      return currentGameVersion === "sod" && zone.sodLevelRange
+        ? zone.sodLevelRange
+        : zone.levelRange || "";
+    }}
+
+    function zoneDisplayName(zone) {{
+      return currentGameVersion === "sod" && zone.sodName ? zone.sodName : zone.name;
+    }}
+
+    function zoneRangeBounds(zone) {{
+      const match = String(zoneDisplayLevelRange(zone)).match(/^(\\d+)(?:-(\\d+))?$/);
+      return match ? [Number(match[1]), Number(match[2] || match[1])] : [999, 999];
+    }}
+
     function zoneSort(a, b) {{
-      return (a.minLevel ?? 999) - (b.minLevel ?? 999) || (a.maxLevel ?? 999) - (b.maxLevel ?? 999) || a.name.localeCompare(b.name);
+      const categoryDelta = ZONE_CATEGORY_ORDER.indexOf(zoneLocationCategory(a)) - ZONE_CATEGORY_ORDER.indexOf(zoneLocationCategory(b));
+      if (categoryDelta) return categoryDelta;
+      const [aMin, aMax] = zoneRangeBounds(a);
+      const [bMin, bMax] = zoneRangeBounds(b);
+      return aMin - bMin || aMax - bMax || zoneDisplayName(a).localeCompare(zoneDisplayName(b));
     }}
 
     function filterableZones() {{
@@ -11725,18 +12851,26 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     }}
 
     function zonesForSelectedWorld() {{
-      return filterableZones().filter((zone) => (zone.worldGroup || "azeroth") === (currentView.worldId || "azeroth"));
+      return filterableZones().filter((zone) =>
+        !zone.isInstance
+        && ["city", "zone"].includes(zoneLocationCategory(zone))
+        && (zone.worldGroup || "azeroth") === (currentView.worldId || "azeroth")
+      );
     }}
 
     function zoneOptionLabel(zone) {{
-      const rangeLabel = zone.levelRange ? ` [${{escapeHtml(zone.levelRange)}}]` : "";
-      return `${{escapeHtml(zone.name)}}${{rangeLabel}}`;
+      const levelRange = zoneDisplayLevelRange(zone);
+      const rangeLabel = levelRange ? ` [${{escapeHtml(levelRange)}}]` : "";
+      return `${{escapeHtml(zoneDisplayName(zone))}}${{rangeLabel}}`;
     }}
 
     function populateZoneSelect() {{
-      zoneSelect.innerHTML = '<option value="">Select zone</option>' + zonesForSelectedWorld()
-        .map((zone) => {{
-          return `<option value="${{zone.id}}">${{zoneOptionLabel(zone)}}</option>`;
+      const zones = zonesForSelectedWorld();
+      zoneSelect.innerHTML = '<option value="">Select zone</option>' + ["city", "zone"]
+        .map((category) => {{
+          const categoryZones = zones.filter((zone) => zoneLocationCategory(zone) === category);
+          if (!categoryZones.length) return "";
+          return `<optgroup label="${{ZONE_CATEGORY_LABELS[category]}}">${{categoryZones.map((zone) => `<option value="${{zone.id}}">${{zoneOptionLabel(zone)}}</option>`).join("")}}</optgroup>`;
         }})
         .join("");
     }}
@@ -11759,7 +12893,21 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     }}
 
     function filterableZonesWithUnknown() {{
-      return [{{ id: UNKNOWN_ZONE_ID, name: "Unknown", levelRange: "" }}, ...filterableZones()];
+      return [...filterableZones(), {{ id: UNKNOWN_ZONE_ID, name: "Unknown", levelRange: "", locationCategory: "unknown" }}].sort(zoneSort);
+    }}
+
+    function zoneFilterGroupsHtml() {{
+      const zones = filterableZonesWithUnknown();
+      return ZONE_CATEGORY_ORDER.map((category) => {{
+        const categoryZones = zones.filter((zone) => zoneLocationCategory(zone) === category);
+        if (!categoryZones.length) return "";
+        return `
+          <div class="zone-filter-group" data-zone-category="${{category}}">
+            ${{category === "unknown" ? "" : `<div class="zone-filter-group-title">${{ZONE_CATEGORY_LABELS[category]}}</div>`}}
+            ${{categoryZones.map((zone) => filterCheckboxHtml("zone", zone.id, zone.id === UNKNOWN_ZONE_ID ? "Unknown" : zoneOptionLabel(zone), filters.zoneIds.has(zone.id))).join("")}}
+          </div>
+        `;
+      }}).join("");
     }}
 
     function optionChecked(set, value) {{
@@ -11811,9 +12959,14 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
           </div>
           <div class="filter-column" data-filter-column-panel="zones">
             <div class="filter-column-title">Zones</div>
+            <div class="zone-scope-options" aria-label="Quest zone locations">
+              ${{filterCheckboxHtml("zone-scope", "starts", "Starts", filters.zoneScopes.has("starts"))}}
+              ${{filterCheckboxHtml("zone-scope", "objectives", "Objectives", filters.zoneScopes.has("objectives"))}}
+              ${{filterCheckboxHtml("zone-scope", "ends", "Ends", filters.zoneScopes.has("ends"))}}
+            </div>
             ${{filterActionHtml("zones")}}
             ${{filterCheckboxHtml("current-zone", "current-zone", "Current view", filters.useCurrentMapZone)}}
-            ${{filterableZonesWithUnknown().map((zone) => filterCheckboxHtml("zone", zone.id, zone.id === UNKNOWN_ZONE_ID ? "Unknown" : zoneOptionLabel(zone), filters.zoneIds.has(zone.id))).join("")}}
+            ${{zoneFilterGroupsHtml()}}
           </div>
           <div class="filter-column" data-filter-column-panel="types">
             <div class="filter-column-title">Quest Types</div>
@@ -11835,7 +12988,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
         button.addEventListener("click", () => {{
           const column = button.dataset.filterColumn;
           const checked = button.dataset.filterAction === "check-all";
-          mainFilterMenu.querySelectorAll(`[data-filter-column-panel="${{column}}"] input[type="checkbox"]:not([data-filter-kind="current-zone"])`).forEach((input) => {{
+          mainFilterMenu.querySelectorAll(`[data-filter-column-panel="${{column}}"] input[type="checkbox"]:not([data-filter-kind="current-zone"]):not([data-filter-kind="zone-scope"])`).forEach((input) => {{
             input.checked = checked;
           }});
           updateMainFiltersFromMenu();
@@ -11851,6 +13004,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       filters.classMasks = new Set([...mainFilterMenu.querySelectorAll('input[data-filter-kind="class"]:checked')].map((input) => Number(input.value)));
       filters.zoneIds = new Set([...mainFilterMenu.querySelectorAll('input[data-filter-kind="zone"]:checked')].map((input) => Number(input.value)));
       filters.useCurrentMapZone = Boolean(mainFilterMenu.querySelector('input[data-filter-kind="current-zone"]')?.checked);
+      filters.zoneScopes = new Set([...mainFilterMenu.querySelectorAll('input[data-filter-kind="zone-scope"]:checked')].map((input) => input.value));
       const visibleTypeIds = new Set(questTypeFilterOptions().map((filter) => filter.id));
       const retainedTypeIds = [...filters.typeIds].filter((typeId) => !visibleTypeIds.has(typeId));
       const selectedTypeIds = [...mainFilterMenu.querySelectorAll('input[data-filter-kind="type"]:checked')].map((input) => input.value);
@@ -11884,13 +13038,15 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       const defaultTypes = new Set(questTypeFilterOptions().filter((filter) => filter.defaultEnabled).map((filter) => filter.id));
       const typesAreDefault = [...defaultTypes].every((id) => filters.typeIds.has(id));
       const identityAll = filters.factions.size === 2 && filters.raceMasks.size === allRaces && filters.classMasks.size === allClasses;
-      const zonesAll = !filters.useCurrentMapZone && filters.zoneIds.size === allZones;
+      const allZoneScopes = filters.zoneScopes.size === 3;
+      const zonesAll = !filters.useCurrentMapZone && filters.zoneIds.size === allZones && allZoneScopes;
       const active = !identityAll || !zonesAll || !typesAreDefault;
       const parts = [
         `${{filters.factions.size}} factions`,
         `${{filters.raceMasks.size}} races`,
         `${{filters.classMasks.size}} classes`,
         filters.useCurrentMapZone ? "current map zone" : `${{filters.zoneIds.size}} zones`,
+        `${{filters.zoneScopes.size}} location types`,
         `${{questTypeFilterOptions().filter((filter) => filters.typeIds.has(filter.id)).length}} quest types`,
       ];
       mainFilterButton.title = parts.join(", ");
@@ -12113,7 +13269,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
 
     function setZoneView(zoneId) {{
       const zone = zonesById.get(Number(zoneId));
-      if (!zone) return;
+      if (!zone || zone.isInstance || !zone.image) return;
       hideWorldZoneTooltip();
       currentView = {{ type: "zone", zoneId: zone.id, worldId: zone.worldGroup || "azeroth" }};
       worldSelect.value = currentView.worldId;
@@ -12396,9 +13552,36 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       return chainId != null && Number(chain.id) === Number(chainId);
     }}
 
+    function questZoneNamesForFilterScopes(quest) {{
+      const names = [];
+      const addNames = (values) => values.forEach((name) => {{
+        if (name && !names.includes(name)) names.push(name);
+      }});
+      if (filters.zoneScopes.has("starts")) {{
+        const startNames = zoneNamesFromIds(quest.startZoneIds);
+        addNames(startNames.length ? startNames : zonesFromSources(quest.startSources));
+      }}
+      if (filters.zoneScopes.has("objectives")) addNames(zoneNamesFromIds(quest.objectiveZoneIds));
+      if (filters.zoneScopes.has("ends")) {{
+        const endNames = zoneNamesFromIds(quest.endZoneIds);
+        addNames(endNames.length ? endNames : zonesFromSources(quest.endSources));
+      }}
+      return names;
+    }}
+
+    function chainMatchesZoneFilter(chain, zoneFilter) {{
+      if (!zoneFilter.zoneFiltered) return true;
+      if (!filters.zoneScopes.size || !zoneFilter.selectedZoneNames?.size) return false;
+      return chain.visibleQuests.some((quest) => {{
+        const zoneNames = questZoneNamesForFilterScopes(quest);
+        if (!zoneNames.length) return zoneFilter.selectedZoneNames.has("Unknown");
+        return zoneNames.some((zoneName) => zoneFilter.selectedZoneNames.has(zoneName));
+      }});
+    }}
+
     function activeZoneFilterState() {{
       const zones = filterableZonesWithUnknown();
-      const manualZoneFiltered = filters.zoneIds.size !== zones.length;
+      const manualZoneFiltered = filters.zoneIds.size !== zones.length || filters.zoneScopes.size !== 3;
       const manualZoneNames = manualZoneFiltered ? selectedZoneNameSet() : null;
       if (filters.useCurrentMapZone) {{
         if (currentView.type === "world") {{
@@ -12412,10 +13595,11 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
               label: worldName,
             }};
           }}
+          const scopeFiltered = filters.zoneScopes.size !== 3;
           return {{
             zones,
-            zoneFiltered: false,
-            selectedZoneNames: null,
+            zoneFiltered: scopeFiltered,
+            selectedZoneNames: scopeFiltered ? new Set(zones.map((zone) => zone.name)) : null,
             label: "all zones from world map",
           }};
         }}
@@ -12476,7 +13660,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
           }};
         }})
         .filter((chain) => chain.visibleQuests.length > 0)
-        .filter((chain) => chain.bypassZoneFilter || !zoneFilter.zoneFiltered || (chain.zoneNames.length ? chain.zoneNames.some((zoneName) => zoneFilter.selectedZoneNames.has(zoneName)) : zoneFilter.selectedZoneNames.has("Unknown")))
+        .filter((chain) => (chain.bypassZoneFilter && filters.zoneScopes.size > 0) || chainMatchesZoneFilter(chain, zoneFilter))
         .filter((chain) => chain.keepSelectionVisible || chainPassesLevel(chain))
         .filter((chain) => chain.keepSelectionVisible || chainPassesSearch(chain))
         .map((chain) => {{
@@ -13035,7 +14219,8 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       const prefix = includeComplete ? "Complete " : "";
       const questId = Number(requirement?.questId);
       const questIdAttribute = Number.isFinite(questId) ? ` data-requirement-quest-id="${{questId}}"` : "";
-      return `<span class="chain-requirement-reference" tabindex="0"${{questIdAttribute}} style="--requirement-color:${{chainRequirementColor(requirement, colorMap)}}" title="Highlight required quest">${{prefix}}${{escapeHtml(requirement.name || "the linked path")}}</span>`;
+      const requirementKey = chainRequirementKey(requirement);
+      return `<span class="chain-requirement-reference" tabindex="0"${{questIdAttribute}} data-requirement-key="${{escapeHtml(requirementKey)}}" style="--requirement-color:${{chainRequirementColor(requirement, colorMap)}}" title="Highlight required quest">${{prefix}}${{escapeHtml(requirement.name || "the linked path")}}</span>`;
     }}
 
     function chainRequirementMarkupList(requirements, colorMap, conjunction = "and") {{
@@ -13078,6 +14263,11 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       expanded.className = "chain-expanded chain-requirements";
       const requirementColors = chainRequirementColorMap(model);
       const setRequirementSourceHighlight = (reference, active) => {{
+        const requirementKey = String(reference?.dataset.requirementKey || "");
+        expanded.querySelectorAll(".chain-requirement-reference").forEach((candidate) => {{
+          if (String(candidate.dataset.requirementKey || "") !== requirementKey) return;
+          candidate.classList.toggle("requirement-peer-highlight", active);
+        }});
         const questId = Number(reference?.dataset.requirementQuestId);
         if (!Number.isFinite(questId)) return;
         const target = expanded.querySelector(`.chain-quest-item[data-quest-id="${{questId}}"]`);
@@ -13164,6 +14354,8 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       const slot = document.createElement("div");
       slot.className = "virtual-chain-slot";
       slot.dataset.virtualChainIndex = chainIndex;
+      const reservedHeight = inventoryVirtualLayout?.entries?.[chainIndex]?.height;
+      if (reservedHeight) slot.style.height = `${{Math.max(1, reservedHeight)}}px`;
         const isExpanded = !collapsedChainIds.has(chain.id);
         const dependencyModel = chainDependencyModel(chain);
         const showContextToggle = Number(chain.contextHiddenQuestCount) > 0;
@@ -13258,12 +14450,18 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     function measureInventoryVirtualSlots() {{
       const layout = inventoryVirtualLayout;
       if (!layout) return;
+      const anchorIndex = Math.max(0, layout.start);
+      const anchorOffset = layout.entries[anchorIndex]?.offset || 0;
+      const anchorDelta = chainList.scrollTop - anchorOffset;
       let changed = false;
       chainList.querySelectorAll(".virtual-chain-slot").forEach((slot) => {{
         const index = Number(slot.dataset.virtualChainIndex);
         const entry = layout.entries[index];
+        if (!entry) return;
+        slot.style.height = "auto";
         const measured = Math.ceil(slot.getBoundingClientRect().height);
-        if (!entry || !measured || Math.abs(measured - entry.height) < 1) return;
+        slot.style.height = `${{Math.max(1, entry.height)}}px`;
+        if (!measured || Math.abs(measured - entry.height) < 1) return;
         inventoryVirtualHeights.set(entry.key, measured);
         entry.height = measured;
         changed = true;
@@ -13275,14 +14473,27 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
         offset += entry.height;
       }});
       layout.totalHeight = offset;
+      chainList.querySelectorAll(".virtual-chain-slot").forEach((slot) => {{
+        const entry = layout.entries[Number(slot.dataset.virtualChainIndex)];
+        if (entry) slot.style.height = `${{Math.max(1, entry.height)}}px`;
+      }});
       updateInventoryVirtualSpacers();
+      chainList.scrollTop = Math.max(0, (layout.entries[anchorIndex]?.offset || 0) + anchorDelta);
+    }}
+
+    function scheduleInventoryVirtualMeasurement(delay = 0) {{
+      clearTimeout(inventoryVirtualMeasureTimer);
+      inventoryVirtualMeasureTimer = setTimeout(() => {{
+        inventoryVirtualMeasureTimer = 0;
+        measureInventoryVirtualSlots();
+      }}, delay);
     }}
 
     function renderInventoryWindow(force = false) {{
       const layout = inventoryVirtualLayout;
       if (!layout?.entries.length) return;
       const viewportHeight = Math.max(360, chainList.clientHeight || 0);
-      const overscan = Math.max(650, viewportHeight * 1.25);
+      const overscan = Math.max(360, viewportHeight * 0.65);
       const minimum = Math.max(0, chainList.scrollTop - overscan);
       const maximum = chainList.scrollTop + viewportHeight + overscan;
       let start = 0;
@@ -13308,8 +14519,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       chainList.append(fragment);
       updateInventoryVirtualSpacers();
       refreshRenderedCatalogueSelectionState();
-      cancelAnimationFrame(inventoryVirtualFrame);
-      inventoryVirtualFrame = requestAnimationFrame(measureInventoryVirtualSlots);
+      scheduleInventoryVirtualMeasurement(force ? 0 : 120);
     }}
 
     function renderInventory(options = {{}}) {{
@@ -13670,7 +14880,9 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       const linkedZones = (zoneIds || [])
         .map((zoneId) => zonesById.get(Number(zoneId)))
         .filter(Boolean)
-        .map((zone) => `<button type="button" class="zone-link" data-zone-id="${{zone.id}}">${{escapeHtml(zone.name)}}</button>`);
+        .map((zone) => zone.isInstance
+          ? `<span>${{escapeHtml(zone.name)}}</span>`
+          : `<button type="button" class="zone-link" data-zone-id="${{zone.id}}">${{escapeHtml(zone.name)}}</button>`);
       return linkedZones.join(", ");
     }}
 
@@ -13692,6 +14904,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
         const tail = extra ? extra[2] : "";
         const zone = zonesByName.get(zoneName);
         if (!zone) return escapeHtml(part);
+        if (zone.isInstance) return `${{escapeHtml(zoneName)}}${{escapeHtml(tail)}}`;
         return `<button type="button" class="zone-link" data-zone-id="${{zone.id}}">${{escapeHtml(zoneName)}}</button>${{escapeHtml(tail)}}`;
       }}).join(", ");
       return `${{prefix}} [${{linkedZones}}]${{suffix}}`;
@@ -15195,7 +16408,10 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     chainList.addEventListener("dragend", handleCatalogueDragEnd);
     chainList.addEventListener("scroll", () => {{
       cancelAnimationFrame(inventoryVirtualScrollFrame);
-      inventoryVirtualScrollFrame = requestAnimationFrame(() => renderInventoryWindow());
+      inventoryVirtualScrollFrame = requestAnimationFrame(() => {{
+        renderInventoryWindow();
+        scheduleInventoryVirtualMeasurement(120);
+      }});
     }}, {{ passive: true }});
     chainList.addEventListener("dragenter", handleBatchSummaryDragOver);
     chainList.addEventListener("dragover", handleBatchSummaryDragOver);
@@ -15225,10 +16441,13 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     journeyCopyAddonButton.addEventListener("click", copyJourneyAddonString);
     journeyConfigureButton.addEventListener("click", () => setJourneyConfigOpen(true));
     journeyConfigCloseButton.addEventListener("click", () => setJourneyConfigOpen(false));
+    journeyWarningButton.addEventListener("click", () => showJourneyWarnings());
+    journeyWarningsCloseButton.addEventListener("click", () => setJourneyWarningsOpen(false));
     journeyCloseButton.addEventListener("click", closeCurrentJourney);
     settingsJourneyCloseButton.addEventListener("click", closeCurrentJourney);
     journeyImportButton.addEventListener("click", () => setJourneyStringImportOpen(journeyStringImport.hidden));
     journeyLoadButton.addEventListener("click", () => journeyLoadInput.click());
+    journeyExampleButton.addEventListener("click", () => loadExampleJourney());
     journeyLoadInput.addEventListener("change", () => {{
       importJourneyFile(journeyLoadInput.files?.[0]);
       journeyLoadInput.value = "";
@@ -15257,6 +16476,9 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     }});
     journeyConfigOverlay.addEventListener("click", (event) => {{
       if (event.target === journeyConfigOverlay) setJourneyConfigOpen(false);
+    }});
+    journeyWarningsOverlay.addEventListener("click", (event) => {{
+      if (event.target === journeyWarningsOverlay) setJourneyWarningsOpen(false);
     }});
     gameVersionOptions.addEventListener("change", (event) => {{
       const input = event.target.closest('input[name="game-version"]');
@@ -15434,6 +16656,11 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
         }}
       }}
       if (event.key === "Escape") {{
+        if (!journeyWarningsOverlay.hidden) {{
+          setJourneyWarningsOpen(false);
+          event.preventDefault();
+          return;
+        }}
         if (!journeyConfigOverlay.hidden) {{
           setJourneyConfigOpen(false);
           event.preventDefault();
@@ -15469,10 +16696,32 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       }}
     }});
 
+    document.addEventListener("click", () => scheduleWorkspaceSave(), true);
+    document.addEventListener("change", () => scheduleWorkspaceSave(), true);
+    document.addEventListener("input", () => scheduleWorkspaceSave(), true);
+    document.addEventListener("drop", () => scheduleWorkspaceSave({{ journey: true, delay: 50 }}), true);
+    document.addEventListener("dragend", () => scheduleWorkspaceSave({{ journey: true, delay: 50 }}), true);
+    document.addEventListener("keydown", () => scheduleWorkspaceSave(), true);
+    chainList.addEventListener("scroll", () => scheduleWorkspaceSave({{ delay: 180 }}), {{ passive: true }});
+    plannerBoard.addEventListener("scroll", () => scheduleWorkspaceSave({{ delay: 180 }}), {{ passive: true }});
+    replayEventLogViewport.addEventListener("scroll", () => scheduleWorkspaceSave({{ delay: 180 }}), {{ passive: true }});
+    document.addEventListener("visibilitychange", () => {{
+      if (document.visibilityState === "hidden") persistWorkspaceNow();
+    }});
+    window.addEventListener("pagehide", () => persistWorkspaceNow());
+
+    const recoveredWorkspace = await restoreWorkspaceState();
     settingsJourneyHost.append(journeySetup);
     populateWorldSelect();
     populateZoneSelect();
     populateFilters();
+    const recoveredLevelValue = String(recoveredWorkspace?.filters?.levelValue || (filters.level == null ? "all" : filters.level));
+    levelFilter.value = [...levelFilter.options].some((option) => option.value === recoveredLevelValue)
+      ? recoveredLevelValue
+      : "all";
+    syncLevelFilterFromControl({{ render: false }});
+    questSearch.value = String(inventorySearchValues[inventoryMode] ?? recoveredWorkspace?.filters?.search ?? "");
+    filters.search = questSearch.value.trim().toLowerCase();
     populateMainFilterMenu();
     updateMapQuestDisplayToggle();
     updateCatalogueAssignedToggle();
@@ -15480,13 +16729,47 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     populateJourneySetupControls();
     renderWorldTiles();
     renderJourney();
-    setAppMode("map");
+    updateInventoryModeControls();
+    setAppMode(currentAppMode);
     updateSearchClearButton();
     new ResizeObserver(scheduleMapFit).observe(mapFrame);
     new ResizeObserver(updateWorkbenchColumns).observe(workbench);
     window.addEventListener("resize", updateWorkbenchColumns);
     updateWorkbenchColumns();
-    setWorldView();
+    if (currentView.type === "zone" && zonesById.has(Number(currentView.zoneId))) setZoneView(currentView.zoneId);
+    else setWorldView(currentView.worldId);
+
+    const recoveredReplay = recoveredWorkspace?.replay || {{}};
+    if (currentAppMode === "replay") {{
+      setReplayScope(replayState.scope);
+      if (replayState.events.length && Number.isFinite(Number(recoveredReplay.currentTime))) {{
+        seekReplay(Number(recoveredReplay.currentTime));
+      }}
+      setReplayPanelMode(replayState.panelMode);
+      setReplayPaused(recoveredReplay.paused !== false);
+    }}
+
+    const recoveredInventory = recoveredWorkspace?.inventory || {{}};
+    requestAnimationFrame(() => requestAnimationFrame(() => {{
+      chainList.scrollTop = Number(inventoryScrollTop[inventoryMode]) || 0;
+      plannerBoard.scrollLeft = Number(recoveredInventory.plannerScrollLeft) || 0;
+      plannerBoard.scrollTop = Number(recoveredInventory.plannerScrollTop) || 0;
+      replayEventLogViewport.scrollTop = Number(recoveredReplay.eventLogScrollTop) || 0;
+      refreshSelectionState();
+    }}));
+
+    const recoveredOverlays = recoveredWorkspace?.overlays || {{}};
+    if (recoveredOverlays.journeyWarnings && activeJourney) setJourneyWarningsOpen(true);
+    else if (recoveredOverlays.journeyConfig && activeJourney) setJourneyConfigOpen(true);
+    else if (recoveredOverlays.info) setInfoOpen(true);
+    else if (recoveredOverlays.settings) setSettingsOpen(true);
+
+    workspaceRestoreInProgress = false;
+    scheduleWorkspaceSave({{
+      journey: !recoveredWorkspace,
+      profile: !recoveredWorkspace,
+      delay: 50,
+    }});
     }})().catch((error) => {{
       console.error(error);
       document.body.innerHTML = `<main style="padding:24px;color:#f7eed8"><h1>Dreamway could not start</h1><p>${{error?.message || error}}</p><p>Keep dreamway.html beside its data and assets folders, then reload the page.</p></main>`;
@@ -15637,11 +16920,20 @@ def render_addon_quest_zones_lua(records, zones, game_version="era"):
     for zone in zones:
         if not zone.get("questCount"):
             continue
+        sod_fields = ""
+        if zone.get("sodLocationCategory"):
+            sod_fields += f",sc={lua_string(zone['sodLocationCategory'])}"
+        if zone.get("sodLevelRange"):
+            sod_fields += f",sr={lua_string(zone['sodLevelRange'])}"
+        if zone.get("sodName"):
+            sod_fields += f",sn={lua_string(zone['sodName'])}"
         lines.append(
             "    {"
             f"id={zone['id']},"
             f"n={lua_string(zone['name'])},"
-            f"r={lua_string(zone.get('levelRange') or '')}"
+            f"r={lua_string(zone.get('levelRange') or '')},"
+            f"c={lua_string(zone.get('locationCategory') or 'other')}"
+            f"{sod_fields}"
             "},"
         )
     lines.extend([

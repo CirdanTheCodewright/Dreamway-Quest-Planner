@@ -1,0 +1,23 @@
+CREATE A DREAMWAY SHORTCUT ON WINDOWS
+
+Keep dreamway.html, dreamway.ico, and the supporting folders together in a
+permanent location before creating the shortcut. Moving these files later can
+break the shortcut or its icon.
+
+1. Right-click dreamway.html.
+2. Choose "Show more options" if Windows displays the shorter context menu.
+3. Choose "Send to", then "Desktop (create shortcut)".
+4. Right-click the new shortcut on your desktop and choose "Properties".
+5. Choose "Change Icon". Depending on your Windows version, this may appear on
+   either the Shortcut or Web Document tab.
+6. Browse to dreamway.ico in the same folder as dreamway.html, select it, and
+   press OK.
+7. Press Apply, then OK.
+
+You can rename the shortcut to "Dreamway". You can also right-click it and
+choose "Pin to Start" where that option is available.
+
+The shortcut and Start menu entry will use the Dreamway icon. Once Dreamway is
+open, Windows may still show the icon of your default browser on the taskbar.
+That behavior is controlled by the browser and cannot be overridden by a normal
+HTML file.

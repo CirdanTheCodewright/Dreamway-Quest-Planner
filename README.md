@@ -8,6 +8,9 @@ The current web app can visualize Classic quest chains on zone and world maps, f
 
 ```text
 dreamway.html        Generated standalone web app
+dreamway.ico         Multi-resolution Windows shortcut icon
+Create a Dreamway Shortcut.txt
+                     Windows shortcut setup instructions
 DreamwayQuestPlanner/ WoW addon package (`Dreamway Quest Planner` in game)
 tools/                  Data generator, map downloader, and verifier scripts
 assets/                 Classic map assets used by the web app

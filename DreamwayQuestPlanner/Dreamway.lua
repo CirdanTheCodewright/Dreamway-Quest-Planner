@@ -27,6 +27,8 @@ local ProfileRecorder = {
     searchRenderedRowCount = nil,
     searchScrollRefreshPending = false,
     searchDisplayTextByKey = {},
+    panelSelectedQuestIds = {},
+    panelSelectionAnchor = nil,
     dreamwayUiRefreshPending = false,
     dreamwayUiRefreshPanel = false,
     questieCallbackRegistered = false,
@@ -36,17 +38,18 @@ local ProfileRecorder = {
     recordedKillGuids = {},
     recentNpcDeaths = {},
     lastCombatPrune = 0,
+    unsavedEventCount = 0,
 }
 local MAX_PANEL_SEARCH_RESULTS = 120
 local PANEL_SEARCH_ROW_HEIGHT = 22
 local PANEL_SEARCH_ROW_TOP_PAD = 6
 local PANEL_SEARCH_ROW_POOL_EXTRA = 3
 local PANEL_BATCH_COLUMNS_PER_ROW = 4
-local PANEL_BATCH_COLUMN_WIDTH = 154
+local PANEL_BATCH_COLUMN_WIDTH = 160
 local PANEL_BATCH_COLUMN_HEIGHT = 360
-local PANEL_BATCH_COLUMN_STEP_X = 174
+local PANEL_BATCH_COLUMN_STEP_X = 178
 local PANEL_BATCH_ROW_STEP_Y = 372
-local PANEL_BATCH_VISIBLE_ROW_EXTRA = 1
+local PANEL_BATCH_VISIBLE_ROW_EXTRA = 0
 local function NormalizeDreamwayGameVersion(value)
     value = string.lower(tostring(value or ""))
     if value == "wotlk" or value == "wrath" then
@@ -123,6 +126,9 @@ local mode = MODE_QUESTIE
 local initialized = false
 local pendingApply = false
 local batchIndex = 1
+local databaseNormalized = false
+local startupJourneyId = nil
+local startupBatchIndex = nil
 local suppressedUnusedQuestStates = {}
 local SUPPRESSED_ABSENT = {}
 local SUPPRESSED_SAVED_ABSENT = "__DreamwayAbsent"
@@ -145,6 +151,13 @@ local panelBatchScroll
 local panelBatchContent
 local panelBatchColumns = {}
 local panelPrerequisiteWarnings = {}
+ProfileRecorder.panelJourneyWarnings = {
+    unavailable = {},
+    character = {},
+    placement = {},
+    questNames = {},
+    journey = nil,
+}
 local panelSearchBox
 local panelSearchResults
 local panelShowAssignedCheck
@@ -158,6 +171,12 @@ local panelSearchFooterLabel
 local panelSearchText = ""
 panelSearchFilters = {
     mode = "search",
+    scrollOffsets = {
+        character = 0,
+        zones = 0,
+        type = 0,
+    },
+    contents = {},
     unknownZoneId = 0,
     starts = true,
     objectives = true,
@@ -187,11 +206,13 @@ local panelDragState
 local panelDragGhost
 local allQuestSearchCache
 local chainSortCache = {}
+local panelSearchResultsDirty = true
 local HydrateQuestMetadata
 local RefreshJourneyDerivedData
 local RefreshPanelSearchResults
 local UpdatePanelSearchVisibleRows
 local JourneyPrerequisiteWarnings
+local JourneyWarningSummary
 
 local fallbackJourney = {
     id = "dreamway-sample",
@@ -236,6 +257,76 @@ local fallbackJourney = {
     },
 }
 
+DREAMWAY_EXAMPLE_JOURNEYS = {
+    {
+        id = "example-journey-test",
+        name = "Example Journey Test",
+        gameVersion = "era",
+        isExample = true,
+        character = {
+            race = "Human",
+            raceMask = 1,
+            faction = "Alliance",
+            class = "All classes",
+            classMask = 0,
+        },
+        batches = {
+            { id = "example-elwynn-1", name = "Northshire Start", autoName = false, quests = { { id = 783 }, { id = 7 }, { id = 5261 }, { id = 33 } }, zones = { "Elwynn Forest" } },
+            { id = "example-elwynn-2", name = "Northshire Finish", autoName = false, quests = { { id = 18 }, { id = 6 } }, zones = { "Elwynn Forest" } },
+        },
+        hiddenQuestIds = {},
+        hiddenQuests = {},
+        unusedQuestIds = {},
+        unusedQuests = {},
+    },
+}
+
+function DreamwayExampleJourneyById(journeyId)
+    for _, journey in ipairs(DREAMWAY_EXAMPLE_JOURNEYS) do
+        if journey.id == journeyId then
+            return journey
+        end
+    end
+    return nil
+end
+
+function DreamwayCopyTable(value, seen)
+    if type(value) ~= "table" then
+        return value
+    end
+    seen = seen or {}
+    if seen[value] then
+        return seen[value]
+    end
+    local copy = {}
+    seen[value] = copy
+    for key, item in pairs(value) do
+        copy[DreamwayCopyTable(key, seen)] = DreamwayCopyTable(item, seen)
+    end
+    return copy
+end
+
+function DreamwayWorkingExampleJourney(journeyId, reset)
+    local template = DreamwayExampleJourneyById(journeyId)
+    if not template then
+        return nil
+    end
+    if reset or not ProfileRecorder.exampleJourneyWorkingCopy or ProfileRecorder.exampleJourneyWorkingCopy.id ~= journeyId then
+        ProfileRecorder.exampleJourneyWorkingCopy = DreamwayCopyTable(template)
+        ProfileRecorder.exampleJourneyWorkingCopy.isExample = true
+        ProfileRecorder.exampleJourneyWorkingCopy.exampleSourceId = journeyId
+    end
+    return ProfileRecorder.exampleJourneyWorkingCopy
+end
+
+function DreamwayManagedJourneyById(journeyId)
+    if not journeyId then
+        return nil
+    end
+    return DreamwayDB and DreamwayDB.journeys and DreamwayDB.journeys[journeyId]
+        or DreamwayWorkingExampleJourney(journeyId, false)
+end
+
 local function CreateBackdropFrame(name, parent)
     return CreateFrame("Frame", name, parent, BackdropTemplateMixin and "BackdropTemplate")
 end
@@ -276,7 +367,60 @@ function DreamwayActiveJourneyId()
 end
 
 function DreamwaySetActiveJourneyId(journeyId)
-    DreamwayCharacterSelection().activeJourneyId = journeyId
+    local selection = DreamwayCharacterSelection()
+    if selection.activeJourneyId ~= journeyId then
+        ProfileRecorder.panelSelectedQuestIds = {}
+        ProfileRecorder.panelSelectionAnchor = nil
+    end
+    selection.activeJourneyId = journeyId
+end
+
+function DreamwaySettingsData()
+    DreamwayDB = DreamwayDB or {}
+    DreamwayDB.settings = DreamwayDB.settings or {}
+    local settings = DreamwayDB.settings
+    settings.objectiveTracker = settings.objectiveTracker or {}
+    settings.map = settings.map or {}
+    settings.eventLog = settings.eventLog or {}
+    settings.eventLog.types = settings.eventLog.types or {}
+
+    local objective = settings.objectiveTracker
+    if objective.previousInProgress == nil then
+        objective.previousInProgress = DreamwayDB.showPreviousBatchQuests == true
+    end
+    if objective.questItemButtons ~= "follow"
+        and objective.questItemButtons ~= "always"
+        and objective.questItemButtons ~= "never"
+    then
+        objective.questItemButtons = "always"
+    end
+    if objective.showQuestLevels == nil then
+        objective.showQuestLevels = true
+    end
+    if objective.alwaysShowDefaultVersion ~= 1 then
+        objective.alwaysShow = true
+        objective.alwaysShowDefaultVersion = 1
+    elseif objective.alwaysShow == nil then
+        objective.alwaysShow = true
+    end
+
+    if settings.map.hideHiddenMarkers == nil then
+        settings.map.hideHiddenMarkers = true
+    end
+    if settings.map.hideExceptCurrentBatch == nil then
+        settings.map.hideExceptCurrentBatch = false
+    end
+
+    if settings.eventLog.enabled == nil then
+        settings.eventLog.enabled = true
+    end
+    for eventType = ProfileRecorder.EVENT_QUEST_PICKUP, ProfileRecorder.EVENT_LOGOUT do
+        local key = tostring(eventType)
+        if settings.eventLog.types[key] == nil then
+            settings.eventLog.types[key] = true
+        end
+    end
+    return settings
 end
 
 local function NormalizeDb()
@@ -290,17 +434,27 @@ local function NormalizeDb()
         characterSelection.currentBatch = tonumber(characterSelection.currentBatch) or DreamwayDB.currentBatch
         characterSelection.migratedSharedSelection = true
     end
-    if characterSelection.activeJourneyId and not DreamwayDB.journeys[characterSelection.activeJourneyId] then
+    if characterSelection.activeJourneyId
+        and not DreamwayDB.journeys[characterSelection.activeJourneyId]
+        and not DreamwayExampleJourneyById(characterSelection.activeJourneyId)
+    then
         characterSelection.activeJourneyId = nil
         characterSelection.currentBatch = 1
     end
     DreamwayDB.showAssignedQuests = DreamwayDB.showAssignedQuests == true
-    DreamwayDB.showPreviousBatchQuests = DreamwayDB.showPreviousBatchQuests == true
+    DreamwayDB.minimap = DreamwayDB.minimap or {}
+    if DreamwayDB.minimap.hide == nil then
+        DreamwayDB.minimap.hide = false
+    end
     DreamwayDB.suppressedUnusedPrevious = DreamwayDB.suppressedUnusedPrevious or {}
+    local settings = DreamwaySettingsData()
     mode = DreamwayDB.mode == MODE_DREAMWAY and MODE_DREAMWAY or MODE_QUESTIE
     batchIndex = tonumber(characterSelection.currentBatch) or 1
+    startupJourneyId = characterSelection.activeJourneyId
+    startupBatchIndex = batchIndex
+    databaseNormalized = true
     panelShowAssignedQuests = DreamwayDB.showAssignedQuests
-    ProfileRecorder.showPreviousBatchQuests = DreamwayDB.showPreviousBatchQuests
+    ProfileRecorder.showPreviousBatchQuests = settings.objectiveTracker.previousInProgress == true
 end
 
 function ProfileRecorder.EnsureCharacterProfile()
@@ -339,6 +493,16 @@ function ProfileRecorder.ServerTimestamp()
     return time and time() or 0
 end
 
+function ProfileRecorder.LocalTimestamp()
+    if time then
+        local ok, timestamp = pcall(time)
+        if ok and tonumber(timestamp) then
+            return math.floor(tonumber(timestamp))
+        end
+    end
+    return ProfileRecorder.ServerTimestamp()
+end
+
 function ProfileRecorder.EventLocation()
     if not C_Map or not C_Map.GetBestMapForUnit or not C_Map.GetPlayerMapPosition then
         return 0, 0, 0
@@ -372,7 +536,41 @@ function ProfileRecorder.UpdatedAt(timestamp)
     return tostring(timestamp)
 end
 
+function DreamwayReadableDateTime(value)
+    local raw = tostring(value or "")
+    local year, month, day, hour, minute, second = string.match(raw, "^(%d%d%d%d)%-(%d%d)%-(%d%d)T(%d%d):(%d%d):(%d%d)")
+    if not year or not date or not time then
+        return raw
+    end
+
+    local ok, formatted = pcall(function()
+        local utcAsLocal = time({
+            year = tonumber(year),
+            month = tonumber(month),
+            day = tonumber(day),
+            hour = tonumber(hour),
+            min = tonumber(minute),
+            sec = tonumber(second),
+        })
+        local localTable = date("*t", utcAsLocal)
+        local utcTable = date("!*t", utcAsLocal)
+        utcTable.isdst = localTable.isdst
+        local offset = time(localTable) - time(utcTable)
+        return date("%b %d, %Y, %I:%M %p", utcAsLocal + offset)
+    end)
+    if not ok or not formatted or formatted == "" then
+        return raw
+    end
+    formatted = string.gsub(formatted, " 0(%d),", " %1,")
+    formatted = string.gsub(formatted, ", 0(%d):", ", %1:")
+    return formatted
+end
+
 function ProfileRecorder.RecordEvent(eventType, ...)
+    local settings = DreamwaySettingsData().eventLog
+    if settings.enabled ~= true or settings.types[tostring(tonumber(eventType) or 0)] ~= true then
+        return false
+    end
     local profile = ProfileRecorder.EnsureCharacterProfile()
     local timestamp = ProfileRecorder.ServerTimestamp()
     local mapId, x, y = ProfileRecorder.EventLocation()
@@ -382,7 +580,16 @@ function ProfileRecorder.RecordEvent(eventType, ...)
         entry[#entry + 1] = tonumber(value) or 0
     end
     profile.events[#profile.events + 1] = entry
+    ProfileRecorder.unsavedEventCount = (tonumber(ProfileRecorder.unsavedEventCount) or 0) + 1
     profile.updatedAt = ProfileRecorder.UpdatedAt(timestamp)
+    if panelJourneyManager.settings
+        and panelJourneyManager.settings.frame
+        and panelJourneyManager.settings.frame:IsShown()
+        and DreamwayRefreshSettingsPanel
+    then
+        DreamwayRefreshSettingsPanel()
+    end
+    return true
 end
 
 function ProfileRecorder.RefreshCharacterProfile(completedQuestId)
@@ -441,7 +648,7 @@ local function SaveDb()
     characterSelection.activeJourneyId = DreamwayActiveJourneyId()
     characterSelection.currentBatch = batchIndex
     DreamwayDB.showAssignedQuests = panelShowAssignedQuests == true
-    DreamwayDB.showPreviousBatchQuests = ProfileRecorder.showPreviousBatchQuests == true
+    DreamwaySettingsData().objectiveTracker.previousInProgress = ProfileRecorder.showPreviousBatchQuests == true
 end
 
 local moduleCache = {}
@@ -539,7 +746,7 @@ end
 local function ActiveJourney()
     local activeJourneyId = DreamwayActiveJourneyId()
     if DreamwayDB and activeJourneyId then
-        local journey = DreamwayDB.journeys[activeJourneyId]
+        local journey = DreamwayManagedJourneyById(activeJourneyId)
         if journey and journey.batches and #journey.batches > 0 then
             return journey
         end
@@ -614,15 +821,18 @@ local function EnsureQuestieHiddenTable()
 end
 
 local function RemoveAvailableQuestIcon(questId)
-    local AvailableQuests = ImportQuestieModule("AvailableQuests")
-    if AvailableQuests and AvailableQuests.RemoveQuest then
-        pcall(AvailableQuests.RemoveQuest, questId)
-        return
-    end
-
+    -- AvailableQuests.CalculateAndDrawAll yields while iterating Questie's
+    -- internal availability table. Mutating that table through RemoveQuest can
+    -- invalidate Questie's active iterator, so Dreamway only unloads the
+    -- presentation here and lets Questie reconcile availability itself.
     local QuestieMap = ImportQuestieModule("QuestieMap")
     if QuestieMap and QuestieMap.UnloadQuestFrames then
         pcall(QuestieMap.UnloadQuestFrames, QuestieMap, questId)
+    end
+
+    local QuestieTooltips = ImportQuestieModule("QuestieTooltips")
+    if QuestieTooltips and QuestieTooltips.RemoveQuest then
+        pcall(QuestieTooltips.RemoveQuest, QuestieTooltips, questId)
     end
 end
 
@@ -630,6 +840,16 @@ local function RecalculateAvailableQuestIcons()
     local AvailableQuests = ImportQuestieModule("AvailableQuests")
     if AvailableQuests and AvailableQuests.CalculateAndDrawAll then
         pcall(AvailableQuests.CalculateAndDrawAll)
+    end
+end
+
+local function RedrawActiveQuestIcon(questId)
+    if not C_QuestLog or not C_QuestLog.IsOnQuest or not C_QuestLog.IsOnQuest(questId) then
+        return
+    end
+    local QuestieQuest = ImportQuestieModule("QuestieQuest")
+    if QuestieQuest and QuestieQuest.UpdateQuest then
+        pcall(QuestieQuest.UpdateQuest, QuestieQuest, questId)
     end
 end
 
@@ -691,6 +911,7 @@ local function RestoreUnusedQuestSuppression(skipRedraw)
                 needsRecalculate = true
             end
         end
+        RedrawActiveQuestIcon(questId)
         suppressedUnusedQuestStates[questId] = nil
         ClearSuppressedQuestState(questId)
     end
@@ -713,11 +934,47 @@ local function ApplyUnusedQuestSuppression()
 
     RestorePersistedSuppressionStates()
 
-    local unusedSet = JourneyUnusedQuestSet(ActiveJourney())
+    local settings = DreamwaySettingsData().map
+    local suppressionSet = {}
+    if settings.hideHiddenMarkers == true then
+        suppressionSet = JourneyUnusedQuestSet(ActiveJourney())
+    end
+
+    if settings.hideExceptCurrentBatch == true then
+        local currentQuestIds = {}
+        local _, batch = CurrentBatch()
+        for _, quest in ipairs(batch and batch.quests or {}) do
+            local questId = tonumber(quest and quest.id)
+            if questId then
+                currentQuestIds[questId] = true
+            end
+        end
+
+        local AvailableQuests = ImportQuestieModule("AvailableQuests")
+        for questId in pairs(AvailableQuests and AvailableQuests.__availableQuests or {}) do
+            questId = tonumber(questId)
+            if questId and not currentQuestIds[questId] then
+                suppressionSet[questId] = true
+            end
+        end
+        local QuestieMap = ImportQuestieModule("QuestieMap")
+        for questId in pairs(QuestieMap and QuestieMap.questIdFrames or {}) do
+            questId = tonumber(questId)
+            if questId and not currentQuestIds[questId] then
+                suppressionSet[questId] = true
+            end
+        end
+        for questId in pairs(suppressedUnusedQuestStates) do
+            if not currentQuestIds[questId] then
+                suppressionSet[questId] = true
+            end
+        end
+    end
+
     local needsRecalculate = false
 
     for questId, previous in pairs(suppressedUnusedQuestStates) do
-        if not unusedSet[questId] then
+        if not suppressionSet[questId] then
             if previous == SUPPRESSED_ABSENT then
                 hidden[questId] = nil
                 needsRecalculate = true
@@ -729,12 +986,13 @@ local function ApplyUnusedQuestSuppression()
                     needsRecalculate = true
                 end
             end
+            RedrawActiveQuestIcon(questId)
             suppressedUnusedQuestStates[questId] = nil
             ClearSuppressedQuestState(questId)
         end
     end
 
-    for questId in pairs(unusedSet) do
+    for questId in pairs(suppressionSet) do
         if suppressedUnusedQuestStates[questId] == nil then
             local previous = hidden[questId]
             suppressedUnusedQuestStates[questId] = previous == nil and SUPPRESSED_ABSENT or previous
@@ -963,15 +1221,11 @@ local function GetQuestieQuest(quest)
 end
 
 local function ColoredQuestDisplayName(quest, showState)
+    local showLevel = DreamwaySettingsData().objectiveTracker.showQuestLevels == true
     local questId = tonumber(quest and quest.id)
     if questId then
         local QuestieLib = ImportQuestieModule("QuestieLib")
         if QuestieLib and QuestieLib.GetColoredQuestName and Questie and Questie.db and Questie.db.profile then
-            local showLevel = Questie.db.profile.trackerShowQuestLevel
-            if showLevel == nil then
-                showLevel = true
-            end
-
             local ok, text = pcall(QuestieLib.GetColoredQuestName, QuestieLib, questId, showLevel, showState)
             if ok and text then
                 return text
@@ -979,7 +1233,7 @@ local function ColoredQuestDisplayName(quest, showState)
         end
     end
 
-    local fallback = QuestDisplayName(quest)
+    local fallback = showLevel and QuestDisplayName(quest) or tostring(quest and quest.name or "Unknown quest")
     local level = tonumber(quest and quest.questLevel)
     local QuestieLib = ImportQuestieModule("QuestieLib")
     if QuestieLib and QuestieLib.PrintDifficultyColor and level then
@@ -992,11 +1246,29 @@ local function ColoredQuestDisplayName(quest, showState)
     return fallback
 end
 
+function DreamwayShouldShowTrackerItemButtons()
+    return DreamwaySettingsData().objectiveTracker.questItemButtons ~= "never"
+end
+
+function DreamwayTrackerItemButtonAlpha()
+    local setting = DreamwaySettingsData().objectiveTracker.questItemButtons
+    if setting == "follow"
+        and Questie
+        and Questie.db
+        and Questie.db.profile
+        and Questie.db.profile.trackerFadeQuestItemButtons
+    then
+        return 0
+    end
+    return 1
+end
+
 local function ColoredQuestSearchDisplayName(quest)
     local questId = tonumber(quest and quest.id) or 0
     local questLevel = tonumber(quest and quest.questLevel) or 0
     local playerLevel = UnitLevel and tonumber(UnitLevel("player")) or 0
-    local cacheKey = tostring(questId) .. ":" .. tostring(questLevel) .. ":" .. tostring(playerLevel)
+    local showLevels = DreamwaySettingsData().objectiveTracker.showQuestLevels == true
+    local cacheKey = tostring(questId) .. ":" .. tostring(questLevel) .. ":" .. tostring(playerLevel) .. ":" .. (showLevels and "1" or "0")
     local cached = ProfileRecorder.searchDisplayTextByKey[cacheKey]
     if cached then
         return cached
@@ -1039,6 +1311,21 @@ local function ColoredQuestSearchDisplayName(quest)
     end
     ProfileRecorder.searchDisplayTextByKey[cacheKey] = text
     return text
+end
+
+function DreamwayPanelBatchDisplayName(quest)
+    ProfileRecorder.panelBatchDisplayTextByKey = ProfileRecorder.panelBatchDisplayTextByKey or {}
+    local questId = tonumber(quest and quest.id) or 0
+    local questLevel = tonumber(quest and quest.questLevel) or 0
+    local playerLevel = UnitLevel and tonumber(UnitLevel("player")) or 0
+    local cacheKey = tostring(questId) .. ":" .. tostring(questLevel) .. ":" .. tostring(playerLevel)
+    local cached = ProfileRecorder.panelBatchDisplayTextByKey[cacheKey]
+    if cached then
+        return cached
+    end
+    local displayName = ColoredQuestDisplayName(quest, false)
+    ProfileRecorder.panelBatchDisplayTextByKey[cacheKey] = displayName
+    return displayName
 end
 
 local function IsJourneyComplete(quest)
@@ -1306,9 +1593,10 @@ function ProfileRecorder.RecordQuestCompleteEvent(questId)
     if not questId or ProfileRecorder.HasRecordedQuestComplete(questId) then
         return
     end
-    ProfileRecorder.RecordEvent(ProfileRecorder.EVENT_QUEST_COMPLETE, questId)
-    local profile = ProfileRecorder.EnsureCharacterProfile()
-    profile.recordedCompleteQuestIds[#profile.recordedCompleteQuestIds + 1] = questId
+    if ProfileRecorder.RecordEvent(ProfileRecorder.EVENT_QUEST_COMPLETE, questId) then
+        local profile = ProfileRecorder.EnsureCharacterProfile()
+        profile.recordedCompleteQuestIds[#profile.recordedCompleteQuestIds + 1] = questId
+    end
 end
 
 function ProfileRecorder.HasRecordedObjectiveComplete(questId, objectiveIndex)
@@ -1358,14 +1646,14 @@ function ProfileRecorder.RecordObjectiveEvent(questId, objectiveIndex, objective
         signature = signature,
         timestamp = timestamp,
     }
-    ProfileRecorder.RecordEvent(
+    local recorded = ProfileRecorder.RecordEvent(
         ProfileRecorder.EVENT_OBJECTIVE,
         questId,
         objectiveIndex,
         current,
         total
     )
-    if isComplete then
+    if isComplete and recorded then
         local profile = ProfileRecorder.EnsureCharacterProfile()
         profile.recordedCompleteObjectiveKeys[#profile.recordedCompleteObjectiveKeys + 1] =
             tostring(questId) .. ":" .. tostring(objectiveIndex)
@@ -2147,6 +2435,113 @@ local function SetButtonText(button, width, text)
     return height
 end
 
+function DreamwayTrackerQuestLocationDetails(quest)
+    local questId = tonumber(quest and quest.id)
+    if not questId then
+        return nil
+    end
+
+    local state = IsQuestCompleteInLog(questId) and "turnin"
+        or (IsQuestInLog(questId) and "progress" or "pickup")
+    ProfileRecorder.trackerTooltipLocationCache = ProfileRecorder.trackerTooltipLocationCache or {}
+    local questCache = ProfileRecorder.trackerTooltipLocationCache[questId]
+    if questCache and questCache[state] then
+        return questCache[state]
+    end
+    if not questCache then
+        questCache = {}
+        ProfileRecorder.trackerTooltipLocationCache[questId] = questCache
+    end
+
+    local details = {
+        state = state,
+        sources = {},
+        zones = {},
+    }
+    local function addUnique(values, value)
+        value = value and tostring(value) or nil
+        if not value or value == "" then
+            return
+        end
+        for _, existing in ipairs(values) do
+            if existing == value then
+                return
+            end
+        end
+        values[#values + 1] = value
+    end
+
+    local record = DreamwayQuestZones
+        and DreamwayQuestZones.quests
+        and DreamwayQuestZones.quests[questId]
+    local zoneIds
+    if state == "turnin" then
+        zoneIds = (record and record.e) or quest.endZoneIds
+    elseif state == "progress" then
+        zoneIds = (record and record.o) or quest.objectiveZoneIds
+    else
+        zoneIds = (record and record.s) or quest.startZoneIds
+    end
+    for _, zoneId in ipairs(zoneIds or {}) do
+        local zoneName = DreamwayQuestZones
+            and DreamwayQuestZones.zones
+            and DreamwayQuestZones.zones[tonumber(zoneId)]
+        addUnique(details.zones, zoneName)
+    end
+
+    if state ~= "progress" then
+        local dbQuest = GetQuestieQuest(quest)
+        local references = dbQuest and (state == "turnin" and dbQuest.Finisher or dbQuest.Starts)
+        local QuestieDB = ImportQuestieModule("QuestieDB")
+        if references and QuestieDB then
+            for _, npcId in ipairs(references.NPC or {}) do
+                if QuestieDB.QueryNPCSingle then
+                    local ok, name = pcall(QuestieDB.QueryNPCSingle, npcId, "name")
+                    if ok then addUnique(details.sources, name) end
+                end
+            end
+            for _, objectId in ipairs(references.GameObject or {}) do
+                if QuestieDB.QueryObjectSingle then
+                    local ok, name = pcall(QuestieDB.QueryObjectSingle, objectId, "name")
+                    if ok then addUnique(details.sources, name) end
+                end
+            end
+            if state == "pickup" then
+                for _, itemId in ipairs(references.Item or {}) do
+                    if QuestieDB.QueryItemSingle then
+                        local ok, name = pcall(QuestieDB.QueryItemSingle, itemId, "name")
+                        if ok then addUnique(details.sources, name) end
+                    end
+                end
+            end
+        end
+    end
+
+    questCache[state] = details
+    return details
+end
+
+function DreamwayAddTrackerQuestLocationTooltip(tooltip, quest)
+    local details = DreamwayTrackerQuestLocationDetails(quest)
+    if not details then
+        return
+    end
+
+    local zones = #details.zones > 0 and table.concat(details.zones, ", ") or "Unknown"
+    if details.state == "progress" then
+        tooltip:AddLine("Objectives: " .. zones, 0.72, 0.82, 0.72, true)
+        return
+    end
+
+    local source = #details.sources > 0 and table.concat(details.sources, ", ") or "Unknown"
+    if details.state == "turnin" then
+        tooltip:AddLine("Turn in to: " .. source, 0.72, 0.82, 0.72, true)
+    else
+        tooltip:AddLine("Pick up from: " .. source, 0.72, 0.82, 0.72, true)
+    end
+    tooltip:AddLine("Location: " .. zones, 0.72, 0.72, 0.72, true)
+end
+
 local function ConfigureQuestButton(button, quest, tooltipOwner, openQuestieOnly)
     button.quest = quest
     button:EnableMouse(true)
@@ -2172,9 +2567,10 @@ local function ConfigureQuestButton(button, quest, tooltipOwner, openQuestieOnly
         AnchorDreamwayTooltip(self)
         GameTooltip:AddLine(quest.name or QuestDisplayName(quest), 1, 0.82, 0.12)
         if self.prerequisiteWarning then
-            GameTooltip:AddLine("Prerequisite warning", 1, 0.55, 0.16)
+            GameTooltip:AddLine("Journey warning", 1, 0.55, 0.16)
             GameTooltip:AddLine(self.prerequisiteWarning, 0.95, 0.78, 0.48, true)
         end
+        DreamwayAddTrackerQuestLocationTooltip(GameTooltip, quest)
         if openQuestieOnly then
             GameTooltip:AddLine("Click to open Questie quest details.", 0.75, 0.75, 0.75)
         elseif IsQuestInLog(quest.id) then
@@ -2278,13 +2674,25 @@ function DreamwayConfigureTrackerItemButton(button, itemId, questId, size)
     button:SetScript("OnShow", button.OnShow)
     button:SetScript("OnHide", button.OnHide)
     button:SetScript("OnEnter", function(self)
-        if self.OnEnter then
-            self:OnEnter()
-            AnchorDreamwayTooltip(self)
-            GameTooltip:Show()
+        if not GameTooltip then
+            return
+        end
+
+        local centerX = select(1, self:GetCenter()) or 0
+        local screenWidth = GetScreenWidth and GetScreenWidth() or UIParent:GetWidth()
+        if centerX < (screenWidth / 2) then
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT", 8, -25)
+        else
+            GameTooltip:SetOwner(self, "ANCHOR_LEFT", -8, -25)
+        end
+        GameTooltip:SetHyperlink("item:" .. tostring(self.itemId or itemId) .. ":0:0:0:0:0:0:0")
+        GameTooltip:Show()
+    end)
+    button:SetScript("OnLeave", function()
+        if GameTooltip then
+            GameTooltip:Hide()
         end
     end)
-    button:SetScript("OnLeave", button.OnLeave)
     button:SetAttribute("type1", "item")
     button:SetAttribute("item1", "item:" .. tostring(itemId))
     if button.range then
@@ -2361,9 +2769,10 @@ local function AddTrackerSection(section, quests, y, width)
 
     local style = TrackerStyle()
     for _, quest in ipairs(quests) do
-        local itemOffset = 0
+        local itemButtonCount = 0
+        -- Match Questie's own quest item sizing and reserve that gutter for every quest title.
         local itemSize = 12 + (tonumber(TrackerProfile().trackerFontSizeQuest) or 10)
-        if section.key == "progress" then
+        if section.key == "progress" and DreamwayShouldShowTrackerItemButtons() then
             for itemIndex, itemId in ipairs(DreamwayUsableTrackerItems(quest)) do
                 if itemIndex > 2 then break end
                 dreamwayFrame.itemButtonIndex = dreamwayFrame.itemButtonIndex + 1
@@ -2371,22 +2780,29 @@ local function AddTrackerSection(section, quests, y, width)
                 if itemButton then
                     itemButton:ClearAllPoints()
                     itemButton:SetParent(dreamwayFrame)
-                    itemButton:SetPoint("TOPLEFT", dreamwayFrame, "TOPLEFT", 18 + itemOffset, y)
-                    itemButton:SetAlpha(Questie and Questie.db and Questie.db.profile and Questie.db.profile.trackerFadeQuestItemButtons and 0 or 1)
+                    itemButton:SetPoint(
+                        "TOPLEFT",
+                        dreamwayFrame,
+                        "TOPLEFT",
+                        0,
+                        y - (itemButtonCount * (itemSize + 2))
+                    )
+                    itemButton:SetAlpha(DreamwayTrackerItemButtonAlpha())
                     if DreamwayConfigureTrackerItemButton(itemButton, itemId, quest.id, itemSize) then
-                        itemOffset = itemOffset + itemSize + 2
+                        itemButtonCount = itemButtonCount + 1
                     end
                 end
             end
         end
         local line = NextTrackerLine()
         ApplyTrackerFont(line.label, "trackerFontQuest", "trackerFontSizeQuest")
-        line:SetPoint("TOPLEFT", dreamwayFrame, "TOPLEFT", 18 + itemOffset, y)
+        local questInset = itemSize + 4
+        line:SetPoint("TOPLEFT", dreamwayFrame, "TOPLEFT", questInset, y)
         local questText = ColoredQuestDisplayName(quest, section.key ~= "turnin")
         if section.key == "turnin" then
             questText = questText .. " |cff20ff20(Complete)|r"
         end
-        local lineHeight = math.max(SetButtonText(line, width - 32 - itemOffset, questText), itemOffset > 0 and itemSize or 0)
+        local lineHeight = SetButtonText(line, width - questInset - 14, questText)
         line.label:SetTextColor(1, 1, 1)
         ConfigureQuestButton(line, quest)
         y = y - lineHeight - 1
@@ -2473,7 +2889,6 @@ local function CreateToggleSegment(parent, text, side)
 
     button:SetScript("OnEnter", function(self)
         if not self.active then
-            self:SetFillColor(0.13, 0.13, 0.13, 0.98)
             self.label:SetTextColor(0.95, 0.95, 0.95)
         end
     end)
@@ -2490,17 +2905,27 @@ local function CreateToggleSegment(parent, text, side)
 
     button.SetActive = function(self, active)
         self.active = active == true
+        self:SetFillColor(0, 0, 0, 0)
         if self.active then
-            self:SetFillColor(0.28, 0.025, 0.02, 0.96)
             self.label:SetTextColor(1, 0.82, 0.12)
         else
-            self:SetFillColor(0.035, 0.035, 0.035, 0.94)
             self.label:SetTextColor(0.72, 0.72, 0.72)
         end
     end
 
     button:SetActive(false)
     return button
+end
+
+function DreamwayUpdateTrackerToggleBorders()
+    if not toggleFrame then
+        return
+    end
+    if toggleFrame.outline then
+        local stateTexture = mode == MODE_QUESTIE and "DreamwayToggleQuestie" or "DreamwayToggleDreamway"
+        toggleFrame.outline:SetTexture("Interface\\AddOns\\DreamwayQuestPlanner\\Media\\" .. stateTexture)
+        toggleFrame.outline:SetVertexColor(1, 1, 1, 1)
+    end
 end
 
 local function SetClippedTrackerTitle(fontString, fullText, maxWidth)
@@ -2532,8 +2957,10 @@ local function UpdateToggleButtons()
 
     questieButton:SetActive(mode == MODE_QUESTIE)
     dreamwayButton:SetActive(mode == MODE_DREAMWAY)
-    if toggleFrame and toggleFrame.batchMeta then
-        toggleFrame.batchMeta:SetShown(mode == MODE_DREAMWAY)
+    DreamwayUpdateTrackerToggleBorders()
+    if toggleFrame and toggleFrame.batchCount then
+        toggleFrame.batchCount:SetShown(mode == MODE_DREAMWAY)
+        toggleFrame.batchLevel:SetShown(mode == MODE_DREAMWAY)
     end
 end
 
@@ -2546,6 +2973,7 @@ local function ResizeTrackerToggle(height)
     local radius = height / 2
     local innerSize = height - 2
     local innerRadius = innerSize / 2
+    toggleFrame:SetWidth(height * 6.2)
     toggleFrame:SetHeight(height)
 
     toggleFrame.borderBody:ClearAllPoints()
@@ -2635,19 +3063,54 @@ local function TogglePanel()
         panelFrame:Hide()
     else
         panelFrame:Show()
-        if panelImportArea then
-            panelImportArea:Hide()
-        end
-        if panelExportArea then
-            panelExportArea:Hide()
-        end
-        if panelJourneyManager.frame then
-            panelJourneyManager.frame:Hide()
-        end
-        if RefreshPanel then
-            RefreshPanel()
+        panelSearchFilters.SetMode("search", false)
+        DreamwaySetPanelView("planner")
+        if RefreshPanel and ProfileRecorder.panelNeedsRefresh ~= false then
+            RefreshPanel({ rebuildSearch = false })
+        elseif UpdatePanelSearchVisibleRows then
+            UpdatePanelSearchVisibleRows(true)
         end
     end
+end
+
+function DreamwayInitializeMinimapButton()
+    if ProfileRecorder.minimapInitialized then
+        return
+    end
+    local libDBIcon = LibStub and LibStub("LibDBIcon-1.0", true) or nil
+    local libDataBroker = LibStub and LibStub("LibDataBroker-1.1", true) or nil
+    if not libDBIcon or not libDataBroker then
+        return
+    end
+    DreamwayDB.minimap = DreamwayDB.minimap or { hide = false }
+    local dataObject = libDataBroker:NewDataObject("Dreamway", {
+        type = "launcher",
+        text = "Dreamway",
+        icon = "Interface\\AddOns\\DreamwayQuestPlanner\\Media\\DreamwayMinimapIcon",
+        OnClick = function(_, button)
+            if button == "LeftButton" then
+                TogglePanel()
+            end
+        end,
+        OnTooltipShow = function(tooltip)
+            tooltip:AddLine("Dreamway", 0.45, 1, 0.38)
+            tooltip:AddLine("Left click to open the Journey Planner.", 0.9, 0.9, 0.9)
+        end,
+    })
+    libDBIcon:Register("Dreamway", dataObject, DreamwayDB.minimap)
+    local button = libDBIcon:GetMinimapButton("Dreamway")
+    if button then
+        button.dreamwayBlackBackground = button:CreateTexture(nil, "BACKGROUND", nil, 1)
+        button.dreamwayBlackBackground:SetSize(19, 19)
+        button.dreamwayBlackBackground:SetPoint("CENTER", button, "CENTER", 0, 0)
+        button.dreamwayBlackBackground:SetColorTexture(0, 0, 0, 1)
+        if button.icon then
+            button.icon:ClearAllPoints()
+            button.icon:SetSize(18, 18)
+            button.icon:SetPoint("CENTER", button, "CENTER", 0, 0)
+        end
+    end
+    ProfileRecorder.minimapInitialized = true
 end
 
 local function RefreshDreamwayTracker()
@@ -2657,6 +3120,13 @@ local function RefreshDreamwayTracker()
     if InCombatLockdown and InCombatLockdown() then
         pendingApply = true
         return
+    end
+    if mode == MODE_DREAMWAY
+        and DreamwaySettingsData().objectiveTracker.alwaysShow == true
+        and baseFrame
+        and not baseFrame:IsShown()
+    then
+        baseFrame:Show()
     end
 
     local journey, batch, count = CurrentBatch()
@@ -2670,7 +3140,7 @@ local function RefreshDreamwayTracker()
     dreamwayFrame:SetWidth(width)
     dreamwayFrame.lineIndex = 0
     DreamwayResetTrackerItemButtons()
-    ResizeTrackerToggle(math.max(style.headerSize, style.zoneSize) + 8)
+    ResizeTrackerToggle(20)
 
     dreamwayFrame.leftArrow:SetShown(count > 1)
     dreamwayFrame.rightArrow:SetShown(count > 1)
@@ -2702,15 +3172,20 @@ local function RefreshDreamwayTracker()
     SetClippedTrackerTitle(dreamwayFrame.batchButton.text, batchName, titleWidth - 4)
     dreamwayFrame.batchButton.fullTitle = batchName
 
-    ApplyTrackerFont(toggleFrame.batchMeta, "trackerFontZone", "trackerFontSizeZone")
+    local metaFont = TrackerFont("trackerFontZone")
+    local metaSize = math.max(8, style.zoneSize - 1)
+    local metaOutline = profile.trackerFontOutline or ""
+    toggleFrame.batchCount:SetFont(metaFont, metaSize, metaOutline)
+    toggleFrame.batchCount:SetHeight(metaSize + 3)
+    toggleFrame.batchLevel:SetFont(metaFont, metaSize, metaOutline)
+    toggleFrame.batchLevel:SetHeight(metaSize + 3)
     local expectedLevel = BatchExpectedLevel(batch)
-    local metaText = tostring(batchIndex) .. "/" .. tostring(count)
-    if expectedLevel then
-        metaText = metaText .. "  |  Lv " .. tostring(expectedLevel)
-    end
-    toggleFrame.batchMeta:SetText(metaText)
-    toggleFrame.batchMeta:SetTextColor(0.72, 0.72, 0.72)
-    toggleFrame.batchMeta:SetWidth(math.max(80, width - toggleFrame:GetWidth() - 8))
+    toggleFrame.batchCount:SetText(tostring(batchIndex) .. "/" .. tostring(count))
+    toggleFrame.batchCount:SetTextColor(0.72, 0.72, 0.72)
+    toggleFrame.batchCount:SetWidth(math.max(34, toggleFrame.batchCount:GetStringWidth() + 2))
+    toggleFrame.batchLevel:SetText(expectedLevel and ("Lv " .. tostring(expectedLevel)) or "")
+    toggleFrame.batchLevel:SetTextColor(0.72, 0.72, 0.72)
+    toggleFrame.batchLevel:SetWidth(math.max(34, toggleFrame.batchLevel:GetStringWidth() + 2))
 
     y = y - headerSize - 15
 
@@ -2739,11 +3214,10 @@ local function RefreshDreamwayTracker()
 
     HideUnusedTrackerLines()
 
-    local contentHeight = math.max(60, math.abs(y) + 12)
     local configuredHeight = style.manualHeight > 0
         and style.manualHeight
         or (GetScreenHeight() * style.heightRatio)
-    local height = math.min(contentHeight, math.max(60, configuredHeight - 12))
+    local height = math.max(60, configuredHeight - 12)
     dreamwayFrame:SetHeight(height)
     if baseFrame then
         baseFrame:SetWidth(width)
@@ -2829,6 +3303,7 @@ local function PreviousBatch()
         batchIndex = #journey.batches
     end
     SaveDb()
+    ApplyUnusedQuestSuppression()
     RefreshDreamwayTracker()
     if panelFrame and panelFrame:IsShown() and RefreshPanelBatchSelection then
         RefreshPanelBatchSelection()
@@ -2846,6 +3321,7 @@ local function NextBatch()
         batchIndex = 1
     end
     SaveDb()
+    ApplyUnusedQuestSuppression()
     RefreshDreamwayTracker()
     if panelFrame and panelFrame:IsShown() and RefreshPanelBatchSelection then
         RefreshPanelBatchSelection()
@@ -2854,18 +3330,18 @@ end
 
 local function CreateToggle()
     toggleFrame = CreateFrame("Frame", "Dreamway_Toggle", baseFrame, BackdropTemplateMixin and "BackdropTemplate")
-    toggleFrame:SetSize(138, 20)
-    toggleFrame:SetPoint("BOTTOMLEFT", baseFrame, "TOPLEFT", 0, 2)
+    toggleFrame:SetSize(124, 20)
+    toggleFrame:SetPoint("BOTTOM", baseFrame, "TOP", 0, -1)
     toggleFrame:SetFrameLevel((baseFrame:GetFrameLevel() or 0) + 80)
 
     toggleFrame.borderBody = toggleFrame:CreateTexture(nil, "BACKGROUND", nil, -2)
     toggleFrame.borderBody:SetPoint("TOPLEFT", toggleFrame, "TOPLEFT", 10, 0)
     toggleFrame.borderBody:SetPoint("BOTTOMRIGHT", toggleFrame, "BOTTOMRIGHT", -10, 0)
-    toggleFrame.borderBody:SetColorTexture(0.5, 0.5, 0.5, 0.82)
+    toggleFrame.borderBody:SetColorTexture(0, 0, 0, 0)
     toggleFrame.backgroundBody = toggleFrame:CreateTexture(nil, "BACKGROUND", nil, -1)
     toggleFrame.backgroundBody:SetPoint("TOPLEFT", toggleFrame, "TOPLEFT", 10, -1)
     toggleFrame.backgroundBody:SetPoint("BOTTOMRIGHT", toggleFrame, "BOTTOMRIGHT", -10, 1)
-    toggleFrame.backgroundBody:SetColorTexture(0.025, 0.025, 0.025, 0.98)
+    toggleFrame.backgroundBody:SetColorTexture(0, 0, 0, 0)
 
     if toggleFrame.CreateMaskTexture then
         local function CreateRoundEnd(size, point, xOffset, colorRed, colorGreen, colorBlue, colorAlpha, subLevel)
@@ -2884,9 +3360,18 @@ local function CreateToggle()
         toggleFrame.rightBorder, toggleFrame.rightBorderMask = CreateRoundEnd(20, "RIGHT", 0, 0.5, 0.5, 0.5, 0.82, -2)
         toggleFrame.leftBackground, toggleFrame.leftBackgroundMask = CreateRoundEnd(18, "LEFT", 1, 0.025, 0.025, 0.025, 0.98, -1)
         toggleFrame.rightBackground, toggleFrame.rightBackgroundMask = CreateRoundEnd(18, "RIGHT", -1, 0.025, 0.025, 0.025, 0.98, -1)
+        toggleFrame.leftBorder:Hide()
+        toggleFrame.rightBorder:Hide()
+        toggleFrame.leftBackground:Hide()
+        toggleFrame.rightBackground:Hide()
     else
-        SetFrameBackdrop(toggleFrame, 0.025, 0.025, 0.025, 0.96, 0.55)
+        SetFrameBackdrop(toggleFrame, 0, 0, 0, 0, 0)
     end
+
+
+    toggleFrame.outline = toggleFrame:CreateTexture(nil, "ARTWORK")
+    toggleFrame.outline:SetAllPoints(toggleFrame)
+    toggleFrame.outline:SetTexture("Interface\\AddOns\\DreamwayQuestPlanner\\Media\\DreamwayToggleDreamway")
 
     questieButton = CreateToggleSegment(toggleFrame, "Questie", "left")
     questieButton:SetPoint("TOPLEFT", toggleFrame, "TOPLEFT", 1, -1)
@@ -2904,17 +3389,18 @@ local function CreateToggle()
         ApplyMode()
     end)
 
-    toggleFrame.divider = toggleFrame:CreateTexture(nil, "ARTWORK")
-    toggleFrame.divider:SetColorTexture(0.45, 0.45, 0.45, 0.75)
-    toggleFrame.divider:SetPoint("TOP", toggleFrame, "TOP", 0, -2)
-    toggleFrame.divider:SetPoint("BOTTOM", toggleFrame, "BOTTOM", 0, 2)
-    toggleFrame.divider:SetWidth(1)
-
-    toggleFrame.batchMeta = toggleFrame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
-    toggleFrame.batchMeta:SetPoint("LEFT", toggleFrame, "RIGHT", 8, 0)
-    toggleFrame.batchMeta:SetJustifyH("CENTER")
-    toggleFrame.batchMeta:SetWordWrap(false)
-    toggleFrame.batchMeta:Hide()
+    toggleFrame.batchCount = toggleFrame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    toggleFrame.batchCount:SetPoint("RIGHT", toggleFrame, "LEFT", -5, 0)
+    toggleFrame.batchCount:SetJustifyH("RIGHT")
+    toggleFrame.batchCount:SetWordWrap(false)
+    toggleFrame.batchCount:Hide()
+    toggleFrame.batchLevel = toggleFrame:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    toggleFrame.batchLevel:SetPoint("LEFT", toggleFrame, "RIGHT", 5, 0)
+    toggleFrame.batchLevel:SetJustifyH("LEFT")
+    toggleFrame.batchLevel:SetWordWrap(false)
+    toggleFrame.batchLevel:Hide()
+    ResizeTrackerToggle(20)
+    DreamwayUpdateTrackerToggleBorders()
 end
 
 local function CreateDreamwayTracker()
@@ -3525,12 +4011,26 @@ function DreamwayInstallImportedJourney(journey)
     end
     local hiddenCount = journey.unusedQuestIds and #journey.unusedQuestIds or 0
     local hiddenText = hiddenCount > 0 and (", " .. tostring(hiddenCount) .. " hidden") or ""
-    local prerequisiteWarnings = JourneyPrerequisiteWarnings and JourneyPrerequisiteWarnings(journey) or {}
-    local warningCount = 0
-    for _ in pairs(prerequisiteWarnings) do
-        warningCount = warningCount + 1
+    local unavailableWarnings, prerequisiteWarnings, characterWarnings = {}, {}, {}
+    if JourneyWarningSummary then
+        local ignoredFirstMessage
+        unavailableWarnings, prerequisiteWarnings, ignoredFirstMessage, characterWarnings = JourneyWarningSummary(journey)
     end
-    local warningText = warningCount > 0 and (", " .. tostring(warningCount) .. " prerequisite warning" .. (warningCount == 1 and "" or "s")) or ""
+    local unavailableCount = 0
+    local prerequisiteCount = 0
+    local characterCount = 0
+    for _ in pairs(unavailableWarnings or {}) do
+        unavailableCount = unavailableCount + 1
+    end
+    for _ in pairs(prerequisiteWarnings or {}) do
+        prerequisiteCount = prerequisiteCount + 1
+    end
+    for _ in pairs(characterWarnings or {}) do
+        characterCount = characterCount + 1
+    end
+    local unavailableText = unavailableCount > 0 and (", " .. tostring(unavailableCount) .. " unavailable in this version") or ""
+    local characterText = characterCount > 0 and (", " .. tostring(characterCount) .. " character compatibility warning" .. (characterCount == 1 and "" or "s")) or ""
+    local warningText = prerequisiteCount > 0 and (", " .. tostring(prerequisiteCount) .. " invalid prerequisite placement" .. (prerequisiteCount == 1 and "" or "s")) or ""
     local importedVersion = NormalizeDreamwayGameVersion(journey.gameVersion)
     local currentVersion = CurrentDreamwayGameVersion()
     local versionText = importedVersion ~= currentVersion and (", version " .. importedVersion .. " loaded on " .. currentVersion) or ""
@@ -3538,7 +4038,53 @@ function DreamwayInstallImportedJourney(journey)
     if DreamwayRefreshJourneyManager then
         DreamwayRefreshJourneyManager()
     end
-    return true, "Imported " .. journey.name .. " (" .. tostring(#journey.batches) .. " batches" .. hiddenText .. warningText .. versionText .. ")."
+    return true, "Imported " .. journey.name .. " (" .. tostring(#journey.batches) .. " batches" .. hiddenText .. unavailableText .. characterText .. warningText .. versionText .. ")."
+end
+
+local function DreamwayFinishDeferredJourneyImport(journey)
+    local ok, message = DreamwayInstallImportedJourney(journey)
+    PanelSetStatus(message, ok)
+    if ok and panelImportEditBox then
+        panelImportEditBox:SetText("")
+        panelImportEditBox:ClearFocus()
+        if panelImportArea then panelImportArea:Hide() end
+    end
+    return ok, message
+end
+
+local function DreamwayConfirmJourneyVersionImport(journey)
+    local importedVersion = NormalizeDreamwayGameVersion(journey and journey.gameVersion)
+    local currentVersion = CurrentDreamwayGameVersion()
+    if importedVersion == currentVersion then
+        return DreamwayInstallImportedJourney(journey)
+    end
+
+    ProfileRecorder.pendingVersionJourney = journey
+    StaticPopupDialogs.DREAMWAY_IMPORT_OTHER_VERSION = StaticPopupDialogs.DREAMWAY_IMPORT_OTHER_VERSION or {
+        text = "This Journey was created for %s, but this client is running %s. Import it anyway? Quests unavailable here will be preserved as unknown and ignored by prerequisite, level, zone, and naming calculations.",
+        button1 = YES,
+        button2 = NO,
+        timeout = 0,
+        whileDead = true,
+        hideOnEscape = true,
+        preferredIndex = 3,
+        OnAccept = function()
+            local pending = ProfileRecorder.pendingVersionJourney
+            ProfileRecorder.pendingVersionJourney = nil
+            if pending then
+                DreamwayFinishDeferredJourneyImport(pending)
+            end
+        end,
+        OnCancel = function()
+            ProfileRecorder.pendingVersionJourney = nil
+        end,
+    }
+    StaticPopup_Show(
+        "DREAMWAY_IMPORT_OTHER_VERSION",
+        DreamwayGameVersionLabel(importedVersion),
+        DreamwayGameVersionLabel(currentVersion)
+    )
+    return false, "Different game version detected. Confirm the import in the warning dialog."
 end
 
 function DreamwayShowOlderJourneyImportWarning(journey)
@@ -3555,12 +4101,16 @@ function DreamwayShowOlderJourneyImportWarning(journey)
             local pending = ProfileRecorder.pendingOlderJourney
             ProfileRecorder.pendingOlderJourney = nil
             if not pending then return end
-            local ok, message = DreamwayInstallImportedJourney(pending)
-            PanelSetStatus(message, ok)
-            if ok and panelImportEditBox then
-                panelImportEditBox:SetText("")
-                panelImportEditBox:ClearFocus()
-                if panelImportArea then panelImportArea:Hide() end
+            local ok, message = DreamwayConfirmJourneyVersionImport(pending)
+            if ok then
+                PanelSetStatus(message, true)
+                if panelImportEditBox then
+                    panelImportEditBox:SetText("")
+                    panelImportEditBox:ClearFocus()
+                    if panelImportArea then panelImportArea:Hide() end
+                end
+            elseif message then
+                PanelSetStatus(message, false)
             end
         end,
         OnCancel = function()
@@ -3591,7 +4141,7 @@ local function ImportJourneyText(text)
         return false, "Older Journey detected. Confirm the import in the warning dialog."
     end
 
-    return DreamwayInstallImportedJourney(journey)
+    return DreamwayConfirmJourneyVersionImport(journey)
 end
 
 local function JourneyUnusedQuestRows(journey)
@@ -3738,7 +4288,33 @@ local function IsBatchComplete(batch)
     return true
 end
 
-function PanelSetStatus(message, ok)
+function DreamwayUpdateUndoButton()
+    local button = panelJourneyManager and panelJourneyManager.undoButton
+    if not button then
+        return
+    end
+    local undoState = ProfileRecorder.panelJourneyUndo
+    local shown =
+        panelJourneyManager.view == "planner"
+        and undoState ~= nil
+        and undoState.available == true
+    button:SetShown(shown)
+
+    local statusFrame = panelJourneyManager.statusFrame
+    if panelStatusText and statusFrame then
+        panelStatusText:SetShown(panelJourneyManager.view == "planner")
+        panelStatusText:ClearAllPoints()
+        panelStatusText:SetPoint("LEFT", statusFrame, "LEFT", 8, 0)
+        if shown then
+            panelStatusText:SetPoint("RIGHT", button, "LEFT", -7, 0)
+        else
+            panelStatusText:SetPoint("RIGHT", statusFrame, "RIGHT", -8, 0)
+        end
+        panelStatusText:SetHeight(14)
+    end
+end
+
+function PanelSetStatus(message, ok, showUndo)
     if not panelStatusText then
         return
     end
@@ -3750,6 +4326,272 @@ function PanelSetStatus(message, ok)
         panelStatusText:SetTextColor(0.35, 1, 0.35)
     else
         panelStatusText:SetTextColor(1, 0.25, 0.25)
+    end
+
+    local statusFrame = panelJourneyManager and panelJourneyManager.statusFrame
+    if statusFrame then
+        if ok == nil then
+            statusFrame:SetBackdropColor(0.025, 0.03, 0.025, 0.72)
+            statusFrame:SetBackdropBorderColor(0.42, 0.42, 0.42, 0.34)
+        elseif ok then
+            statusFrame:SetBackdropColor(0.018, 0.085, 0.03, 0.72)
+            statusFrame:SetBackdropBorderColor(0.22, 0.68, 0.30, 0.48)
+        else
+            statusFrame:SetBackdropColor(0.11, 0.018, 0.018, 0.74)
+            statusFrame:SetBackdropBorderColor(0.78, 0.20, 0.18, 0.52)
+        end
+    end
+
+    local undoState = ProfileRecorder.panelJourneyUndo
+    if undoState then
+        undoState.available = showUndo == true
+    end
+    DreamwayUpdateUndoButton()
+end
+
+function DreamwayPanelSelectionSet()
+    ProfileRecorder.panelSelectedQuestIds = ProfileRecorder.panelSelectedQuestIds or {}
+    return ProfileRecorder.panelSelectedQuestIds
+end
+
+function DreamwayPanelQuestIsSelected(questId)
+    questId = tonumber(questId)
+    return questId and DreamwayPanelSelectionSet()[questId] == true or false
+end
+
+function DreamwayPanelSelectedQuestIds()
+    local questIds = {}
+    for questId, selected in pairs(DreamwayPanelSelectionSet()) do
+        questId = tonumber(questId)
+        if questId and selected then
+            questIds[#questIds + 1] = questId
+        end
+    end
+    table.sort(questIds)
+    return questIds
+end
+
+function DreamwayPanelSelectedQuestCount()
+    local count = 0
+    for _, selected in pairs(DreamwayPanelSelectionSet()) do
+        if selected then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+function DreamwayPanelSelectionQuestIds(questIds)
+    local normalized = {}
+    local seen = {}
+    for _, questId in ipairs(questIds or {}) do
+        questId = tonumber(questId)
+        if questId and not seen[questId] then
+            seen[questId] = true
+            normalized[#normalized + 1] = questId
+        end
+    end
+    return normalized
+end
+
+function DreamwayRefreshPanelSelectionHighlights()
+    for _, button in ipairs(panelSearchResultButtons or {}) do
+        if button.selectionHighlight then
+            button.selectionHighlight:SetShown(
+                button:IsShown()
+                and button.rowKind == "quest"
+                and DreamwayPanelQuestIsSelected(button.quest and button.quest.id)
+                or button:IsShown()
+                and button.rowKind == "chain"
+                and DreamwayPanelAllQuestIdsSelected(button.chainQuestIds)
+            )
+        end
+    end
+
+    for _, column in ipairs(panelBatchColumns or {}) do
+        for _, button in ipairs(column.questRows or {}) do
+            if button.selectionHighlight then
+                button.selectionHighlight:SetShown(
+                    button:IsShown()
+                    and DreamwayPanelQuestIsSelected(button.quest and button.quest.id)
+                )
+            end
+        end
+    end
+end
+
+function DreamwayPanelSelectionStatus()
+    local count = DreamwayPanelSelectedQuestCount()
+    if count == 0 then
+        PanelSetStatus("Click a batch to make it current. Drag quests between batches or Hidden.", nil)
+    else
+        PanelSetStatus(tostring(count) .. " quest" .. (count == 1 and "" or "s") .. " selected.", nil)
+    end
+end
+
+function DreamwayClearPanelQuestSelection(showStatus)
+    ProfileRecorder.panelSelectedQuestIds = {}
+    ProfileRecorder.panelSelectionAnchor = nil
+    DreamwayRefreshPanelSelectionHighlights()
+    if showStatus ~= false then
+        DreamwayPanelSelectionStatus()
+    end
+end
+
+function DreamwayPanelAllQuestIdsSelected(questIds)
+    local found = false
+    local selected = DreamwayPanelSelectionSet()
+    for _, questId in ipairs(questIds or {}) do
+        questId = tonumber(questId)
+        if questId then
+            found = true
+        end
+        if questId and selected[questId] ~= true then
+            return false
+        end
+    end
+    return found
+end
+
+function DreamwaySetPanelQuestSelection(questIds, mode, anchor)
+    local normalized = DreamwayPanelSelectionQuestIds(questIds)
+    local selected = DreamwayPanelSelectionSet()
+    if mode == "replace" then
+        selected = {}
+        ProfileRecorder.panelSelectedQuestIds = selected
+        for _, questId in ipairs(normalized) do
+            selected[questId] = true
+        end
+    elseif mode == "toggle" then
+        local remove = DreamwayPanelAllQuestIdsSelected(normalized)
+        for _, questId in ipairs(normalized) do
+            selected[questId] = remove and nil or true
+        end
+    else
+        for _, questId in ipairs(normalized) do
+            selected[questId] = true
+        end
+    end
+
+    if anchor then
+        ProfileRecorder.panelSelectionAnchor = anchor
+    end
+    DreamwayRefreshPanelSelectionHighlights()
+    DreamwayPanelSelectionStatus()
+end
+
+function DreamwayPanelSearchRangeQuestIds(firstIndex, lastIndex)
+    firstIndex = math.max(1, tonumber(firstIndex) or 1)
+    lastIndex = math.min(#(panelSearchResultRows or {}), tonumber(lastIndex) or firstIndex)
+    if firstIndex > lastIndex then
+        firstIndex, lastIndex = lastIndex, firstIndex
+    end
+
+    local questIds = {}
+    for rowIndex = firstIndex, lastIndex do
+        local row = panelSearchResultRows[rowIndex]
+        if row and row.kind == "quest" and row.quest then
+            questIds[#questIds + 1] = row.quest.id
+        elseif row and row.kind == "chain" then
+            for _, questId in ipairs(row.questIds or {}) do
+                questIds[#questIds + 1] = questId
+            end
+        end
+    end
+    return DreamwayPanelSelectionQuestIds(questIds)
+end
+
+function DreamwayPanelBatchQuestOrder()
+    local journey = ActiveJourney()
+    local questIds = {}
+    local seen = {}
+    for _, batch in ipairs(journey and journey.batches or {}) do
+        for _, row in ipairs(GetSortedPanelQuests(batch)) do
+            local questId = tonumber(row.quest and row.quest.id)
+            if questId and not seen[questId] then
+                seen[questId] = true
+                questIds[#questIds + 1] = questId
+            end
+        end
+    end
+    for _, quest in ipairs(JourneyUnusedQuestRows(journey)) do
+        local questId = tonumber(quest and quest.id)
+        if questId and not seen[questId] then
+            seen[questId] = true
+            questIds[#questIds + 1] = questId
+        end
+    end
+    return questIds
+end
+
+function DreamwayPanelBatchRangeQuestIds(anchorQuestId, targetQuestId)
+    anchorQuestId = tonumber(anchorQuestId)
+    targetQuestId = tonumber(targetQuestId)
+    local ordered = DreamwayPanelBatchQuestOrder()
+    local firstIndex
+    local lastIndex
+    for index, questId in ipairs(ordered) do
+        if questId == anchorQuestId then
+            firstIndex = index
+        end
+        if questId == targetQuestId then
+            lastIndex = index
+        end
+    end
+    if not firstIndex or not lastIndex then
+        return targetQuestId and { targetQuestId } or {}
+    end
+    if firstIndex > lastIndex then
+        firstIndex, lastIndex = lastIndex, firstIndex
+    end
+    local questIds = {}
+    for index = firstIndex, lastIndex do
+        questIds[#questIds + 1] = ordered[index]
+    end
+    return questIds
+end
+
+function DreamwayPanelBatchQuestOnClick(self, mouseButton)
+    local quest = self and self.quest
+    if not quest then
+        return
+    end
+    if mouseButton == "RightButton" then
+        ShowQuestieTrackerMenu(quest)
+        return
+    end
+
+    local questId = tonumber(quest.id)
+    if not questId then
+        return
+    end
+    local controlDown = IsControlKeyDown and IsControlKeyDown()
+    local shiftDown = IsShiftKeyDown and IsShiftKeyDown()
+    local anchor = ProfileRecorder.panelSelectionAnchor
+    if shiftDown and anchor and anchor.scope == "batch" and anchor.questId then
+        DreamwaySetPanelQuestSelection(
+            DreamwayPanelBatchRangeQuestIds(anchor.questId, questId),
+            controlDown and "add" or "replace"
+        )
+        return
+    end
+
+    DreamwaySetPanelQuestSelection(
+        { questId },
+        controlDown and "toggle" or "replace",
+        { scope = "batch", questId = questId }
+    )
+    if controlDown then
+        return
+    end
+    if not InsertQuestChatLink(quest) then
+        OpenQuestieDetails(quest)
+    end
+end
+
+function DreamwayConfigurePanelBatchQuestSelection(button)
+    if button then
+        button:SetScript("OnClick", DreamwayPanelBatchQuestOnClick)
     end
 end
 
@@ -3778,6 +4620,23 @@ local function QuestZoneDbRecord(questId)
     questId = tonumber(questId)
     local db = DreamwayQuestZones
     return questId and db and db.quests and db.quests[questId] or nil
+end
+
+local function QuestAvailableInCurrentVersion(questId)
+    local record = QuestZoneDbRecord(questId)
+    if not record then
+        return false
+    end
+
+    local recordVersion = record.gv and NormalizeDreamwayGameVersion(record.gv) or nil
+    local currentVersion = CurrentDreamwayGameVersion()
+    if not recordVersion then
+        return true
+    end
+    if recordVersion == currentVersion then
+        return true
+    end
+    return currentVersion == "sod" and recordVersion == "era"
 end
 
 local function QuestChainDbRecord(chainId)
@@ -3830,6 +4689,9 @@ local function ZoneNamesFromIds(zoneIds)
 end
 
 local function ApplyQuestZoneMetadata(quest)
+    if quest and quest._dreamwayCanonical then
+        return quest
+    end
     local record = QuestZoneDbRecord(quest and quest.id)
     if not record then
         return quest
@@ -3847,12 +4709,11 @@ local function ApplyQuestZoneMetadata(quest)
     quest.chainGroupId = tonumber(record.cg) or quest.chainGroupId
     quest.chainGroupStep = tonumber(record.cgs) or quest.chainGroupStep
     quest.chainGroupSize = tonumber(record.cgz) or quest.chainGroupSize
-    if type(quest.preQuestGroup) ~= "table" or #quest.preQuestGroup == 0 then
-        quest.preQuestGroup = CloneNumberArray(record.pg)
-    end
-    if type(quest.preQuestSingle) ~= "table" or #quest.preQuestSingle == 0 then
-        quest.preQuestSingle = CloneNumberArray(record.ps)
-    end
+    -- Journey files only own quest placement. Version-specific prerequisite
+    -- metadata always comes from Dreamway's generated database so legacy
+    -- imports cannot retain stale or opposite-faction quest relationships.
+    quest.preQuestGroup = CloneNumberArray(record.pg)
+    quest.preQuestSingle = CloneNumberArray(record.ps)
     quest.requiredLevel = quest.requiredLevel or tonumber(record.rl)
     quest.questLevel = quest.questLevel or tonumber(record.ql)
     quest.requiredRaceMask = tonumber(record.rm) or quest.requiredRaceMask or 0
@@ -3865,10 +4726,85 @@ local function ApplyQuestZoneMetadata(quest)
     return quest
 end
 
+panelSearchFilters.zoneCategoryOrder = {
+    unknown = 1,
+    city = 2,
+    zone = 3,
+    dungeon = 4,
+    raid = 5,
+    battleground = 6,
+    other = 7,
+}
+
+panelSearchFilters.zoneCategoryLabels = {
+    unknown = "Unknown",
+    city = "Cities",
+    zone = "Zones",
+    dungeon = "Dungeons",
+    raid = "Raids",
+    battleground = "Battlegrounds",
+    other = "Other",
+}
+
+function panelSearchFilters.ZoneCategory(zone)
+    if CurrentDreamwayGameVersion() == "sod" and zone and zone.sc then
+        return tostring(zone.sc)
+    end
+    return zone and tostring(zone.c or "other") or "other"
+end
+
+function panelSearchFilters.ZoneRange(zone)
+    if CurrentDreamwayGameVersion() == "sod" and zone and zone.sr then
+        return tostring(zone.sr)
+    end
+    return zone and tostring(zone.r or "") or ""
+end
+
+function panelSearchFilters.ZoneName(zone)
+    if CurrentDreamwayGameVersion() == "sod" and zone and zone.sn then
+        return tostring(zone.sn)
+    end
+    return zone and tostring(zone.n or zone.name or "") or ""
+end
+
+function panelSearchFilters.ZoneRangeBounds(zone)
+    local range = panelSearchFilters.ZoneRange(zone)
+    local minimum, maximum = string.match(range, "^(%d+)%-(%d+)$")
+    if not minimum then
+        minimum = string.match(range, "^(%d+)$")
+        maximum = minimum
+    end
+    return tonumber(minimum) or 999, tonumber(maximum) or 999
+end
+
+function panelSearchFilters.SortZones(zones)
+    table.sort(zones, function(a, b)
+        local aCategory = panelSearchFilters.zoneCategoryOrder[panelSearchFilters.ZoneCategory(a)] or 99
+        local bCategory = panelSearchFilters.zoneCategoryOrder[panelSearchFilters.ZoneCategory(b)] or 99
+        if aCategory ~= bCategory then
+            return aCategory < bCategory
+        end
+        local aMinimum, aMaximum = panelSearchFilters.ZoneRangeBounds(a)
+        local bMinimum, bMaximum = panelSearchFilters.ZoneRangeBounds(b)
+        if aMinimum ~= bMinimum then
+            return aMinimum < bMinimum
+        end
+        if aMaximum ~= bMaximum then
+            return aMaximum < bMaximum
+        end
+        return panelSearchFilters.ZoneName(a) < panelSearchFilters.ZoneName(b)
+    end)
+    return zones
+end
+
 function panelSearchFilters.FilterZones()
     local db = DreamwayQuestZones
     if db and type(db.zoneList) == "table" then
-        return db.zoneList
+        local zones = {}
+        for _, zone in ipairs(db.zoneList) do
+            zones[#zones + 1] = zone
+        end
+        return panelSearchFilters.SortZones(zones)
     end
 
     local zones = {}
@@ -3876,12 +4812,10 @@ function panelSearchFilters.FilterZones()
         for zoneId, name in pairs(db.zones) do
             zoneId = tonumber(zoneId)
             if zoneId and name and name ~= "" then
-                zones[#zones + 1] = { id = zoneId, n = tostring(name), r = "" }
+                zones[#zones + 1] = { id = zoneId, n = tostring(name), r = "", c = "zone" }
             end
         end
-        table.sort(zones, function(a, b)
-            return (a.id or 0) < (b.id or 0)
-        end)
+        panelSearchFilters.SortZones(zones)
     end
 
     return zones
@@ -4202,6 +5136,34 @@ HydrateQuestMetadata = function(quest)
         return quest
     end
 
+    if not QuestAvailableInCurrentVersion(quest.id) then
+        quest.name = "Unknown quest #" .. tostring(quest.id)
+        quest.requiredLevel = nil
+        quest.questLevel = nil
+        quest.category = nil
+        quest.preQuestSingle = {}
+        quest.preQuestGroup = {}
+        quest.startZoneIds = {}
+        quest.objectiveZoneIds = {}
+        quest.endZoneIds = {}
+        quest.zoneIds = {}
+        quest.zones = {}
+        quest.chainId = nil
+        quest.chainName = nil
+        quest.chainStep = nil
+        quest.chainLength = nil
+        quest.chainGroupId = nil
+        quest.chainGroupStep = nil
+        quest.chainGroupSize = nil
+        quest.requiredRaceMask = 0
+        quest.requiredClassMask = 0
+        quest.typeIds = {}
+        quest.unavailableInCurrentVersion = true
+        return quest
+    end
+
+    quest.unavailableInCurrentVersion = nil
+
     local dbQuest = GetQuestieQuest(quest)
     if not dbQuest then
         ApplyQuestZoneMetadata(quest)
@@ -4274,6 +5236,8 @@ local function BuildAllQuestSearchCache()
 
     local QuestieDB = ImportQuestieModule("QuestieDB")
     local cache = {}
+    ProfileRecorder.emptyQuestMetadataArray = ProfileRecorder.emptyQuestMetadataArray or {}
+    local empty = ProfileRecorder.emptyQuestMetadataArray
     for questId, zoneRecord in pairs(records) do
         questId = tonumber(questId)
         if questId then
@@ -4313,17 +5277,18 @@ local function BuildAllQuestSearchCache()
                     chainGroupId = tonumber(zoneRecord and zoneRecord.cg),
                     chainGroupStep = tonumber(zoneRecord and zoneRecord.cgs),
                     chainGroupSize = tonumber(zoneRecord and zoneRecord.cgz),
-                    preQuestGroup = CloneNumberArray(zoneRecord and zoneRecord.pg),
-                    preQuestSingle = CloneNumberArray(zoneRecord and zoneRecord.ps),
-                    startZoneIds = CloneNumberArray(zoneRecord and zoneRecord.s),
-                    objectiveZoneIds = CloneNumberArray(zoneRecord and zoneRecord.o),
-                    endZoneIds = CloneNumberArray(zoneRecord and zoneRecord.e),
-                    zoneIds = CloneNumberArray(zoneRecord and zoneRecord.a),
+                    preQuestGroup = zoneRecord and zoneRecord.pg or empty,
+                    preQuestSingle = zoneRecord and zoneRecord.ps or empty,
+                    startZoneIds = zoneRecord and zoneRecord.s or empty,
+                    objectiveZoneIds = zoneRecord and zoneRecord.o or empty,
+                    endZoneIds = zoneRecord and zoneRecord.e or empty,
+                    zoneIds = zoneRecord and zoneRecord.a or empty,
                     requiredRaceMask = tonumber(zoneRecord and zoneRecord.rm) or requiredRaceMask or 0,
                     requiredClassMask = tonumber(zoneRecord and zoneRecord.cm) or requiredClassMask or 0,
-                    typeIds = CloneStringArray(zoneRecord and zoneRecord.t),
+                    typeIds = zoneRecord and zoneRecord.t or empty,
                     gameVersion = zoneRecord and zoneRecord.gv,
                     normalized = string.lower(tostring(name)),
+                    _dreamwayCanonical = true,
                 }
             end
         end
@@ -4381,6 +5346,8 @@ local function CloneJourney(journey)
         hiddenQuests = {},
         unusedQuestIds = CloneNumberArray(journey and (journey.unusedQuestIds or journey.hiddenQuestIds)),
         unusedQuests = {},
+        isExample = journey and journey.isExample == true,
+        exampleSourceId = journey and journey.exampleSourceId,
     }
 
     for _, batch in ipairs(journey and journey.batches or {}) do
@@ -4548,7 +5515,8 @@ RefreshJourneyDerivedData = function(journey)
         batch.zones = BatchZoneNames(batch)
         batch.expectedLevel = BatchExpectedLevel(batch)
 
-        local auto = batch.autoName == true or (batch.autoName ~= false and LooksLikeAutoBatchName(batch.name))
+        local versionsMatch = NormalizeDreamwayGameVersion(journey.gameVersion) == CurrentDreamwayGameVersion()
+        local auto = versionsMatch and (batch.autoName == true or (batch.autoName ~= false and LooksLikeAutoBatchName(batch.name)))
         if auto then
             local base, zones = BatchAutoBaseName(batch)
             rows[#rows + 1] = {
@@ -4612,6 +5580,9 @@ local function FindQuestInJourney(journey, questId)
 end
 
 local function QuestNameForValidation(journey, questId)
+    if not QuestAvailableInCurrentVersion(questId) then
+        return "Unknown quest #" .. tostring(questId)
+    end
     local quest = FindQuestInJourney(journey, questId)
     if quest and quest.name and quest.name ~= "" then
         return quest.name .. " (#" .. tostring(questId) .. ")"
@@ -4636,7 +5607,7 @@ local function QuestPrerequisiteFailure(journey, quest, availableIds)
     local missingGroup = {}
     for _, questId in ipairs(quest.preQuestGroup or {}) do
         questId = tonumber(questId)
-        if questId and not availableIds[questId] then
+        if questId and QuestAvailableInCurrentVersion(questId) and not availableIds[questId] then
             missingGroup[#missingGroup + 1] = questId
         end
     end
@@ -4648,19 +5619,62 @@ local function QuestPrerequisiteFailure(journey, quest, availableIds)
     local singlePrereqs = CloneNumberArray(quest.preQuestSingle)
     if #singlePrereqs > 0 then
         local satisfied = false
+        local applicableCount = 0
         for _, questId in ipairs(singlePrereqs) do
-            if availableIds[questId] then
+            if QuestAvailableInCurrentVersion(questId) then
+                applicableCount = applicableCount + 1
+            end
+            if QuestAvailableInCurrentVersion(questId) and availableIds[questId] then
                 satisfied = true
                 break
             end
         end
 
-        if not satisfied then
-            if #singlePrereqs == 1 then
-                return (quest.name or QuestDisplayName(quest)) .. " requires " .. QuestNameForValidation(journey, singlePrereqs[1]) .. " in the same or an earlier batch."
+        if applicableCount > 0 and not satisfied then
+            local applicablePrereqs = {}
+            for _, questId in ipairs(singlePrereqs) do
+                if QuestAvailableInCurrentVersion(questId) then
+                    applicablePrereqs[#applicablePrereqs + 1] = questId
+                end
             end
-            return (quest.name or QuestDisplayName(quest)) .. " requires one of: " .. QuestNamesForValidation(journey, singlePrereqs) .. " in the same or an earlier batch."
+            if #applicablePrereqs == 1 then
+                return (quest.name or QuestDisplayName(quest)) .. " requires " .. QuestNameForValidation(journey, applicablePrereqs[1]) .. " in the same or an earlier batch."
+            end
+            return (quest.name or QuestDisplayName(quest)) .. " requires one of: " .. QuestNamesForValidation(journey, applicablePrereqs) .. " in the same or an earlier batch."
         end
+    end
+
+    return nil
+end
+
+local function QuestCharacterCompatibilityWarning(journey, quest)
+    if not journey or not quest or quest.unavailableInCurrentVersion then
+        return nil
+    end
+
+    local character = journey.character or {}
+    local journeyRaceMask = tonumber(character.raceMask) or 0
+    if journeyRaceMask == 0 then
+        local currentVersion = CurrentDreamwayGameVersion()
+        local supportsExpansionRaces = currentVersion == "tbc" or currentVersion == "wotlk"
+        if character.faction == "Alliance" then
+            journeyRaceMask = supportsExpansionRaces and 1101 or 77
+        elseif character.faction == "Horde" then
+            journeyRaceMask = supportsExpansionRaces and 690 or 178
+        else
+            journeyRaceMask = supportsExpansionRaces and 2047 or 255
+        end
+    end
+
+    local requiredRaceMask = tonumber(quest.requiredRaceMask) or 0
+    if requiredRaceMask > 0 and DreamwayBitBand(requiredRaceMask, journeyRaceMask) == 0 then
+        return (quest.name or QuestDisplayName(quest)) .. " may not be available to the selected Journey faction or race in " .. DreamwayGameVersionLabel(CurrentDreamwayGameVersion()) .. "."
+    end
+
+    local requiredClassMask = tonumber(quest.requiredClassMask) or 0
+    local journeyClassMask = tonumber(character.classMask) or 0
+    if requiredClassMask > 0 and journeyClassMask > 0 and DreamwayBitBand(requiredClassMask, journeyClassMask) == 0 then
+        return (quest.name or QuestDisplayName(quest)) .. " may not be available to the selected Journey class in " .. DreamwayGameVersionLabel(CurrentDreamwayGameVersion()) .. "."
     end
 
     return nil
@@ -4670,7 +5684,7 @@ local function CompletedQuestIdSet()
     local completedIds = {}
     for _, questId in ipairs(DreamwayProfile and DreamwayProfile.completedQuestIds or {}) do
         questId = tonumber(questId)
-        if questId then
+        if questId and QuestAvailableInCurrentVersion(questId) then
             completedIds[questId] = true
         end
     end
@@ -4678,7 +5692,7 @@ local function CompletedQuestIdSet()
     if Questie and Questie.db and Questie.db.char then
         for questId, isComplete in pairs(Questie.db.char.complete or {}) do
             questId = tonumber(questId)
-            if questId and isComplete then
+            if questId and isComplete and QuestAvailableInCurrentVersion(questId) then
                 completedIds[questId] = true
             end
         end
@@ -4688,22 +5702,80 @@ local function CompletedQuestIdSet()
 end
 
 JourneyPrerequisiteWarnings = function(journey)
+    local _, warnings, firstMessage = JourneyWarningSummary(journey)
+    return warnings, firstMessage
+end
+
+JourneyWarningSummary = function(journey)
+    local unavailableWarnings = {}
+    local characterWarnings = {}
     local warnings = {}
     local firstMessage
     local availableIds = CompletedQuestIdSet()
+    local hydratedByQuestId = {}
+
+    local function hydratedQuest(quest)
+        local questId = tonumber(quest and quest.id)
+        if not questId then
+            return quest
+        end
+        if not hydratedByQuestId[questId] then
+            hydratedByQuestId[questId] = HydrateQuestMetadata(quest)
+        end
+        return hydratedByQuestId[questId]
+    end
+
+    local function noteAvailability(quest, checkCharacter)
+        local questId = tonumber(quest and quest.id)
+        if questId and not QuestAvailableInCurrentVersion(questId) then
+            unavailableWarnings[questId] = "Unknown quest #" .. tostring(questId) .. " is not available in " .. DreamwayGameVersionLabel(CurrentDreamwayGameVersion()) .. "."
+        elseif questId and checkCharacter ~= false then
+            quest = hydratedQuest(quest)
+            local characterWarning = QuestCharacterCompatibilityWarning(journey, quest)
+            if characterWarning then
+                characterWarnings[questId] = characterWarning
+            end
+        end
+    end
+
+    for _, batch in ipairs(journey and journey.batches or {}) do
+        for _, quest in ipairs(batch.quests or {}) do
+            noteAvailability(quest, true)
+        end
+    end
+    local hiddenSeen = {}
+    local function noteHiddenQuest(quest)
+        local questId = tonumber(quest and quest.id)
+        if questId and not hiddenSeen[questId] then
+            hiddenSeen[questId] = true
+            noteAvailability(quest, false)
+        end
+    end
+    for _, quest in ipairs(journey and journey.hiddenQuests or {}) do
+        noteHiddenQuest(quest)
+    end
+    for _, quest in ipairs(journey and journey.unusedQuests or {}) do
+        noteHiddenQuest(quest)
+    end
+    for _, questId in ipairs(journey and journey.hiddenQuestIds or {}) do
+        noteHiddenQuest({ id = questId })
+    end
+    for _, questId in ipairs(journey and journey.unusedQuestIds or {}) do
+        noteHiddenQuest({ id = questId })
+    end
 
     for _, batch in ipairs(journey and journey.batches or {}) do
         for _, quest in ipairs(batch.quests or {}) do
             local questId = tonumber(quest.id)
-            if questId then
+            if questId and QuestAvailableInCurrentVersion(questId) then
                 availableIds[questId] = true
             end
         end
 
         for _, quest in ipairs(batch.quests or {}) do
-            quest = HydrateQuestMetadata(quest)
+            quest = hydratedQuest(quest)
             local questId = tonumber(quest.id)
-            if questId then
+            if questId and QuestAvailableInCurrentVersion(questId) then
                 local message = QuestPrerequisiteFailure(journey, quest, availableIds)
                 if message then
                     warnings[questId] = message
@@ -4713,7 +5785,55 @@ JourneyPrerequisiteWarnings = function(journey)
         end
     end
 
-    return warnings, firstMessage
+    return unavailableWarnings, warnings, firstMessage, characterWarnings
+end
+
+function DreamwayRefreshJourneyWarningCache(journey)
+    journey = journey or ActiveJourney()
+    local unavailableWarnings, prerequisiteWarnings, _, characterWarnings = JourneyWarningSummary(journey)
+    local questNames = {}
+    for _, batch in ipairs(journey and journey.batches or {}) do
+        for _, quest in ipairs(batch.quests or {}) do
+            local questId = tonumber(quest and quest.id)
+            if questId and quest.name and quest.name ~= "" then
+                questNames[questId] = tostring(quest.name)
+            end
+        end
+    end
+    for _, quest in ipairs(journey and journey.hiddenQuests or {}) do
+        local questId = tonumber(quest and quest.id)
+        if questId and quest.name and quest.name ~= "" then
+            questNames[questId] = tostring(quest.name)
+        end
+    end
+
+    local cachedWarnings = ProfileRecorder.panelJourneyWarnings
+    cachedWarnings.unavailable = unavailableWarnings or {}
+    cachedWarnings.character = characterWarnings or {}
+    cachedWarnings.placement = prerequisiteWarnings or {}
+    cachedWarnings.questNames = questNames
+    cachedWarnings.journey = journey
+
+    panelPrerequisiteWarnings = {}
+    for questId, message in pairs(cachedWarnings.unavailable) do
+        panelPrerequisiteWarnings[questId] = message
+    end
+    for questId, message in pairs(cachedWarnings.placement) do
+        panelPrerequisiteWarnings[questId] = message
+    end
+    for questId, message in pairs(cachedWarnings.character) do
+        panelPrerequisiteWarnings[questId] = message
+    end
+
+    local warningCount = 0
+    for _ in pairs(cachedWarnings.unavailable) do warningCount = warningCount + 1 end
+    for _ in pairs(cachedWarnings.character) do warningCount = warningCount + 1 end
+    for _ in pairs(cachedWarnings.placement) do warningCount = warningCount + 1 end
+    if panelJourneyManager.warningButton then
+        panelJourneyManager.warningButton:SetShown(warningCount > 0)
+        DreamwayUpdatePanelStatusBounds()
+    end
+    return cachedWarnings, warningCount
 end
 
 local function ValidateJourney(journey, baselineJourney)
@@ -4744,15 +5864,6 @@ local function ValidateJourney(journey, baselineJourney)
         local questId = tonumber(quest.id)
         if questId and allIds[questId] then
             return false, QuestNameForValidation(journey, questId) .. " cannot be both assigned and hidden."
-        end
-    end
-
-    for index, batch in ipairs(journey and journey.batches or {}) do
-        for _, quest in ipairs(batch.quests or {}) do
-            quest = HydrateQuestMetadata(quest)
-            if not quest.name or quest.name == "" then
-                return false, "Unknown quest #" .. tostring(quest.id) .. " in Batch " .. tostring(index) .. "."
-            end
         end
     end
 
@@ -4853,7 +5964,7 @@ local function EditableJourney()
         return nil, "Import a Journey before editing it in game."
     end
 
-    local journey = DreamwayDB.journeys and DreamwayDB.journeys[activeJourneyId]
+    local journey = DreamwayManagedJourneyById(activeJourneyId)
     if not journey or journey == fallbackJourney then
         return nil, "Import a Journey before editing it in game."
     end
@@ -4861,24 +5972,71 @@ local function EditableJourney()
     return journey
 end
 
-local function CommitJourneyCandidate(candidate, message)
+local function CommitJourneyCandidate(candidate, message, previousBatchIndex)
     RefreshJourneyDerivedData(candidate)
+    if type(message) == "function" then
+        message = message(candidate)
+    end
     local baselineJourney = ActiveJourney()
+    previousBatchIndex = tonumber(previousBatchIndex) or batchIndex
     local ok, errorMessage = ValidateJourney(candidate, baselineJourney)
     if not ok then
+        batchIndex = previousBatchIndex
         PanelSetStatus(errorMessage, false)
         return false
     end
 
-    candidate.savedAt = ProfileRecorder.UpdatedAt(ProfileRecorder.ServerTimestamp())
-    DreamwayDB.journeys[candidate.id] = candidate
+    ProfileRecorder.panelJourneyUndo = {
+        journey = CloneJourney(baselineJourney),
+        journeyId = baselineJourney and baselineJourney.id,
+        batchIndex = previousBatchIndex,
+        available = true,
+    }
+    candidate.savedAt = ProfileRecorder.UpdatedAt(ProfileRecorder.LocalTimestamp())
+    if candidate.isExample == true and DreamwayExampleJourneyById(candidate.exampleSourceId or candidate.id) then
+        ProfileRecorder.exampleJourneyWorkingCopy = candidate
+    else
+        DreamwayDB.journeys[candidate.id] = candidate
+    end
     DreamwaySetActiveJourneyId(candidate.id)
     panelJourneyManager.selectedJourneyId = candidate.id
     SaveDb()
     ApplyUnusedQuestSuppression()
     RefreshDreamwayTracker()
     RefreshPanel()
-    PanelSetStatus(message, true)
+    PanelSetStatus(message, true, true)
+    return true
+end
+
+function DreamwayUndoLastJourneyAction()
+    local undoState = ProfileRecorder.panelJourneyUndo
+    local activeJourneyId = DreamwayActiveJourneyId()
+    if not undoState or not undoState.journey or undoState.journeyId ~= activeJourneyId then
+        ProfileRecorder.panelJourneyUndo = nil
+        PanelSetStatus("There is no Journey action to undo.", nil)
+        return false
+    end
+
+    local restored = CloneJourney(undoState.journey)
+    RefreshJourneyDerivedData(restored)
+    restored.savedAt = ProfileRecorder.UpdatedAt(ProfileRecorder.LocalTimestamp())
+    if restored.isExample == true and DreamwayExampleJourneyById(restored.exampleSourceId or restored.id) then
+        ProfileRecorder.exampleJourneyWorkingCopy = restored
+    else
+        DreamwayDB.journeys[restored.id] = restored
+    end
+
+    DreamwaySetActiveJourneyId(restored.id)
+    panelJourneyManager.selectedJourneyId = restored.id
+    batchIndex = tonumber(undoState.batchIndex) or 1
+    ClampBatchIndex(restored)
+    ProfileRecorder.panelJourneyUndo = nil
+    DreamwayClearPanelQuestSelection(false)
+    SaveDb()
+    ApplyUnusedQuestSuppression()
+    RefreshDreamwayTracker()
+    RefreshPanel()
+    PanelSetStatus("Undid the last Journey change.", true)
     return true
 end
 
@@ -4889,6 +6047,7 @@ function DreamwayInsertBatchAfter(afterIndex, questId)
         return false
     end
 
+    local previousBatchIndex = batchIndex
     local candidate = CloneJourney(journey)
     afterIndex = math.max(0, math.min(tonumber(afterIndex) or #candidate.batches, #candidate.batches))
     local newIndex = afterIndex + 1
@@ -4918,7 +6077,8 @@ function DreamwayInsertBatchAfter(afterIndex, questId)
     return CommitJourneyCandidate(
         candidate,
         questId and ("Created Batch " .. tostring(newIndex) .. " and added " .. QuestDisplayName(batch.quests[1]) .. ".")
-            or ("Created Batch " .. tostring(newIndex) .. ".")
+            or ("Created Batch " .. tostring(newIndex) .. "."),
+        previousBatchIndex
     )
 end
 
@@ -4934,6 +6094,7 @@ function DreamwayDeleteBatchAt(index)
         return false
     end
 
+    local previousBatchIndex = batchIndex
     local candidate = CloneJourney(journey)
     local removed = table.remove(candidate.batches, index)
     if #candidate.batches == 0 then
@@ -4946,7 +6107,11 @@ function DreamwayDeleteBatchAt(index)
         }
     end
     batchIndex = math.max(1, math.min(index, #candidate.batches))
-    return CommitJourneyCandidate(candidate, "Deleted " .. tostring(removed.name or ("Batch " .. tostring(index))) .. "; its quests are now unassigned.")
+    return CommitJourneyCandidate(
+        candidate,
+        "Deleted " .. tostring(removed.name or ("Batch " .. tostring(index))) .. "; its quests are now unassigned.",
+        previousBatchIndex
+    )
 end
 
 function DreamwayConfirmDeleteBatch(index)
@@ -4971,60 +6136,144 @@ function DreamwayConfirmDeleteBatch(index)
     StaticPopup_Show("DREAMWAY_DELETE_BATCH")
 end
 
-local function MoveQuestInJourney(questId, targetType, targetIndex)
+function MoveQuestsInJourney(questIds, targetType, targetIndex)
     local journey, errorMessage = EditableJourney()
     if not journey then
         PanelSetStatus(errorMessage, false)
         return false
     end
 
-    questId = tonumber(questId)
-    local existingQuest, sourceType, sourceBatchIndex = FindQuestInJourney(journey, questId)
-    if targetType == "unassigned" and not existingQuest then
-        PanelSetStatus("That quest is already unassigned.", nil)
+    local previousBatchIndex = batchIndex
+    questIds = DreamwayPanelSelectionQuestIds(questIds)
+    if #questIds == 0 then
+        PanelSetStatus("Select at least one quest to move.", nil)
         return false
     end
 
-    local sourceQuest = existingQuest or BuildQuestFromQuestieId(questId)
-    if not sourceQuest then
-        PanelSetStatus("Dreamway could not find that quest in Questie's database.", false)
-        return false
+    local quests = {}
+    for _, questId in ipairs(questIds) do
+        local existingQuest = FindQuestInJourney(journey, questId)
+        if existingQuest or targetType ~= "unassigned" then
+            local sourceQuest = existingQuest or BuildQuestFromQuestieId(questId)
+            if not sourceQuest then
+                PanelSetStatus("Dreamway could not find quest #" .. tostring(questId) .. " in Questie's database.", false)
+                return false
+            end
+            quests[#quests + 1] = CloneQuest(sourceQuest)
+        end
     end
 
-    if sourceType == targetType and (targetType == "hidden" or sourceBatchIndex == targetIndex) then
-        PanelSetStatus("That quest is already there.", nil)
+    if #quests == 0 then
+        PanelSetStatus(#questIds == 1 and "That quest is already unassigned." or "Those quests are already unassigned.", nil)
         return false
     end
 
     local candidate = CloneJourney(journey)
-    local quest = existingQuest and FindQuestInJourney(candidate, questId) or CloneQuest(sourceQuest)
-    if not quest then
-        PanelSetStatus("That quest could not be moved.", false)
+    for _, quest in ipairs(quests) do
+        RemoveQuestFromAssignedBatches(candidate, quest.id)
+        RemoveQuestFromUnused(candidate, quest.id)
+    end
+
+    local destinationName
+    if targetType == "unassigned" then
+        destinationName = "Unassigned"
+    elseif targetType == "hidden" or targetType == "unused" then
+        destinationName = "Hidden"
+        for _, quest in ipairs(quests) do
+            AddQuestToUnused(candidate, quest)
+        end
+    else
+        local batch = candidate.batches and candidate.batches[targetIndex]
+        if not batch then
+            PanelSetStatus("That batch no longer exists.", false)
+            return false
+        end
+        destinationName = tostring(batch.name or ("Batch " .. tostring(targetIndex)))
+        for _, quest in ipairs(quests) do
+            batch.quests[#batch.quests + 1] = CloneQuest(quest)
+        end
+        batchIndex = targetIndex
+    end
+
+    local function message(committedJourney)
+        local finalDestinationName = destinationName
+        if targetType == "batch" then
+            local committedBatch = committedJourney and committedJourney.batches and committedJourney.batches[targetIndex]
+            finalDestinationName = tostring(committedBatch and committedBatch.name or destinationName or ("Batch " .. tostring(targetIndex)))
+        end
+        if #quests == 1 then
+            if targetType == "unassigned" then
+                return "Unassigned " .. (quests[1].name or QuestDisplayName(quests[1])) .. "."
+            end
+            return "Moved " .. (quests[1].name or QuestDisplayName(quests[1])) .. " to " .. finalDestinationName .. "."
+        elseif targetType == "unassigned" then
+            return "Unassigned " .. tostring(#quests) .. " quests."
+        end
+        return "Moved " .. tostring(#quests) .. " quests to " .. finalDestinationName .. "."
+    end
+
+    local committed = CommitJourneyCandidate(candidate, message, previousBatchIndex)
+    if committed then
+        DreamwayClearPanelQuestSelection(false)
+    end
+    return committed
+end
+
+function DreamwayMergeBatchIntoBatch(sourceIndex, targetIndex)
+    local journey, errorMessage = EditableJourney()
+    if not journey then
+        PanelSetStatus(errorMessage, false)
         return false
     end
 
-    RemoveQuestFromAssignedBatches(candidate, questId)
-    RemoveQuestFromUnused(candidate, questId)
-
-    if targetType == "unassigned" then
-        return CommitJourneyCandidate(candidate, "Unassigned " .. (quest.name or QuestDisplayName(quest)) .. ".")
-    end
-
-    if targetType == "hidden" or targetType == "unused" then
-        AddQuestToUnused(candidate, quest)
-        return CommitJourneyCandidate(candidate, "Moved " .. (quest.name or QuestDisplayName(quest)) .. " to Hidden.")
-    end
-
-    local batch = candidate.batches and candidate.batches[targetIndex]
-    if not batch then
+    sourceIndex = tonumber(sourceIndex)
+    targetIndex = tonumber(targetIndex)
+    if not sourceIndex or not targetIndex
+        or not journey.batches[sourceIndex]
+        or not journey.batches[targetIndex]
+    then
         PanelSetStatus("That batch no longer exists.", false)
         return false
     end
+    if sourceIndex == targetIndex then
+        PanelSetStatus("Drop a batch onto a different batch to combine them.", nil)
+        return false
+    end
 
-    batch.quests[#batch.quests + 1] = CloneQuest(quest)
-    batchIndex = targetIndex
-    SaveDb()
-    return CommitJourneyCandidate(candidate, "Moved " .. (quest.name or QuestDisplayName(quest)) .. " to " .. tostring(batch.name or ("Batch " .. tostring(targetIndex))) .. ".")
+    local candidate = CloneJourney(journey)
+    local sourceBatch = candidate.batches[sourceIndex]
+    local targetBatch = candidate.batches[targetIndex]
+    local sourceName = tostring(sourceBatch.name or ("Batch " .. tostring(sourceIndex)))
+    local targetName = tostring(targetBatch.name or ("Batch " .. tostring(targetIndex)))
+    local movedCount = #(sourceBatch.quests or {})
+
+    targetBatch.quests = targetBatch.quests or {}
+    for _, quest in ipairs(sourceBatch.quests or {}) do
+        targetBatch.quests[#targetBatch.quests + 1] = quest
+    end
+
+    -- Preserve the destination's identity; only its derived zones, level, and
+    -- quest ordering should change as a result of the merge.
+    targetBatch.name = targetName
+    targetBatch.autoName = false
+    table.remove(candidate.batches, sourceIndex)
+
+    local destinationIndex = targetIndex
+    if sourceIndex < targetIndex then
+        destinationIndex = targetIndex - 1
+    end
+
+    local previousBatchIndex = batchIndex
+    batchIndex = destinationIndex
+    local committed = CommitJourneyCandidate(
+        candidate,
+        "Combined " .. sourceName .. " (" .. tostring(movedCount) .. " quest" .. (movedCount == 1 and "" or "s") .. ") into " .. targetName .. ".",
+        previousBatchIndex
+    )
+    if not committed then
+        batchIndex = previousBatchIndex
+    end
+    return committed
 end
 
 function PanelFrameIsMouseOver(frame)
@@ -5103,26 +6352,59 @@ local function EndPanelQuestDrag()
     end
 
     local target = PanelDropTargetUnderCursor()
+    if drag.kind == "batch" then
+        if not target or target.type ~= "batch" then
+            PanelSetStatus("Drop the batch header onto another batch to combine them.", nil)
+            return
+        end
+        DreamwayMergeBatchIntoBatch(drag.sourceIndex, target.index)
+        return
+    end
+
     if not target then
-        PanelSetStatus("Drop a quest onto a batch or Hidden.", nil)
+        PanelSetStatus(#(drag.questIds or {}) > 1 and "Drop the selected quests onto a batch or Hidden." or "Drop a quest onto a batch or Hidden.", nil)
         return
     end
 
     if target.type == "newbatch" then
-        DreamwayInsertBatchAfter(target.index, drag.questId)
+        if #(drag.questIds or {}) > 1 then
+            PanelSetStatus("Drop multiple quests onto an existing batch or Hidden.", false)
+        else
+            if DreamwayInsertBatchAfter(target.index, drag.questId) then
+                DreamwayClearPanelQuestSelection(false)
+            end
+        end
     else
-        MoveQuestInJourney(drag.questId, target.type, target.index)
+        MoveQuestsInJourney(drag.questIds or { drag.questId }, target.type, target.index)
     end
 end
 
-local function StartPanelQuestDrag(quest, source)
+local function StartPanelQuestDrag(quest, source, explicitQuestIds)
     local questId = tonumber(quest and quest.id)
     if not questId then
         return
     end
 
+    local questIds
+    explicitQuestIds = DreamwayPanelSelectionQuestIds(explicitQuestIds)
+    if #explicitQuestIds > 0 then
+        if DreamwayPanelAllQuestIdsSelected(explicitQuestIds) then
+            questIds = DreamwayPanelSelectedQuestIds()
+        else
+            questIds = explicitQuestIds
+            DreamwaySetPanelQuestSelection(questIds, "replace")
+        end
+    elseif DreamwayPanelQuestIsSelected(questId) then
+        questIds = DreamwayPanelSelectedQuestIds()
+    else
+        questIds = { questId }
+        DreamwaySetPanelQuestSelection(questIds, "replace")
+    end
+
     panelDragState = {
+        kind = "quest",
         questId = questId,
+        questIds = questIds,
         source = source,
     }
 
@@ -5131,7 +6413,33 @@ local function StartPanelQuestDrag(quest, source)
     end
 
     local ghost = EnsurePanelDragGhost()
-    ghost.label:SetText(quest.name or QuestDisplayName(quest))
+    if #questIds > 1 then
+        ghost.label:SetText(tostring(#questIds) .. " quests: " .. (quest.name or QuestDisplayName(quest)))
+    else
+        ghost.label:SetText(quest.name or QuestDisplayName(quest))
+    end
+    ghost:Show()
+    ghost:SetScript("OnUpdate", UpdatePanelDragGhost)
+    UpdatePanelDragGhost()
+end
+
+function StartPanelBatchDrag(batch, sourceIndex)
+    sourceIndex = tonumber(sourceIndex)
+    if not batch or not sourceIndex then
+        return
+    end
+
+    panelDragState = {
+        kind = "batch",
+        sourceIndex = sourceIndex,
+    }
+
+    if GameTooltip then
+        GameTooltip:Hide()
+    end
+
+    local ghost = EnsurePanelDragGhost()
+    ghost.label:SetText("Combine " .. tostring(batch.name or ("Batch " .. tostring(sourceIndex))))
     ghost:Show()
     ghost:SetScript("OnUpdate", UpdatePanelDragGhost)
     UpdatePanelDragGhost()
@@ -5147,6 +6455,41 @@ local function MakePanelQuestDraggable(button, quest, source)
         StartPanelQuestDrag(quest, source)
     end)
     button:SetScript("OnDragStop", EndPanelQuestDrag)
+end
+
+function DreamwayPanelBatchQuestOnEnter(self)
+    local quest = self and self.quest
+    if not quest or not GameTooltip then
+        return
+    end
+    AnchorDreamwayTooltip(self)
+    GameTooltip:AddLine(quest.name or QuestDisplayName(quest), 1, 0.82, 0.12)
+    if self.prerequisiteWarning then
+        GameTooltip:AddLine("Journey warning", 1, 0.55, 0.16)
+        GameTooltip:AddLine(self.prerequisiteWarning, 0.95, 0.78, 0.48, true)
+    end
+    GameTooltip:AddLine("Click to open Questie quest details.", 0.75, 0.75, 0.75)
+    GameTooltip:Show()
+end
+
+function DreamwayPanelBatchQuestOnLeave()
+    if GameTooltip then
+        GameTooltip:Hide()
+    end
+end
+
+function DreamwayPanelBatchQuestOnDragStart(self)
+    if not self or not self.quest then
+        return
+    end
+    StartPanelQuestDrag(self.quest, {
+        type = self.dragSourceType,
+        index = self.dragSourceIndex,
+    })
+end
+
+function DreamwayPanelBatchQuestOnDragStop()
+    EndPanelQuestDrag()
 end
 
 function JsonEncodeString(value)
@@ -5258,7 +6601,7 @@ end
 
 local function JourneyToJson(journey)
     RefreshJourneyDerivedData(journey)
-    journey.savedAt = journey.savedAt or ProfileRecorder.UpdatedAt(ProfileRecorder.ServerTimestamp())
+    journey.savedAt = journey.savedAt or ProfileRecorder.UpdatedAt(ProfileRecorder.LocalTimestamp())
 
     local character = journey.character or {}
     local hiddenRows = JourneyUnusedQuestRows(journey)
@@ -5297,7 +6640,7 @@ end
 
 function JourneyToDenseString(journey)
     RefreshJourneyDerivedData(journey)
-    journey.savedAt = journey.savedAt or ProfileRecorder.UpdatedAt(ProfileRecorder.ServerTimestamp())
+    journey.savedAt = journey.savedAt or ProfileRecorder.UpdatedAt(ProfileRecorder.LocalTimestamp())
     local character = journey.character or {}
     local batchParts = {}
     for _, batch in ipairs(journey.batches or {}) do
@@ -5347,6 +6690,10 @@ local function ShowJourneyExportArea(selectedJourney)
     if not journey then
         journey, errorMessage = EditableJourney()
     end
+    if journey.isExample == true then
+        DreamwayShowSaveExampleAsNew()
+        return
+    end
     if not journey then
         PanelSetStatus(errorMessage, false)
         return
@@ -5355,7 +6702,7 @@ local function ShowJourneyExportArea(selectedJourney)
     local currentJourney = journeyId and DreamwayDB and DreamwayDB.journeys and DreamwayDB.journeys[journeyId]
     journey = currentJourney or journey
     SynchronizeJourneyHiddenQuests(journey)
-    journey.savedAt = ProfileRecorder.UpdatedAt(ProfileRecorder.ServerTimestamp())
+    journey.savedAt = ProfileRecorder.UpdatedAt(ProfileRecorder.LocalTimestamp())
     SaveDb()
 
     if panelImportArea then
@@ -5464,12 +6811,31 @@ function DreamwayJourneyMetadataSummary(journey)
     if not journey or journey == fallbackJourney then
         return "No imported Journey active"
     end
-    return table.concat({
+    local parts = {
         DreamwayGameVersionLabel(journey.gameVersion),
         DreamwayJourneyFactionLabel(journey),
         DreamwayJourneyRaceLabel(journey),
         DreamwayJourneyClassLabel(journey),
-    }, "  |  ")
+    }
+    if JourneyWarningSummary then
+        local unavailableWarnings, prerequisiteWarnings, _, characterWarnings = JourneyWarningSummary(journey)
+        local unavailableCount = 0
+        local prerequisiteCount = 0
+        local characterCount = 0
+        for _ in pairs(unavailableWarnings or {}) do unavailableCount = unavailableCount + 1 end
+        for _ in pairs(prerequisiteWarnings or {}) do prerequisiteCount = prerequisiteCount + 1 end
+        for _ in pairs(characterWarnings or {}) do characterCount = characterCount + 1 end
+        if unavailableCount > 0 then
+            parts[#parts + 1] = tostring(unavailableCount) .. " unavailable"
+        end
+        if prerequisiteCount > 0 then
+            parts[#parts + 1] = tostring(prerequisiteCount) .. " invalid placement" .. (prerequisiteCount == 1 and "" or "s")
+        end
+        if characterCount > 0 then
+            parts[#parts + 1] = tostring(characterCount) .. " character warning" .. (characterCount == 1 and "" or "s")
+        end
+    end
+    return table.concat(parts, "  |  ")
 end
 
 function DreamwaySortedJourneys()
@@ -5492,13 +6858,13 @@ end
 
 function DreamwayManagerSelectedJourney()
     local journeyId = panelJourneyManager.selectedJourneyId or DreamwayActiveJourneyId()
-    local journey = journeyId and DreamwayDB and DreamwayDB.journeys and DreamwayDB.journeys[journeyId]
+    local journey = DreamwayManagedJourneyById(journeyId)
     if journey then
         panelJourneyManager.selectedJourneyId = journey.id
         return journey
     end
     local journeys = DreamwaySortedJourneys()
-    journey = journeys[1]
+    journey = journeys[1] or DreamwayWorkingExampleJourney(DREAMWAY_EXAMPLE_JOURNEYS[1] and DREAMWAY_EXAMPLE_JOURNEYS[1].id, false)
     panelJourneyManager.selectedJourneyId = journey and journey.id or nil
     return journey
 end
@@ -5515,6 +6881,10 @@ end
 function DreamwaySetJourneyMetadata(kind, option)
     local journey = DreamwayManagerSelectedJourney()
     if not journey or not option then
+        return
+    end
+    if journey.isExample == true then
+        PanelSetStatus("Save the example as a new Journey before changing its metadata.", false)
         return
     end
     DreamwayCloseJourneyMetadataMenu()
@@ -5543,7 +6913,7 @@ function DreamwaySetJourneyMetadata(kind, option)
         journey.character.classMask = option.m
     end
 
-    journey.savedAt = ProfileRecorder.UpdatedAt(ProfileRecorder.ServerTimestamp())
+    journey.savedAt = ProfileRecorder.UpdatedAt(ProfileRecorder.LocalTimestamp())
     SaveDb()
     if RefreshPanel then
         RefreshPanel()
@@ -5624,6 +6994,10 @@ function DreamwayActivateManagedJourney()
     if not journey then
         return
     end
+    if journey.isExample == true then
+        journey = DreamwayWorkingExampleJourney(journey.exampleSourceId or journey.id, true)
+        RefreshJourneyDerivedData(journey)
+    end
     DreamwaySetActiveJourneyId(journey.id)
     batchIndex = 1
     SaveDb()
@@ -5640,11 +7014,30 @@ function DreamwayShowCreateJourney()
         panelJourneyManager.confirmFrame:Hide()
     end
     if panelJourneyManager.createFrame then
+        panelJourneyManager.createMode = "new"
+        panelJourneyManager.createTitle:SetText("Create Journey")
+        panelJourneyManager.createConfirm.label:SetText("Create")
         panelJourneyManager.createError:SetText("")
         panelJourneyManager.createEditBox:SetText("")
         panelJourneyManager.createFrame:Show()
         panelJourneyManager.createEditBox:SetFocus()
     end
+end
+
+function DreamwayShowSaveExampleAsNew()
+    local journey = DreamwayManagerSelectedJourney()
+    if not journey or journey.isExample ~= true or not panelJourneyManager.createFrame then
+        return
+    end
+    DreamwayCloseJourneyMetadataMenu()
+    panelJourneyManager.createMode = "example"
+    panelJourneyManager.createTitle:SetText("Save Example as New Journey")
+    panelJourneyManager.createConfirm.label:SetText("Save as New")
+    panelJourneyManager.createError:SetText("")
+    panelJourneyManager.createEditBox:SetText(tostring(journey.name or "Example Journey") .. " Copy")
+    panelJourneyManager.createFrame:Show()
+    panelJourneyManager.createEditBox:SetFocus()
+    panelJourneyManager.createEditBox:HighlightText()
 end
 
 function DreamwayCreateNewJourney()
@@ -5661,6 +7054,35 @@ function DreamwayCreateNewJourney()
     while DreamwayDB.journeys[id] do
         id = idBase .. "-" .. tostring(suffix)
         suffix = suffix + 1
+    end
+
+    if panelJourneyManager.createMode == "example" then
+        local source = DreamwayManagerSelectedJourney()
+        if not source or source.isExample ~= true then
+            panelJourneyManager.createError:SetText("Select an example Journey first.")
+            return
+        end
+        local journey = CloneJourney(source)
+        journey.id = id
+        journey.name = name
+        journey.isExample = nil
+        journey.exampleSourceId = nil
+        journey.savedAt = ProfileRecorder.UpdatedAt(ProfileRecorder.LocalTimestamp())
+        RefreshJourneyDerivedData(journey)
+        DreamwayDB.journeys[id] = journey
+        DreamwaySetActiveJourneyId(id)
+        ProfileRecorder.exampleJourneyWorkingCopy = nil
+        panelJourneyManager.selectedJourneyId = id
+        batchIndex = 1
+        SaveDb()
+        panelJourneyManager.createEditBox:ClearFocus()
+        panelJourneyManager.createFrame:Hide()
+        ApplyUnusedQuestSuppression()
+        RefreshDreamwayTracker()
+        RefreshPanel()
+        DreamwayRefreshJourneyManager()
+        PanelSetStatus("Saved " .. name .. " as a new editable Journey.", true)
+        return
     end
 
     local raceName = UnitRace and select(1, UnitRace("player")) or ""
@@ -5684,7 +7106,7 @@ function DreamwayCreateNewJourney()
     local journey = {
         id = id,
         name = name,
-        savedAt = ProfileRecorder.UpdatedAt(ProfileRecorder.ServerTimestamp()),
+        savedAt = ProfileRecorder.UpdatedAt(ProfileRecorder.LocalTimestamp()),
         gameVersion = CurrentDreamwayGameVersion(),
         character = {
             race = raceName,
@@ -5726,6 +7148,10 @@ end
 function DreamwayShowDeleteJourneyConfirmation()
     local journey = DreamwayManagerSelectedJourney()
     if not journey or not panelJourneyManager.confirmFrame then
+        return
+    end
+    if journey.isExample == true then
+        PanelSetStatus("Packaged example Journeys cannot be deleted.", false)
         return
     end
     DreamwayCloseJourneyMetadataMenu()
@@ -5775,6 +7201,7 @@ function DreamwayRefreshJourneyManager()
 
     local journeys = DreamwaySortedJourneys()
     local selected = DreamwayManagerSelectedJourney()
+    local nextY = 0
     for index, journey in ipairs(journeys) do
         local journeyId = journey.id
         local row = panelJourneyManager.rows[index]
@@ -5795,7 +7222,7 @@ function DreamwayRefreshJourneyManager()
             panelJourneyManager.rows[index] = row
         end
         row:ClearAllPoints()
-        row:SetPoint("TOPLEFT", panelJourneyManager.listContent, "TOPLEFT", 0, -((index - 1) * 28))
+        row:SetPoint("TOPLEFT", panelJourneyManager.listContent, "TOPLEFT", 0, -nextY)
         row.label:SetText(tostring(journey.name or journeyId))
         row.activeLabel:SetShown(journeyId == DreamwayActiveJourneyId())
         row:SetActive(selected and journeyId == selected.id)
@@ -5805,11 +7232,60 @@ function DreamwayRefreshJourneyManager()
             DreamwayRefreshJourneyManager()
         end)
         row:Show()
+        nextY = nextY + 28
     end
     for index = #journeys + 1, #panelJourneyManager.rows do
         panelJourneyManager.rows[index]:Hide()
     end
-    panelJourneyManager.listContent:SetHeight(math.max(24, #journeys * 28))
+    if #journeys == 0 then
+        nextY = nextY + 28
+    end
+
+    panelJourneyManager.exampleHeader:ClearAllPoints()
+    panelJourneyManager.exampleHeader:SetPoint("TOPLEFT", panelJourneyManager.listContent, "TOPLEFT", 0, -nextY)
+    panelJourneyManager.exampleHeader.label:SetText((panelJourneyManager.examplesCollapsed and "+ " or "- ") .. "Example journeys")
+    panelJourneyManager.exampleHeader:Show()
+    nextY = nextY + 30
+
+    panelJourneyManager.exampleRows = panelJourneyManager.exampleRows or {}
+    local visibleExampleCount = panelJourneyManager.examplesCollapsed and 0 or #DREAMWAY_EXAMPLE_JOURNEYS
+    for index = 1, visibleExampleCount do
+        local journey = DreamwayWorkingExampleJourney(DREAMWAY_EXAMPLE_JOURNEYS[index].id, false)
+        local journeyId = journey.id
+        local row = panelJourneyManager.exampleRows[index]
+        if not row then
+            row = CreateTinyButton(panelJourneyManager.listContent, "", 238)
+            row:SetHeight(24)
+            row.label:ClearAllPoints()
+            row.label:SetPoint("LEFT", row, "LEFT", 8, 0)
+            row.label:SetPoint("RIGHT", row, "RIGHT", -52, 0)
+            row.label:SetJustifyH("LEFT")
+            row.label:SetWordWrap(false)
+            row.activeLabel = CreateLabel(row, "GameFontHighlightSmall")
+            row.activeLabel:SetPoint("RIGHT", row, "RIGHT", -8, 0)
+            row.activeLabel:SetWidth(40)
+            row.activeLabel:SetJustifyH("RIGHT")
+            row.activeLabel:SetText("Active")
+            row.activeLabel:SetTextColor(0.35, 1, 0.35)
+            panelJourneyManager.exampleRows[index] = row
+        end
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", panelJourneyManager.listContent, "TOPLEFT", 0, -nextY)
+        row.label:SetText(tostring(journey.name or journeyId))
+        row.activeLabel:SetShown(journeyId == DreamwayActiveJourneyId())
+        row:SetActive(selected and journeyId == selected.id)
+        row:SetScript("OnClick", function()
+            DreamwayCloseJourneyMetadataMenu()
+            panelJourneyManager.selectedJourneyId = journeyId
+            DreamwayRefreshJourneyManager()
+        end)
+        row:Show()
+        nextY = nextY + 28
+    end
+    for index = visibleExampleCount + 1, #panelJourneyManager.exampleRows do
+        panelJourneyManager.exampleRows[index]:Hide()
+    end
+    panelJourneyManager.listContent:SetHeight(math.max(24, nextY))
 
     local hasSelected = selected ~= nil
     panelJourneyManager.emptyText:SetShown(#journeys == 0)
@@ -5829,19 +7305,40 @@ function DreamwayRefreshJourneyManager()
     end
 
     selected.character = selected.character or {}
+    local isExample = selected.isExample == true
+    panelJourneyManager.exportButton.label:SetText(isExample and "Save as New" or "Export Selected")
+    for _, button in ipairs({
+        panelJourneyManager.deleteButton,
+        panelJourneyManager.factionButton,
+        panelJourneyManager.raceButton,
+        panelJourneyManager.classButton,
+    }) do
+        if isExample then button:Disable() else button:Enable() end
+    end
     local questCount = 0
     for _, batch in ipairs(selected.batches or {}) do
         questCount = questCount + #(batch.quests or {})
     end
     local hiddenCount = #(selected.hiddenQuestIds or selected.unusedQuestIds or {})
     panelJourneyManager.nameText:SetText(selected.name or selected.id)
-    panelJourneyManager.idText:SetText("ID: " .. tostring(selected.id or "Unknown"))
+    panelJourneyManager.idText:SetText((isExample and "Packaged example  |  ID: " or "ID: ") .. tostring(selected.id or "Unknown"))
     panelJourneyManager.versionValue:SetText(DreamwayGameVersionLabel(selected.gameVersion) .. " (fixed)")
     panelJourneyManager.factionButton.label:SetText(DreamwayJourneyFactionLabel(selected) .. "  v")
     panelJourneyManager.raceButton.label:SetText(DreamwayJourneyRaceLabel(selected) .. "  v")
     panelJourneyManager.classButton.label:SetText(DreamwayJourneyClassLabel(selected) .. "  v")
-    local savedText = selected.savedAt and selected.savedAt ~= "" and ("  |  Saved " .. tostring(selected.savedAt)) or ""
-    panelJourneyManager.countText:SetText(tostring(#(selected.batches or {})) .. " batches  |  " .. tostring(questCount) .. " assigned quests  |  " .. tostring(hiddenCount) .. " hidden" .. savedText)
+    local savedText = selected.savedAt and selected.savedAt ~= "" and ("  |  Saved " .. DreamwayReadableDateTime(selected.savedAt)) or ""
+    local unavailableWarnings, prerequisiteWarnings, _, characterWarnings = JourneyWarningSummary(selected)
+    local unavailableCount = 0
+    local prerequisiteCount = 0
+    local characterCount = 0
+    for _ in pairs(unavailableWarnings or {}) do unavailableCount = unavailableCount + 1 end
+    for _ in pairs(prerequisiteWarnings or {}) do prerequisiteCount = prerequisiteCount + 1 end
+    for _ in pairs(characterWarnings or {}) do characterCount = characterCount + 1 end
+    local warningText = ""
+    if unavailableCount > 0 then warningText = warningText .. "  |  " .. tostring(unavailableCount) .. " unavailable" end
+    if prerequisiteCount > 0 then warningText = warningText .. "  |  " .. tostring(prerequisiteCount) .. " invalid placement" .. (prerequisiteCount == 1 and "" or "s") end
+    if characterCount > 0 then warningText = warningText .. "  |  " .. tostring(characterCount) .. " character warning" .. (characterCount == 1 and "" or "s") end
+    panelJourneyManager.countText:SetText(tostring(#(selected.batches or {})) .. " batches  |  " .. tostring(questCount) .. " assigned quests  |  " .. tostring(hiddenCount) .. " hidden" .. warningText .. savedText)
     local isActive = selected.id == DreamwayActiveJourneyId()
     panelJourneyManager.activeText:SetText(isActive and "Currently active" or "Not active")
     panelJourneyManager.activeText:SetTextColor(isActive and 0.35 or 0.75, isActive and 1 or 0.75, isActive and 0.35 or 0.75)
@@ -5849,8 +7346,8 @@ end
 
 function DreamwayCreateJourneyManager()
     local frame = CreateBackdropFrame("Dreamway_JourneyManager", panelFrame)
-    frame:SetPoint("TOPLEFT", panelFrame, "TOPLEFT", 18, -58)
-    frame:SetPoint("BOTTOMRIGHT", panelFrame, "BOTTOMRIGHT", -18, 24)
+    frame:SetPoint("TOPLEFT", panelFrame, "TOPLEFT", 12, -58)
+    frame:SetPoint("BOTTOMRIGHT", panelFrame, "BOTTOMRIGHT", -12, 12)
     frame:SetFrameLevel(panelFrame:GetFrameLevel() + 8)
     frame:EnableMouse(true)
     frame:SetScript("OnMouseDown", DreamwayCloseJourneyMetadataMenu)
@@ -5876,7 +7373,12 @@ function DreamwayCreateJourneyManager()
     panelJourneyManager.exportButton:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -12, -10)
     panelJourneyManager.exportButton:SetScript("OnClick", function()
         DreamwayCloseJourneyMetadataMenu()
-        ShowJourneyExportArea(DreamwayManagerSelectedJourney())
+        local selected = DreamwayManagerSelectedJourney()
+        if selected and selected.isExample == true then
+            DreamwayShowSaveExampleAsNew()
+        else
+            ShowJourneyExportArea(selected)
+        end
     end)
 
     panelJourneyManager.importButton = CreateTinyButton(frame, "Import Journey", 96)
@@ -5909,9 +7411,22 @@ function DreamwayCreateJourneyManager()
     panelJourneyManager.listContent:SetSize(238, 24)
     listScroll:SetScrollChild(panelJourneyManager.listContent)
 
+    panelJourneyManager.examplesCollapsed = false
+    panelJourneyManager.exampleHeader = CreateTinyButton(panelJourneyManager.listContent, "- Example journeys", 238)
+    panelJourneyManager.exampleHeader:SetHeight(24)
+    panelJourneyManager.exampleHeader.label:ClearAllPoints()
+    panelJourneyManager.exampleHeader.label:SetPoint("LEFT", panelJourneyManager.exampleHeader, "LEFT", 8, 0)
+    panelJourneyManager.exampleHeader.label:SetPoint("RIGHT", panelJourneyManager.exampleHeader, "RIGHT", -8, 0)
+    panelJourneyManager.exampleHeader.label:SetJustifyH("LEFT")
+    panelJourneyManager.exampleHeader.label:SetTextColor(1, 0.82, 0.12)
+    panelJourneyManager.exampleHeader:SetScript("OnClick", function()
+        panelJourneyManager.examplesCollapsed = not panelJourneyManager.examplesCollapsed
+        DreamwayRefreshJourneyManager()
+    end)
+
     panelJourneyManager.emptyText = CreateLabel(listFrame, "GameFontDisableSmall")
     panelJourneyManager.emptyText:SetPoint("TOPLEFT", listFrame, "TOPLEFT", 12, -12)
-    panelJourneyManager.emptyText:SetText("No Journeys imported yet.")
+    panelJourneyManager.emptyText:SetText("No saved Journeys yet.")
 
     local detail = CreateBackdropFrame(nil, frame)
     detail:SetPoint("TOPLEFT", listFrame, "TOPRIGHT", 12, 0)
@@ -6001,6 +7516,7 @@ function DreamwayCreateJourneyManager()
     createTitle:SetPoint("TOPLEFT", createFrame, "TOPLEFT", 16, -14)
     createTitle:SetText("Create Journey")
     createTitle:SetTextColor(1, 0.82, 0.12)
+    panelJourneyManager.createTitle = createTitle
 
     local createLabel = CreateLabel(createFrame, "GameFontHighlightSmall")
     createLabel:SetPoint("TOPLEFT", createTitle, "BOTTOMLEFT", 0, -14)
@@ -6031,9 +7547,10 @@ function DreamwayCreateJourneyManager()
         createFrame:Hide()
     end)
 
-    local createConfirm = CreateTinyButton(createFrame, "Create", 64)
+    local createConfirm = CreateTinyButton(createFrame, "Create", 90)
     createConfirm:SetPoint("RIGHT", createCancel, "LEFT", -8, 0)
     createConfirm:SetScript("OnClick", DreamwayCreateNewJourney)
+    panelJourneyManager.createConfirm = createConfirm
     createFrame:Hide()
 
     local confirmFrame = CreateBackdropFrame(nil, frame)
@@ -6072,20 +7589,842 @@ function DreamwayCreateJourneyManager()
         if GameTooltip then
             GameTooltip:Hide()
         end
-        if panelJourneyManager.toggleButton then
-            panelJourneyManager.toggleButton.label:SetText("Return to Planner")
-        end
         panelJourneyManager.selectedJourneyId = DreamwayActiveJourneyId()
         DreamwayRefreshJourneyManager()
+        DreamwayRefreshPanelNavigation()
     end)
     frame:SetScript("OnHide", function()
         DreamwayCloseJourneyMetadataMenu()
         createFrame:Hide()
         confirmFrame:Hide()
-        if panelJourneyManager.toggleButton then
-            panelJourneyManager.toggleButton.label:SetText("Manage Journeys")
-        end
+        DreamwayRefreshPanelNavigation()
     end)
+    frame:Hide()
+end
+
+function DreamwayRefreshPanelNavigation()
+    local view = panelJourneyManager.view or "planner"
+    if panelJourneyManager.plannerButton then
+        panelJourneyManager.plannerButton:SetActive(view == "planner")
+    end
+    if panelJourneyManager.toggleButton then
+        panelJourneyManager.toggleButton:SetActive(view == "journeys")
+    end
+    if panelJourneyManager.warningButton then
+        panelJourneyManager.warningButton:SetActive(view == "warnings")
+    end
+    if panelJourneyManager.infoButton then
+        panelJourneyManager.infoButton:SetActive(view == "info")
+    end
+    if panelJourneyManager.settingsButton then
+        panelJourneyManager.settingsButton:SetActive(view == "settings")
+    end
+end
+
+function DreamwayUpdatePanelStatusBounds()
+    local statusFrame = panelJourneyManager and panelJourneyManager.statusFrame
+    if not statusFrame or not panelFrame or not panelJourneyManager.plannerButton then
+        return
+    end
+    local rightAnchor = panelJourneyManager.plannerButton
+    if panelJourneyManager.warningButton and panelJourneyManager.warningButton:IsShown() then
+        rightAnchor = panelJourneyManager.warningButton
+    end
+    statusFrame:ClearAllPoints()
+    statusFrame:SetPoint("TOPLEFT", panelFrame, "TOPLEFT", 330, -10)
+    statusFrame:SetPoint("TOPRIGHT", rightAnchor, "TOPLEFT", -10, 0)
+    statusFrame:SetPoint("BOTTOMLEFT", panelFrame, "TOPLEFT", 330, -55)
+end
+
+function DreamwaySetPlannerContentShown(shown)
+    if panelJourneyManager.statusFrame then
+        panelJourneyManager.statusFrame:SetShown(shown)
+    end
+    if panelBatchScroll then
+        panelBatchScroll:SetShown(shown)
+    end
+    if panelJourneyManager.hiddenDrop then
+        panelJourneyManager.hiddenDrop:SetShown(shown)
+    end
+    if panelJourneyManager.batchScrollBar then
+        panelJourneyManager.batchScrollBar:SetShown(shown)
+    end
+    if panelSearchResults then
+        panelSearchResults:SetShown(shown)
+    end
+    if panelShowAssignedCheck then
+        panelShowAssignedCheck:SetShown(shown)
+        if panelShowAssignedCheck.label then
+            panelShowAssignedCheck.label:SetShown(shown)
+        end
+    end
+    DreamwayUpdateUndoButton()
+end
+
+function DreamwaySetPanelView(view)
+    view = view or "planner"
+    panelJourneyManager.view = view
+    DreamwayCloseJourneyMetadataMenu()
+    if DreamwayCloseQuestItemButtonMenu then
+        DreamwayCloseQuestItemButtonMenu()
+    end
+
+    if panelImportArea then
+        panelImportArea:Hide()
+    end
+    if panelExportArea then
+        panelExportArea:Hide()
+    end
+    DreamwaySetPlannerContentShown(view == "planner")
+    if panelJourneyManager.frame then
+        panelJourneyManager.frame:SetShown(view == "journeys")
+    end
+    if panelJourneyManager.settings and panelJourneyManager.settings.frame then
+        panelJourneyManager.settings.frame:SetShown(view == "settings")
+    end
+    if panelJourneyManager.info and panelJourneyManager.info.frame then
+        panelJourneyManager.info.frame:SetShown(view == "info")
+    end
+    if panelJourneyManager.warnings and panelJourneyManager.warnings.frame then
+        panelJourneyManager.warnings.frame:SetShown(view == "warnings")
+    end
+
+    if view == "journeys" then
+        panelJourneyManager.selectedJourneyId = DreamwayActiveJourneyId()
+        DreamwayRefreshJourneyManager()
+    elseif view == "settings" then
+        DreamwayRefreshSettingsPanel()
+    end
+    DreamwayRefreshPanelNavigation()
+    DreamwayUpdateUndoButton()
+end
+
+function DreamwayEstimateEventLogBytes(events)
+    local bytes = 4
+    for eventIndex, event in ipairs(events or {}) do
+        bytes = bytes + #tostring(eventIndex) + 12
+        for valueIndex, value in ipairs(event) do
+            bytes = bytes + #tostring(valueIndex) + #tostring(value or 0) + 12
+        end
+    end
+    return bytes
+end
+
+function DreamwayRefreshSettingsPanel()
+    local ui = panelJourneyManager.settings
+    if not ui then
+        return
+    end
+    local settings = DreamwaySettingsData()
+    local objective = settings.objectiveTracker
+    local map = settings.map
+    local eventLog = settings.eventLog
+
+    ui.previousCheck:SetChecked(objective.previousInProgress == true)
+    ui.levelCheck:SetChecked(objective.showQuestLevels == true)
+    ui.alwaysShowCheck:SetChecked(objective.alwaysShow == true)
+    ui.hideHiddenCheck:SetChecked(map.hideHiddenMarkers == true)
+    ui.currentBatchCheck:SetChecked(map.hideExceptCurrentBatch == true)
+    if ui.itemButton and ui.itemButton.label then
+        local itemLabels = {
+            follow = "Follow Questie",
+            always = "Always",
+            never = "Never",
+        }
+        ui.itemButton.label:SetText((itemLabels[objective.questItemButtons] or "Always") .. "  v")
+    end
+
+    ui.eventMasterCheck:SetChecked(eventLog.enabled == true)
+    for eventType, check in pairs(ui.eventChecks) do
+        check:SetChecked(eventLog.types[tostring(eventType)] == true)
+        check:SetAlpha(eventLog.enabled and 1 or 0.42)
+        check.label:SetTextColor(
+            eventLog.enabled and 0.88 or 0.45,
+            eventLog.enabled and 0.88 or 0.45,
+            eventLog.enabled and 0.88 or 0.45
+        )
+        if eventLog.enabled then
+            check:Enable()
+        else
+            check:Disable()
+        end
+    end
+
+    local profile = ProfileRecorder.EnsureCharacterProfile()
+    local eventCount = #(profile.events or {})
+    local megabytes = DreamwayEstimateEventLogBytes(profile.events) / (1024 * 1024)
+    local unsavedCount = tonumber(ProfileRecorder.unsavedEventCount) or 0
+    ui.eventSize:SetText(string.format(
+        "~%.2f MB  |  %d events  |  |cffffb85c%d unsaved|r",
+        megabytes,
+        eventCount,
+        unsavedCount
+    ))
+end
+
+function DreamwaySetQuestItemButtonMode(setting)
+    DreamwayCloseQuestItemButtonMenu()
+    DreamwaySettingsData().objectiveTracker.questItemButtons = setting
+    SaveDb()
+    DreamwayRefreshSettingsPanel()
+    RefreshDreamwayTracker()
+end
+
+function DreamwayCloseQuestItemButtonMenu()
+    local dropDown = GetQuestieDropDown()
+    if dropDown and dropDown.CloseDropDownMenus then
+        pcall(dropDown.CloseDropDownMenus, dropDown)
+    end
+    if panelJourneyManager.settings then
+        panelJourneyManager.settings.itemMenuOpen = false
+    end
+end
+
+function DreamwayShowQuestItemButtonMenu(button)
+    local dropDown = GetQuestieDropDown()
+    if not dropDown or not dropDown.EasyMenu then
+        return
+    end
+    local ui = panelJourneyManager.settings
+    if not ui then
+        return
+    end
+    if ui.itemMenuOpen then
+        DreamwayCloseQuestItemButtonMenu()
+        return
+    end
+    if not ui.itemMenuFrame then
+        if dropDown.Create_UIDropDownMenu then
+            ui.itemMenuFrame = dropDown:Create_UIDropDownMenu("Dreamway_QuestItemButtonMenu", UIParent)
+        else
+            ui.itemMenuFrame = CreateFrame("Frame", "Dreamway_QuestItemButtonMenu", UIParent, "UIDropDownMenuTemplate")
+        end
+    end
+    local current = DreamwaySettingsData().objectiveTracker.questItemButtons
+    local menu = {}
+    for _, option in ipairs({
+        { value = "follow", text = "Follow Questie" },
+        { value = "always", text = "Always" },
+        { value = "never", text = "Never" },
+    }) do
+        local selected = option
+        menu[#menu + 1] = {
+            text = selected.text,
+            checked = current == selected.value,
+            func = function()
+                DreamwaySetQuestItemButtonMode(selected.value)
+            end,
+        }
+    end
+    dropDown:EasyMenu(menu, ui.itemMenuFrame, button, 0, 0, "MENU")
+    ui.itemMenuOpen = true
+    local menuList = _G.L_DropDownListQuestie1
+    if menuList and not ui.itemMenuCloseHooked then
+        menuList:HookScript("OnHide", function()
+            if panelJourneyManager.settings then
+                panelJourneyManager.settings.itemMenuOpen = false
+            end
+        end)
+        ui.itemMenuCloseHooked = true
+    end
+end
+
+function DreamwayOpenQuestieTrackerSettings()
+    local options = ImportQuestieModule("QuestieOptions")
+    local aceConfigDialog = LibStub and LibStub("AceConfigDialog-3.0", true) or nil
+    if not options or not aceConfigDialog or not QuestieConfigFrame then
+        PanelSetStatus("Questie's Tracker settings are not available yet.", false)
+        return
+    end
+    local selected = pcall(aceConfigDialog.SelectGroup, aceConfigDialog, "Questie", "tracker_tab")
+    local opened = selected and pcall(aceConfigDialog.Open, aceConfigDialog, "Questie", QuestieConfigFrame)
+    if not opened or not selected then
+        PanelSetStatus("Could not open Questie's Tracker settings.", false)
+        return
+    end
+    if panelFrame then
+        panelFrame:Hide()
+    end
+end
+
+function DreamwayCreateSettingsCheck(parent, text, x, y, width, onClick)
+    local check = panelSearchFilters.CreateCheckButton(parent, text)
+    check:SetPoint("TOPLEFT", parent, "TOPLEFT", x, y)
+    check.label:SetWidth(width or 280)
+    check.label:SetWordWrap(true)
+    check:SetScript("OnClick", onClick)
+    return check
+end
+
+function DreamwayClearEventLog()
+    local profile = ProfileRecorder.EnsureCharacterProfile()
+    profile.events = {}
+    profile.recordedCompleteQuestIds = {}
+    profile.recordedCompleteObjectiveKeys = {}
+    profile.updatedAt = ProfileRecorder.UpdatedAt(ProfileRecorder.ServerTimestamp())
+    ProfileRecorder.unsavedEventCount = 0
+    ProfileRecorder.lastObjectiveEvents = {}
+    if panelJourneyManager.settings and panelJourneyManager.settings.confirmFrame then
+        panelJourneyManager.settings.confirmFrame:Hide()
+    end
+    DreamwayRefreshSettingsPanel()
+    PanelSetStatus("Cleared this character's replay event log.", true)
+end
+
+function DreamwayCreateSettingsPanel()
+    local frame = CreateBackdropFrame("Dreamway_SettingsPanel", panelFrame)
+    frame:SetPoint("TOPLEFT", panelFrame, "TOPLEFT", 12, -58)
+    frame:SetPoint("BOTTOMRIGHT", panelFrame, "BOTTOMRIGHT", -12, 12)
+    frame:SetFrameLevel(panelFrame:GetFrameLevel() + 8)
+    frame:EnableMouse(true)
+    frame:SetScript("OnMouseDown", function()
+        DreamwayCloseQuestItemButtonMenu()
+    end)
+    SetFrameBackdrop(frame, 0.01, 0.01, 0.012, 0.99, 0.72)
+
+    local ui = {
+        frame = frame,
+        eventChecks = {},
+    }
+    panelJourneyManager.settings = ui
+
+    local frameWidth = 1044
+    local columnWidth = frameWidth / 3
+    for index = 1, 2 do
+        local divider = frame:CreateTexture(nil, "ARTWORK")
+        divider:SetColorTexture(0.32, 0.32, 0.32, 0.72)
+        divider:SetPoint("TOPLEFT", frame, "TOPLEFT", columnWidth * index, -12)
+        divider:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", columnWidth * index, 12)
+        divider:SetWidth(1)
+    end
+
+    local function createColumnTitle(text, column)
+        local centerX = (columnWidth * (column - 0.5))
+        local title = CreateLabel(frame, "GameFontNormalLarge")
+        title:SetPoint("TOP", frame, "TOPLEFT", centerX, -18)
+        title:SetText(text)
+        title:SetTextColor(1, 0.82, 0.12)
+        local underline = frame:CreateTexture(nil, "ARTWORK")
+        underline:SetColorTexture(0.55, 0.45, 0.12, 0.72)
+        underline:SetPoint("TOP", title, "BOTTOM", 0, -5)
+        underline:SetSize(210, 1)
+    end
+
+    createColumnTitle("Objective Tracker", 1)
+    createColumnTitle("Map", 2)
+    createColumnTitle("Event Log", 3)
+
+    ui.previousCheck = DreamwayCreateSettingsCheck(frame, "Previous quests in progress", 18, -68, 290, function(self)
+        local enabled = self:GetChecked() and true or false
+        DreamwaySettingsData().objectiveTracker.previousInProgress = enabled
+        ProfileRecorder.showPreviousBatchQuests = enabled
+        SaveDb()
+        RefreshDreamwayTracker()
+    end)
+    ConfigurePanelTooltip(
+        ui.previousCheck,
+        "Previous quests in progress",
+        "Include level-appropriate quests from earlier batches when they are incomplete and still in your quest log."
+    )
+
+    local itemLabel = CreateLabel(frame, "GameFontHighlightSmall")
+    itemLabel:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -100)
+    itemLabel:SetText("Show quest item buttons")
+    itemLabel:SetTextColor(0.88, 0.88, 0.88)
+    ui.itemButton = CreateTinyButton(frame, "Always  v", 130)
+    ui.itemButton:SetPoint("TOPLEFT", itemLabel, "BOTTOMLEFT", 0, -5)
+    ui.itemButton:SetScript("OnClick", function(self)
+        DreamwayShowQuestItemButtonMenu(self)
+    end)
+
+    ui.levelCheck = DreamwayCreateSettingsCheck(frame, "Show quest levels", 18, -146, 290, function(self)
+        DreamwaySettingsData().objectiveTracker.showQuestLevels = self:GetChecked() and true or false
+        SaveDb()
+        RefreshDreamwayTracker()
+    end)
+
+    ui.alwaysShowCheck = DreamwayCreateSettingsCheck(frame, "Always show the objective tracker", 18, -174, 290, function(self)
+        DreamwaySettingsData().objectiveTracker.alwaysShow = self:GetChecked() and true or false
+        SaveDb()
+        if mode == MODE_DREAMWAY and DreamwaySettingsData().objectiveTracker.alwaysShow and baseFrame then
+            baseFrame:Show()
+        else
+            local tracker = GetQuestieTracker()
+            if tracker and tracker.Update then
+                tracker:Update()
+            end
+        end
+        RefreshDreamwayTracker()
+    end)
+
+    ui.questieTrackerButton = CreateTinyButton(frame, "Open Questie Tracker Settings", 178)
+    ui.questieTrackerButton:SetHeight(24)
+    ui.questieTrackerButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -210)
+    ui.questieTrackerButton:SetScript("OnClick", DreamwayOpenQuestieTrackerSettings)
+    ConfigurePanelTooltip(
+        ui.questieTrackerButton,
+        "Questie Tracker settings",
+        "Open the Questie settings inherited by Dreamway, including tracker dimensions, fonts, spacing, and appearance."
+    )
+
+    local mapX = columnWidth + 18
+    ui.hideHiddenCheck = DreamwayCreateSettingsCheck(frame, "Hide Hidden quest map markers in Dreamway mode", mapX, -68, 290, function(self)
+        DreamwaySettingsData().map.hideHiddenMarkers = self:GetChecked() and true or false
+        SaveDb()
+        ApplyUnusedQuestSuppression()
+    end)
+    ui.currentBatchCheck = DreamwayCreateSettingsCheck(frame, "Hide everything except the current batch", mapX, -104, 290, function(self)
+        DreamwaySettingsData().map.hideExceptCurrentBatch = self:GetChecked() and true or false
+        SaveDb()
+        ApplyUnusedQuestSuppression()
+    end)
+
+    local eventX = (columnWidth * 2) + 18
+    ui.eventMasterCheck = DreamwayCreateSettingsCheck(frame, "Record replay history", eventX, -68, 290, function(self)
+        DreamwaySettingsData().eventLog.enabled = self:GetChecked() and true or false
+        SaveDb()
+        DreamwayRefreshSettingsPanel()
+    end)
+
+    local eventOptions = {
+        { ProfileRecorder.EVENT_QUEST_PICKUP, "Quest pickups" },
+        { ProfileRecorder.EVENT_QUEST_TURNIN, "Quest hand-ins" },
+        { ProfileRecorder.EVENT_KILL, "Mob kills" },
+        { ProfileRecorder.EVENT_DEATH, "Player deaths" },
+        { ProfileRecorder.EVENT_OBJECTIVE, "Quest objective progress" },
+        { ProfileRecorder.EVENT_QUEST_COMPLETE, "Quest objectives completed" },
+        { ProfileRecorder.EVENT_LEVEL, "Level ups" },
+        { ProfileRecorder.EVENT_LOGIN, "Logins" },
+        { ProfileRecorder.EVENT_LOGOUT, "Logouts" },
+    }
+    for index, option in ipairs(eventOptions) do
+        local eventType = option[1]
+        local check = DreamwayCreateSettingsCheck(frame, option[2], eventX + 12, -96 - ((index - 1) * 22), 270, function(self)
+            DreamwaySettingsData().eventLog.types[tostring(eventType)] = self:GetChecked() and true or false
+            SaveDb()
+        end)
+        ui.eventChecks[eventType] = check
+    end
+
+    ui.eventSize = CreateLabel(frame, "GameFontHighlightSmall")
+    ui.eventSize:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", eventX + 4, 56)
+    ui.eventSize:SetTextColor(0.65, 0.65, 0.65)
+
+    local clearButton = CreateTinyButton(frame, "Clear Event Log", 112)
+    clearButton:SetHeight(24)
+    clearButton:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", eventX + 4, 20)
+    clearButton:SetBackdropColor(0.24, 0.025, 0.025, 0.92)
+    clearButton:SetBackdropBorderColor(0.9, 0.2, 0.18, 0.8)
+    clearButton.label:SetTextColor(1, 0.38, 0.32)
+    clearButton:SetScript("OnClick", function()
+        ui.confirmFrame:Show()
+    end)
+
+    local reloadButton = CreateTinyButton(frame, "Reload UI to save", 118)
+    reloadButton:SetHeight(24)
+    reloadButton:SetPoint("LEFT", clearButton, "RIGHT", 8, 0)
+    reloadButton:SetScript("OnClick", function()
+        ReloadUI()
+    end)
+    ConfigurePanelTooltip(
+        reloadButton,
+        "Reload UI to save",
+        "Reload the interface now so recorded events are written to this character's SavedVariables file."
+    )
+
+    local confirmFrame = CreateBackdropFrame(nil, frame)
+    confirmFrame:SetSize(430, 154)
+    confirmFrame:SetPoint("CENTER", frame, "CENTER", 0, 0)
+    confirmFrame:SetFrameLevel(frame:GetFrameLevel() + 5)
+    confirmFrame:EnableMouse(true)
+    SetFrameBackdrop(confirmFrame, 0.04, 0.01, 0.01, 0.99, 0.9)
+    ui.confirmFrame = confirmFrame
+
+    local confirmTitle = CreateLabel(confirmFrame, "GameFontNormalLarge")
+    confirmTitle:SetPoint("TOPLEFT", confirmFrame, "TOPLEFT", 16, -14)
+    confirmTitle:SetText("Clear Event Log")
+    confirmTitle:SetTextColor(1, 0.38, 0.32)
+    local confirmText = CreateLabel(confirmFrame, "GameFontHighlightSmall")
+    confirmText:SetPoint("TOPLEFT", confirmTitle, "BOTTOMLEFT", 0, -12)
+    confirmText:SetPoint("RIGHT", confirmFrame, "RIGHT", -16, 0)
+    confirmText:SetText("Permanently clear all replay events recorded for this character?")
+    confirmText:SetJustifyH("LEFT")
+    local cancelButton = CreateTinyButton(confirmFrame, "Cancel", 64)
+    cancelButton:SetPoint("BOTTOMRIGHT", confirmFrame, "BOTTOMRIGHT", -16, 14)
+    cancelButton:SetScript("OnClick", function() confirmFrame:Hide() end)
+    local confirmButton = CreateTinyButton(confirmFrame, "Clear", 64)
+    confirmButton:SetPoint("RIGHT", cancelButton, "LEFT", -8, 0)
+    confirmButton:SetBackdropColor(0.24, 0.025, 0.025, 0.92)
+    confirmButton.label:SetTextColor(1, 0.38, 0.32)
+    confirmButton:SetScript("OnClick", DreamwayClearEventLog)
+    confirmFrame:Hide()
+
+    frame:SetScript("OnShow", function()
+        if GameTooltip then
+            GameTooltip:Hide()
+        end
+        DreamwayRefreshSettingsPanel()
+        DreamwayRefreshPanelNavigation()
+    end)
+    frame:SetScript("OnHide", function()
+        confirmFrame:Hide()
+        DreamwayRefreshPanelNavigation()
+    end)
+    frame:Hide()
+end
+
+-- ABOUT COPY: Edit the section titles and body text in this table.
+local DREAMWAY_INFO_SECTIONS = {
+    {
+        title = "Plan Your Own Route",
+        body = "Dreamway organizes quests into Journeys made of ordered batches. Each batch represents a group of quests you intend to pick up, work on, and turn in together.\n\nUse the Planner to select a Journey, move quests between batches, hide quests you do not intend to complete, and keep the current batch visible in the objective tracker.",
+    },
+    {
+        title = "Companion Web App",
+        body = "The companion dreamway.html app is the primary place to browse the complete quest database, inspect maps and quest chains, build or revise Journeys, and replay a character's recorded history.\n\nTransfer Journeys between the web app and addon with the compact import and export strings in Manage Journeys. Character profiles and replay events are stored locally in WoW SavedVariables.",
+    },
+    {
+        title = "Questie Acknowledgement",
+        body = "Dreamway depends on Questie for its underlying quest database and in-game quest and map integration. Dreamway is an independent project and is not produced or endorsed by the Questie team.\n\nMany thanks to the Questie maintainers and contributors for the extensive Classic quest data and addon infrastructure that make Dreamway possible.",
+    },
+}
+
+function DreamwayCreateInfoPanel()
+    local frame = CreateBackdropFrame("Dreamway_InfoPanel", panelFrame)
+    frame:SetPoint("TOPLEFT", panelFrame, "TOPLEFT", 12, -58)
+    frame:SetPoint("BOTTOMRIGHT", panelFrame, "BOTTOMRIGHT", -12, 12)
+    frame:SetFrameLevel(panelFrame:GetFrameLevel() + 8)
+    frame:EnableMouse(true)
+    SetFrameBackdrop(frame, 0.01, 0.01, 0.012, 0.99, 0.72)
+
+    panelJourneyManager.info = {
+        frame = frame,
+    }
+
+    local title = CreateLabel(frame, "GameFontNormalLarge")
+    title:SetPoint("TOP", frame, "TOP", 0, -20)
+    title:SetJustifyH("LEFT")
+    title:SetText("About Dreamway")
+    title:SetTextColor(1, 0.82, 0.12)
+
+    local subtitle = CreateLabel(frame, "GameFontHighlightSmall")
+    subtitle:SetPoint("TOP", title, "BOTTOM", 0, -7)
+    subtitle:SetWidth(920)
+    subtitle:SetJustifyH("LEFT")
+    subtitle:SetText("A flexible quest planner for building your own route through World of Warcraft Classic.")
+    subtitle:SetTextColor(0.72, 0.72, 0.72)
+
+    local scroll = CreateFrame("ScrollFrame", "Dreamway_InfoScroll", frame, "UIPanelScrollFrameTemplate")
+    scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -72)
+    scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -34, 18)
+
+    local content = CreateFrame("Frame", nil, scroll)
+    content:SetSize(1, 1)
+    scroll:SetScrollChild(content)
+
+    local sections = {}
+    local function layoutSections()
+        local contentWidth = math.max(320, scroll:GetWidth() - 24)
+        local width = math.max(320, math.floor(contentWidth * 0.50))
+        local y = -4
+        content:SetWidth(contentWidth)
+        title:SetWidth(width)
+        subtitle:SetWidth(width)
+
+        for _, section in ipairs(sections) do
+            section.header:ClearAllPoints()
+            section.header:SetPoint("TOP", content, "TOP", 0, y)
+            section.header:SetSize(width, 32)
+            y = y - 38
+
+            section.indicator:SetText(section.expanded and "-" or "+")
+            section.body:SetShown(section.expanded)
+            if section.expanded then
+                section.body:ClearAllPoints()
+                section.body:SetPoint("TOP", content, "TOP", 0, y)
+                section.body:SetWidth(width - 36)
+                local bodyHeight = math.max(18, section.body:GetStringHeight())
+                y = y - bodyHeight - 18
+            end
+        end
+
+        content:SetHeight(math.max(scroll:GetHeight(), math.abs(y) + 4))
+    end
+
+    for index, sectionData in ipairs(DREAMWAY_INFO_SECTIONS) do
+        local section = {
+            expanded = index == 1,
+        }
+        section.header = CreateFrame("Button", nil, content, BackdropTemplateMixin and "BackdropTemplate")
+        SetFrameBackdrop(section.header, 0.035, 0.04, 0.032, 0.92, 0.42)
+
+        section.indicator = CreateLabel(section.header, "GameFontNormal")
+        section.indicator:SetPoint("LEFT", section.header, "LEFT", 12, 0)
+        section.indicator:SetWidth(16)
+        section.indicator:SetJustifyH("CENTER")
+        section.indicator:SetTextColor(1, 0.9, 0.55)
+
+        section.heading = CreateLabel(section.header, "GameFontNormal")
+        section.heading:SetPoint("LEFT", section.header, "LEFT", 36, 0)
+        section.heading:SetPoint("RIGHT", section.header, "RIGHT", -36, 0)
+        section.heading:SetJustifyH("LEFT")
+        section.heading:SetText(sectionData.title)
+        section.heading:SetTextColor(1, 0.82, 0.12)
+
+        section.body = CreateLabel(content, "GameFontHighlightSmall")
+        section.body:SetJustifyH("LEFT")
+        section.body:SetJustifyV("TOP")
+        section.body:SetWordWrap(true)
+        section.body:SetText(sectionData.body)
+        section.body:SetTextColor(0.82, 0.82, 0.82)
+
+        section.header:SetScript("OnClick", function()
+            section.expanded = not section.expanded
+            layoutSections()
+        end)
+        section.header:SetScript("OnEnter", function(self)
+            self:SetBackdropBorderColor(1, 0.82, 0.12, 0.72)
+        end)
+        section.header:SetScript("OnLeave", function(self)
+            self:SetBackdropBorderColor(1, 1, 1, 0.42)
+        end)
+        sections[#sections + 1] = section
+    end
+
+    scroll:SetScript("OnSizeChanged", function()
+        C_Timer.After(0, layoutSections)
+    end)
+
+    frame:SetScript("OnShow", function()
+        if GameTooltip then
+            GameTooltip:Hide()
+        end
+        layoutSections()
+        DreamwayRefreshPanelNavigation()
+    end)
+    frame:SetScript("OnHide", DreamwayRefreshPanelNavigation)
+    frame:Hide()
+end
+
+function DreamwayWarningMapCount(warnings)
+    local count = 0
+    for _ in pairs(warnings or {}) do
+        count = count + 1
+    end
+    return count
+end
+
+function DreamwayWarningQuestName(questId)
+    return ProfileRecorder.panelJourneyWarnings.questNames[tonumber(questId)] or ("Unknown quest #" .. tostring(questId))
+end
+
+function DreamwayBuildWarningPanelRows()
+    local ui = panelJourneyManager.warnings
+    if not ui then
+        return
+    end
+
+    local rows = {}
+    local y = 0
+    local groups = {
+        { title = "Unavailable quests", warnings = ProfileRecorder.panelJourneyWarnings.unavailable },
+        { title = "Character compatibility", warnings = ProfileRecorder.panelJourneyWarnings.character },
+        { title = "Invalid prerequisite placements", warnings = ProfileRecorder.panelJourneyWarnings.placement },
+    }
+    for _, group in ipairs(groups) do
+        local entries = {}
+        for questId, message in pairs(group.warnings or {}) do
+            entries[#entries + 1] = {
+                questId = tonumber(questId) or questId,
+                name = DreamwayWarningQuestName(questId),
+                message = tostring(message or ""),
+            }
+        end
+        table.sort(entries, function(left, right)
+            local leftName = string.lower(tostring(left.name or ""))
+            local rightName = string.lower(tostring(right.name or ""))
+            if leftName ~= rightName then
+                return leftName < rightName
+            end
+            return (tonumber(left.questId) or 0) < (tonumber(right.questId) or 0)
+        end)
+        if #entries > 0 then
+            rows[#rows + 1] = {
+                kind = "heading",
+                title = group.title .. " (" .. tostring(#entries) .. ")",
+                y = y,
+                height = 28,
+            }
+            y = y + 28
+            for _, entry in ipairs(entries) do
+                entry.kind = "warning"
+                entry.y = y
+                entry.height = 50
+                rows[#rows + 1] = entry
+                y = y + 50
+            end
+            y = y + 8
+        end
+    end
+    ui.model = rows
+    ui.content:SetHeight(math.max(1, y))
+    if ui.scroll.SetVerticalScroll then
+        ui.scroll:SetVerticalScroll(0)
+    end
+    DreamwayUpdateWarningPanelVisibleRows(true)
+end
+
+function DreamwayEnsureWarningPanelRow(index)
+    local ui = panelJourneyManager.warnings
+    local row = ui.rowPool[index]
+    if row then
+        return row
+    end
+
+    row = CreateBackdropFrame(nil, ui.content)
+    row:SetWidth(986)
+    SetFrameBackdrop(row, 0.035, 0.035, 0.038, 0.9, 0.22)
+    row.title = CreateLabel(row, "GameFontHighlightSmall")
+    row.title:SetPoint("TOPLEFT", row, "TOPLEFT", 10, -7)
+    row.title:SetPoint("RIGHT", row, "RIGHT", -10, 0)
+    row.title:SetWordWrap(false)
+    row.message = CreateLabel(row, "GameFontDisableSmall")
+    row.message:SetPoint("TOPLEFT", row.title, "BOTTOMLEFT", 0, -3)
+    row.message:SetPoint("RIGHT", row, "RIGHT", -10, 0)
+    row.message:SetJustifyH("LEFT")
+    row.message:SetWordWrap(true)
+    ui.rowPool[index] = row
+    return row
+end
+
+function DreamwayUpdateWarningPanelVisibleRows(force)
+    local ui = panelJourneyManager.warnings
+    if not ui or not ui.frame:IsShown() then
+        return
+    end
+    local scrollTop = ui.scroll:GetVerticalScroll() or 0
+    local scrollBottom = scrollTop + (ui.scroll:GetHeight() or 330)
+    local visibleIndex = 0
+    for _, model in ipairs(ui.model or {}) do
+        if model.y + model.height >= scrollTop - 50 and model.y <= scrollBottom + 50 then
+            visibleIndex = visibleIndex + 1
+            local row = DreamwayEnsureWarningPanelRow(visibleIndex)
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT", ui.content, "TOPLEFT", 0, -model.y)
+            row:SetHeight(model.height)
+            if model.kind == "heading" then
+                row:SetBackdropColor(0.08, 0.075, 0.055, 0.96)
+                row:SetBackdropBorderColor(0.55, 0.45, 0.12, 0.34)
+                row.title:SetText(model.title)
+                row.title:SetTextColor(1, 0.82, 0.12)
+                row.message:Hide()
+            else
+                row:SetBackdropColor(0.035, 0.035, 0.038, 0.9)
+                row:SetBackdropBorderColor(0.55, 0.45, 0.12, 0.22)
+                row.title:SetText(tostring(model.name) .. "  #" .. tostring(model.questId))
+                row.title:SetTextColor(1, 0.92, 0.72)
+                row.message:SetText(model.message)
+                row.message:Show()
+            end
+            row:Show()
+        end
+    end
+    for index = visibleIndex + 1, #(ui.rowPool or {}) do
+        ui.rowPool[index]:Hide()
+    end
+end
+
+function DreamwayRefreshWarningsPanel()
+    local ui = panelJourneyManager.warnings
+    if not ui then
+        return
+    end
+    local journey = ActiveJourney()
+    local cachedWarnings = ProfileRecorder.panelJourneyWarnings
+    if cachedWarnings.journey ~= journey or ProfileRecorder.panelNeedsRefresh ~= false then
+        DreamwayRefreshJourneyWarningCache(journey)
+    end
+    local unavailableCount = DreamwayWarningMapCount(cachedWarnings.unavailable)
+    local characterCount = DreamwayWarningMapCount(cachedWarnings.character)
+    local placementCount = DreamwayWarningMapCount(cachedWarnings.placement)
+    ui.summaryValues[1]:SetText(tostring(unavailableCount))
+    ui.summaryValues[2]:SetText(tostring(characterCount))
+    ui.summaryValues[3]:SetText(tostring(placementCount))
+    ui.summaryLabels[1]:SetText("Unavailable in " .. DreamwayGameVersionLabel(CurrentDreamwayGameVersion()))
+    DreamwayBuildWarningPanelRows()
+end
+
+function DreamwayCreateWarningsPanel()
+    local frame = CreateBackdropFrame("Dreamway_WarningsPanel", panelFrame)
+    frame:SetPoint("TOPLEFT", panelFrame, "TOPLEFT", 12, -58)
+    frame:SetPoint("BOTTOMRIGHT", panelFrame, "BOTTOMRIGHT", -12, 12)
+    frame:SetFrameLevel(panelFrame:GetFrameLevel() + 8)
+    frame:EnableMouse(true)
+    SetFrameBackdrop(frame, 0.01, 0.01, 0.012, 0.99, 0.72)
+
+    local ui = {
+        frame = frame,
+        rowPool = {},
+        model = {},
+        summaryValues = {},
+        summaryLabels = {},
+        scrollPending = false,
+    }
+    panelJourneyManager.warnings = ui
+
+    local title = CreateLabel(frame, "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -14)
+    title:SetText("Journey Warnings")
+    title:SetTextColor(1, 0.82, 0.12)
+
+    local summaryLabels = {
+        "Unavailable in this version",
+        "Character compatibility",
+        "Invalid prerequisite placement",
+    }
+    for index = 1, 3 do
+        local box = CreateBackdropFrame(nil, frame)
+        box:SetSize(320, 50)
+        box:SetPoint("TOPLEFT", frame, "TOPLEFT", 16 + ((index - 1) * 338), -44)
+        SetFrameBackdrop(box, 0.18, 0.105, 0.025, 0.72, 0.42)
+        local value = CreateLabel(box, "GameFontNormalLarge")
+        value:SetPoint("TOPLEFT", box, "TOPLEFT", 10, -7)
+        value:SetText("0")
+        value:SetTextColor(1, 0.72, 0.36)
+        local label = CreateLabel(box, "GameFontDisableSmall")
+        label:SetPoint("TOPLEFT", value, "BOTTOMLEFT", 0, -1)
+        label:SetPoint("RIGHT", box, "RIGHT", -8, 0)
+        label:SetWordWrap(false)
+        label:SetText(summaryLabels[index])
+        ui.summaryValues[index] = value
+        ui.summaryLabels[index] = label
+    end
+
+    ui.scroll = CreateFrame("ScrollFrame", nil, frame, "UIPanelScrollFrameTemplate")
+    ui.scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -104)
+    ui.scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -32, 14)
+    ui.content = CreateFrame("Frame", nil, ui.scroll)
+    ui.content:SetSize(986, 1)
+    ui.scroll:SetScrollChild(ui.content)
+    ui.scroll:HookScript("OnVerticalScroll", function()
+        if ui.scrollPending then
+            return
+        end
+        ui.scrollPending = true
+        C_Timer.After(0, function()
+            ui.scrollPending = false
+            DreamwayUpdateWarningPanelVisibleRows()
+        end)
+    end)
+
+    frame:SetScript("OnShow", function()
+        if GameTooltip then
+            GameTooltip:Hide()
+        end
+        DreamwayRefreshWarningsPanel()
+        DreamwayRefreshPanelNavigation()
+    end)
+    frame:SetScript("OnHide", DreamwayRefreshPanelNavigation)
     frame:Hide()
 end
 
@@ -6343,29 +8682,7 @@ function PanelSearchCanonicalQuest(quest)
     if not entry then
         return ApplyQuestZoneMetadata(quest)
     end
-    return {
-        id = entry.id,
-        name = entry.name,
-        questLevel = entry.questLevel,
-        requiredLevel = entry.requiredLevel,
-        chainId = entry.chainId,
-        chainName = entry.chainName,
-        chainStep = entry.chainStep,
-        chainLength = entry.chainLength,
-        chainGroupId = entry.chainGroupId,
-        chainGroupStep = entry.chainGroupStep,
-        chainGroupSize = entry.chainGroupSize,
-        preQuestGroup = CloneNumberArray(entry.preQuestGroup),
-        preQuestSingle = CloneNumberArray(entry.preQuestSingle),
-        startZoneIds = CloneNumberArray(entry.startZoneIds),
-        objectiveZoneIds = CloneNumberArray(entry.objectiveZoneIds),
-        endZoneIds = CloneNumberArray(entry.endZoneIds),
-        zoneIds = CloneNumberArray(entry.zoneIds),
-        requiredRaceMask = entry.requiredRaceMask,
-        requiredClassMask = entry.requiredClassMask,
-        typeIds = CloneStringArray(entry.typeIds),
-        gameVersion = entry.gameVersion,
-    }
+    return entry
 end
 
 function PanelSearchRequirementColorMap(chainId)
@@ -6513,6 +8830,14 @@ function PanelSearchRowsWithChainHeaders(questRows)
             firstRow.standalone = true
             rows[#rows + 1] = firstRow
         else
+            local chainQuestIds = {}
+            local chainQuests = {}
+            for _, chainRow in ipairs(chainRows) do
+                if chainRow.quest and chainRow.quest.id and (not chainRow.source or chainRow.source.type ~= "completed") then
+                    chainQuestIds[#chainQuestIds + 1] = chainRow.quest.id
+                    chainQuests[#chainQuests + 1] = chainRow.quest
+                end
+            end
             local chainInfo = PanelSearchChainSortInfo(firstRow)
             local level = tonumber(chainInfo and (chainInfo.requiredLevel or chainInfo.questLevel))
             local label = PanelQuestChainName(firstRow.quest)
@@ -6528,6 +8853,8 @@ function PanelSearchRowsWithChainHeaders(questRows)
                 label = label,
                 location = firstRow.location or PanelSearchBucketName(firstRow),
                 collapsed = collapsed,
+                questIds = chainQuestIds,
+                quests = chainQuests,
             }
 
             if not collapsed then
@@ -6545,6 +8872,7 @@ function PanelSearchRowsWithChainHeaders(questRows)
                             kind = "requirement",
                             label = requirementText,
                             requirementQuestIds = requirementQuestIds,
+                            requirementKey = string.lower(string.gsub(requirementText, "%s+", " ")),
                         }
                     end
                     for _, questRow in ipairs(groupRows) do
@@ -6577,13 +8905,29 @@ local function HidePanelBatchColumn(column)
 
     column:Hide()
     column:SetScript("OnMouseDown", nil)
+    column:SetScript("OnMouseUp", nil)
     if column.title then column.title:Hide() end
-    if column.titleHitbox then column.titleHitbox:Hide() end
+    if column.titleHitbox then
+        column.titleHitbox:SetScript("OnMouseDown", nil)
+        column.titleHitbox:SetScript("OnMouseUp", nil)
+        column.titleHitbox:SetScript("OnClick", nil)
+        column.titleHitbox:SetScript("OnDragStart", nil)
+        column.titleHitbox:SetScript("OnDragStop", nil)
+        column.titleHitbox:Hide()
+    end
+    column.headerWasDragged = false
     if column.indexText then column.indexText:Hide() end
     if column.levelText then column.levelText:Hide() end
     if column.batchCheck then column.batchCheck:Hide() end
     if column.zoneText then column.zoneText:Hide() end
-    if column.zoneHitbox then column.zoneHitbox:Hide() end
+    if column.zoneHitbox then
+        column.zoneHitbox:SetScript("OnMouseDown", nil)
+        column.zoneHitbox:SetScript("OnMouseUp", nil)
+        column.zoneHitbox:SetScript("OnClick", nil)
+        column.zoneHitbox:SetScript("OnDragStart", nil)
+        column.zoneHitbox:SetScript("OnDragStop", nil)
+        column.zoneHitbox:Hide()
+    end
     if column.emptyLabel then column.emptyLabel:Hide() end
     if column.moreLabel then column.moreLabel:Hide() end
     if column.insertButton then column.insertButton:Hide() end
@@ -6591,13 +8935,13 @@ local function HidePanelBatchColumn(column)
 
     for _, row in ipairs(column.questRows or {}) do
         row:Hide()
-        row:SetScript("OnClick", nil)
-        row:SetScript("OnEnter", nil)
-        row:SetScript("OnLeave", nil)
-        row:SetScript("OnDragStart", nil)
-        row:SetScript("OnDragStop", nil)
         row.quest = nil
+        row.dragSourceType = nil
+        row.dragSourceIndex = nil
         row.prerequisiteWarning = nil
+        if row.selectionHighlight then
+            row.selectionHighlight:Hide()
+        end
         if row.label then
             row.label:SetText("")
         end
@@ -6625,8 +8969,10 @@ local function EnsurePanelBatchColumn(poolIndex)
         column.title:SetNonSpaceWrap(false)
     end
 
-    column.titleHitbox = CreateFrame("Frame", nil, column)
+    column.titleHitbox = CreateFrame("Button", nil, column)
     column.titleHitbox:EnableMouse(true)
+    column.titleHitbox:RegisterForClicks("LeftButtonUp")
+    column.titleHitbox:RegisterForDrag("LeftButton")
 
     column.indexText = CreateLabel(column, "GameFontDisableSmall")
     column.indexText:SetPoint("BOTTOMRIGHT", column, "BOTTOMRIGHT", -10, 8)
@@ -6648,8 +8994,10 @@ local function EnsurePanelBatchColumn(poolIndex)
         column.zoneText:SetNonSpaceWrap(false)
     end
 
-    column.zoneHitbox = CreateFrame("Frame", nil, column)
+    column.zoneHitbox = CreateFrame("Button", nil, column)
     column.zoneHitbox:EnableMouse(true)
+    column.zoneHitbox:RegisterForClicks("LeftButtonUp")
+    column.zoneHitbox:RegisterForDrag("LeftButton")
 
     column.emptyLabel = CreateLabel(column, "GameFontDisableSmall")
     column.emptyLabel:SetWidth(152)
@@ -6672,6 +9020,18 @@ local function EnsurePanelBatchColumn(poolIndex)
 
     for index = 1, 18 do
         local row = CreateTextButton(column, "GameFontHighlightSmall")
+        row:EnableMouse(true)
+        row:RegisterForDrag("LeftButton")
+        row:SetScript("OnClick", DreamwayPanelBatchQuestOnClick)
+        row:SetScript("OnEnter", DreamwayPanelBatchQuestOnEnter)
+        row:SetScript("OnLeave", DreamwayPanelBatchQuestOnLeave)
+        row:SetScript("OnDragStart", DreamwayPanelBatchQuestOnDragStart)
+        row:SetScript("OnDragStop", DreamwayPanelBatchQuestOnDragStop)
+        row.selectionHighlight = row:CreateTexture(nil, "BACKGROUND")
+        row.selectionHighlight:SetAllPoints(row)
+        row.selectionHighlight:SetTexture("Interface\\Buttons\\WHITE8X8")
+        row.selectionHighlight:SetVertexColor(0.20, 0.72, 1, 0.24)
+        row.selectionHighlight:Hide()
         row.check = column:CreateTexture(nil, "ARTWORK")
         row.check:SetSize(12, 12)
         row.check:Hide()
@@ -6730,9 +9090,14 @@ local function RenderPanelBatchColumn(column, batch, index, total, options)
     end
     local titleHeight = 16
     column.titleHitbox:ClearAllPoints()
-    column.titleHitbox:SetPoint("TOPLEFT", column.title, "TOPLEFT", 0, 0)
-    column.titleHitbox:SetSize(titleWidth, titleHeight)
-    ConfigurePanelTooltip(column.titleHitbox, titleText, isHidden and "Hidden quests are suppressed while Dreamway view is active." or nil)
+    column.titleHitbox:SetPoint("TOPLEFT", column, "TOPLEFT", 7, -6)
+    column.titleHitbox:SetSize(PANEL_BATCH_COLUMN_WIDTH - 14, titleHeight + 8)
+    ConfigurePanelTooltip(
+        column.titleHitbox,
+        titleText,
+        isHidden and "Hidden quests are suppressed while Dreamway view is active."
+            or "Click to select this batch. Click and hold to drag it onto another batch and combine them."
+    )
     column.titleHitbox:Show()
 
     if not isHidden then
@@ -6781,7 +9146,11 @@ local function RenderPanelBatchColumn(column, batch, index, total, options)
     column.zoneHitbox:ClearAllPoints()
     column.zoneHitbox:SetPoint("TOPLEFT", column.zoneText, "TOPLEFT", 0, 0)
     column.zoneHitbox:SetSize(PANEL_BATCH_COLUMN_WIDTH - 20, zoneHeight)
-    ConfigurePanelTooltip(column.zoneHitbox, isHidden and "Hidden" or "Zones", zoneText)
+    ConfigurePanelTooltip(
+        column.zoneHitbox,
+        isHidden and "Hidden" or "Zones",
+        isHidden and zoneText or (zoneText .. "\n\nClick to select this batch. Click and hold to drag it onto another batch and combine them.")
+    )
     column.zoneHitbox:Show()
 
     local y = -10 - titleHeight - 4 - zoneHeight - 14
@@ -6817,18 +9186,17 @@ local function RenderPanelBatchColumn(column, batch, index, total, options)
             questRow:ClearAllPoints()
             questRow:SetPoint("TOPLEFT", column, "TOPLEFT", 10, y)
             local prerequisiteWarning = panelPrerequisiteWarnings[tonumber(quest.id)]
-            local displayName = ColoredQuestDisplayName(quest, false)
+            local displayName = DreamwayPanelBatchDisplayName(quest)
             if prerequisiteWarning then
                 displayName = WARNING_INLINE_TEXTURE .. " " .. displayName
             end
             local lineHeight = SetButtonText(questRow, row.complete and (PANEL_BATCH_COLUMN_WIDTH - 42) or (PANEL_BATCH_COLUMN_WIDTH - 20), displayName)
             questRow.label:SetTextColor(1, 1, 1)
+            questRow.quest = quest
+            questRow.dragSourceType = isHidden and "hidden" or "batch"
+            questRow.dragSourceIndex = isHidden and nil or index
             questRow.prerequisiteWarning = prerequisiteWarning
-            ConfigureQuestButton(questRow, quest, column, true)
-            MakePanelQuestDraggable(questRow, quest, {
-                type = isHidden and "hidden" or "batch",
-                index = isHidden and nil or index,
-            })
+            questRow.selectionHighlight:SetShown(DreamwayPanelQuestIsSelected(quest.id))
             questRow:Show()
 
             if row.complete then
@@ -6844,8 +9212,12 @@ local function RenderPanelBatchColumn(column, batch, index, total, options)
 
     local function selectColumn()
         if not isHidden then
+            if batchIndex == index then
+                return
+            end
             batchIndex = index
             SaveDb()
+            ApplyUnusedQuestSuppression()
             RefreshDreamwayTracker()
             RefreshPanelBatchSelection()
         end
@@ -6861,7 +9233,7 @@ local function RenderPanelBatchColumn(column, batch, index, total, options)
         column.deleteButton:Show()
 
         column.insertButton:ClearAllPoints()
-        column.insertButton:SetPoint("TOPLEFT", column, "TOPRIGHT", 3, 0)
+        column.insertButton:SetPoint("TOPLEFT", column, "TOPRIGHT", 2, 0)
         column.insertButton:SetScript("OnClick", function()
             DreamwayInsertBatchAfter(index)
         end)
@@ -6873,12 +9245,60 @@ local function RenderPanelBatchColumn(column, batch, index, total, options)
             index = index,
         }
 
-        column:SetScript("OnMouseDown", selectColumn)
-        column.titleHitbox:SetScript("OnMouseDown", selectColumn)
-        column.zoneHitbox:SetScript("OnMouseDown", selectColumn)
+        local function startHeaderDrag()
+            column.headerWasDragged = true
+            ProfileRecorder.suppressBatchHeaderClickUntil = GetTime() + 0.25
+            StartPanelBatchDrag(batch, index)
+        end
+        local function stopHeaderDrag()
+            ProfileRecorder.suppressBatchHeaderClickUntil = GetTime() + 0.25
+            EndPanelQuestDrag()
+            C_Timer.After(0, function()
+                column.headerWasDragged = false
+            end)
+        end
+
+        column:SetScript("OnMouseDown", nil)
+        column:SetScript("OnMouseUp", function(_, mouseButton)
+            if mouseButton == "LeftButton"
+                and (tonumber(ProfileRecorder.suppressBatchHeaderClickUntil) or 0) <= GetTime()
+            then
+                selectColumn()
+            end
+        end)
+        column.titleHitbox:SetScript("OnClick", nil)
+        column.titleHitbox:SetScript("OnMouseUp", function(_, mouseButton)
+            if mouseButton == "LeftButton"
+                and not column.headerWasDragged
+                and (tonumber(ProfileRecorder.suppressBatchHeaderClickUntil) or 0) <= GetTime()
+            then
+                selectColumn()
+            end
+        end)
+        column.titleHitbox:SetScript("OnDragStart", startHeaderDrag)
+        column.titleHitbox:SetScript("OnDragStop", stopHeaderDrag)
+        column.zoneHitbox:SetScript("OnClick", nil)
+        column.zoneHitbox:SetScript("OnMouseUp", function(_, mouseButton)
+            if mouseButton == "LeftButton"
+                and not column.headerWasDragged
+                and (tonumber(ProfileRecorder.suppressBatchHeaderClickUntil) or 0) <= GetTime()
+            then
+                selectColumn()
+            end
+        end)
+        column.zoneHitbox:SetScript("OnDragStart", startHeaderDrag)
+        column.zoneHitbox:SetScript("OnDragStop", stopHeaderDrag)
     else
         column.titleHitbox:SetScript("OnMouseDown", nil)
+        column.titleHitbox:SetScript("OnMouseUp", nil)
+        column.titleHitbox:SetScript("OnClick", nil)
+        column.titleHitbox:SetScript("OnDragStart", nil)
+        column.titleHitbox:SetScript("OnDragStop", nil)
         column.zoneHitbox:SetScript("OnMouseDown", nil)
+        column.zoneHitbox:SetScript("OnMouseUp", nil)
+        column.zoneHitbox:SetScript("OnClick", nil)
+        column.zoneHitbox:SetScript("OnDragStart", nil)
+        column.zoneHitbox:SetScript("OnDragStop", nil)
     end
 end
 
@@ -7078,6 +9498,7 @@ local function PanelAddBatchColumn(parent, batch, index, total, options)
         column:SetScript("OnMouseDown", function()
             batchIndex = index
             SaveDb()
+            ApplyUnusedQuestSuppression()
             RefreshDreamwayTracker()
             RefreshPanelBatchSelection()
         end)
@@ -7086,10 +9507,11 @@ local function PanelAddBatchColumn(parent, batch, index, total, options)
     return column
 end
 
-function RefreshPanel()
+function RefreshPanel(options)
     if not panelFrame or not panelBatchContent then
         return
     end
+    options = options or {}
 
     local journey = ActiveJourney()
     ClampBatchIndex(journey)
@@ -7097,12 +9519,13 @@ function RefreshPanel()
     if panelFrame.metadataText then
         panelFrame.metadataText:SetText(DreamwayJourneyMetadataSummary(journey))
     end
-    panelPrerequisiteWarnings = JourneyPrerequisiteWarnings(journey)
+    DreamwayRefreshJourneyWarningCache(journey)
 
     UpdatePanelBatchVisibleColumns(true)
     if RefreshPanelSearchResults then
-        RefreshPanelSearchResults()
+        RefreshPanelSearchResults(options.rebuildSearch ~= false)
     end
+    ProfileRecorder.panelNeedsRefresh = false
 end
 
 function RefreshPanelBatchSelection()
@@ -7174,29 +9597,7 @@ function PanelSearchRows(journey)
     end
 
     for _, entry in ipairs(BuildAllQuestSearchCache()) do
-        local quest = {
-            id = entry.id,
-            name = entry.name,
-            questLevel = entry.questLevel,
-            requiredLevel = entry.requiredLevel,
-            chainId = entry.chainId,
-            chainName = entry.chainName,
-            chainStep = entry.chainStep,
-            chainLength = entry.chainLength,
-            chainGroupId = entry.chainGroupId,
-            chainGroupStep = entry.chainGroupStep,
-            chainGroupSize = entry.chainGroupSize,
-            preQuestGroup = CloneNumberArray(entry.preQuestGroup),
-            preQuestSingle = CloneNumberArray(entry.preQuestSingle),
-            startZoneIds = entry.startZoneIds,
-            objectiveZoneIds = entry.objectiveZoneIds,
-            endZoneIds = entry.endZoneIds,
-            zoneIds = entry.zoneIds,
-            requiredRaceMask = entry.requiredRaceMask,
-            requiredClassMask = entry.requiredClassMask,
-            typeIds = entry.typeIds,
-            gameVersion = entry.gameVersion,
-        }
+        local quest = entry
         local isAssignedOrHidden = assignedOrHidden[entry.id] == true
         if (panelShowAssignedQuests or not isAssignedOrHidden) and not seen[entry.id] and PanelQuestMatchesSearch(quest) and panelSearchFilters.PassesQuest(quest) then
             seen[entry.id] = true
@@ -7278,7 +9679,7 @@ function ClearPanelSearchRequirementHighlights()
     end
 end
 
-function SetPanelSearchRequirementHighlights(questIds)
+function SetPanelSearchRequirementHighlights(questIds, requirementKey)
     ClearPanelSearchRequirementHighlights()
     local highlighted = {}
     for _, questId in ipairs(questIds or {}) do
@@ -7289,15 +9690,41 @@ function SetPanelSearchRequirementHighlights(questIds)
     end
     for _, button in ipairs(panelSearchResultButtons or {}) do
         local questId = tonumber(button.quest and button.quest.id)
-        if questId and highlighted[questId] and button.requirementHighlight then
+        local matchesQuest = questId and highlighted[questId]
+        local matchesRequirement = button.rowKind == "requirement"
+            and requirementKey
+            and button.requirementKey == requirementKey
+        if (matchesQuest or matchesRequirement) and button.requirementHighlight then
             button.requirementHighlight:Show()
         end
     end
 end
 
 function DreamwayPanelSearchRowOnClick(self, mouseButton)
+    local controlDown = IsControlKeyDown and IsControlKeyDown()
+    local shiftDown = IsShiftKeyDown and IsShiftKeyDown()
+
     if self.rowKind == "chain" then
+        if mouseButton == "RightButton" then
+            return
+        end
         if not self.chainKey then
+            return
+        end
+        if controlDown or shiftDown then
+            local anchor = ProfileRecorder.panelSelectionAnchor
+            if shiftDown and anchor and anchor.scope == "search" and anchor.rowIndex then
+                DreamwaySetPanelQuestSelection(
+                    DreamwayPanelSearchRangeQuestIds(anchor.rowIndex, self.renderedRowIndex),
+                    controlDown and "add" or "replace"
+                )
+            else
+                DreamwaySetPanelQuestSelection(
+                    self.chainQuestIds,
+                    controlDown and "toggle" or "replace",
+                    { scope = "search", rowIndex = self.renderedRowIndex }
+                )
+            end
             return
         end
         local scrollOffset = panelSearchResultsScroll and panelSearchResultsScroll:GetVerticalScroll() or 0
@@ -7316,14 +9743,40 @@ function DreamwayPanelSearchRowOnClick(self, mouseButton)
     end
     if mouseButton == "RightButton" then
         ShowQuestieTrackerMenu(quest)
-    elseif not InsertQuestChatLink(quest) then
+        return
+    end
+    if self.selectionDisabled then
+        if not InsertQuestChatLink(quest) then
+            OpenQuestieDetails(quest)
+        end
+        return
+    end
+
+    local anchor = ProfileRecorder.panelSelectionAnchor
+    if shiftDown and anchor and anchor.scope == "search" and anchor.rowIndex then
+        DreamwaySetPanelQuestSelection(
+            DreamwayPanelSearchRangeQuestIds(anchor.rowIndex, self.renderedRowIndex),
+            controlDown and "add" or "replace"
+        )
+        return
+    end
+
+    DreamwaySetPanelQuestSelection(
+        { quest.id },
+        controlDown and "toggle" or "replace",
+        { scope = "search", rowIndex = self.renderedRowIndex }
+    )
+    if controlDown then
+        return
+    end
+    if not InsertQuestChatLink(quest) then
         OpenQuestieDetails(quest)
     end
 end
 
 function DreamwayPanelSearchRowOnEnter(self)
     if self.rowKind == "requirement" then
-        SetPanelSearchRequirementHighlights(self.requirementQuestIds)
+        SetPanelSearchRequirementHighlights(self.requirementQuestIds, self.requirementKey)
         if GameTooltip then
             AnchorDreamwayTooltip(self)
             GameTooltip:SetText(self.label:GetText() or "Quest prerequisites")
@@ -7348,7 +9801,7 @@ function DreamwayPanelSearchRowOnEnter(self)
     AnchorDreamwayTooltip(self)
     GameTooltip:AddLine(quest.name or QuestDisplayName(quest), 1, 0.82, 0.12)
     if self.prerequisiteWarning then
-        GameTooltip:AddLine("Prerequisite warning", 1, 0.55, 0.16)
+        GameTooltip:AddLine("Journey warning", 1, 0.55, 0.16)
         GameTooltip:AddLine(self.prerequisiteWarning, 0.95, 0.78, 0.48, true)
     end
     GameTooltip:AddLine("Click to open Questie quest details.", 0.75, 0.75, 0.75)
@@ -7365,6 +9818,8 @@ end
 function DreamwayPanelSearchRowOnDragStart(self)
     if self.rowKind == "quest" and self.quest and self.dragSource then
         StartPanelQuestDrag(self.quest, self.dragSource)
+    elseif self.rowKind == "chain" and self.chainQuests and self.chainQuests[1] then
+        StartPanelQuestDrag(self.chainQuests[1], { type = "search-chain" }, self.chainQuestIds)
     end
 end
 
@@ -7394,6 +9849,12 @@ local function EnsurePanelSearchButton(index)
     button.requirementHighlight:SetTexture("Interface\\Buttons\\WHITE8X8")
     button.requirementHighlight:SetVertexColor(1, 0.82, 0.12, 0.18)
     button.requirementHighlight:Hide()
+
+    button.selectionHighlight = button:CreateTexture(nil, "BACKGROUND")
+    button.selectionHighlight:SetAllPoints(button)
+    button.selectionHighlight:SetTexture("Interface\\Buttons\\WHITE8X8")
+    button.selectionHighlight:SetVertexColor(0.20, 0.72, 1, 0.24)
+    button.selectionHighlight:Hide()
 
     button.label = CreateLabel(button, "GameFontHighlightSmall")
     button.label:SetPoint("LEFT", button, "LEFT", 0, 0)
@@ -7476,9 +9937,13 @@ UpdatePanelSearchVisibleRows = function(force)
             button:SetWidth(rowWidth)
             button.quest = nil
             button.chainKey = nil
+            button.chainQuestIds = nil
+            button.chainQuests = nil
             button.requirementQuestIds = nil
+            button.requirementKey = nil
             button.prerequisiteWarning = nil
             button.dragSource = nil
+            button.selectionDisabled = nil
             button.rowKind = row.kind
             button.requirementHighlight:Hide()
             button.disclosure:Hide()
@@ -7488,6 +9953,8 @@ UpdatePanelSearchVisibleRows = function(force)
             if row.kind == "chain" then
                 button:EnableMouse(true)
                 button.chainKey = row.chainKey
+                button.chainQuestIds = row.questIds or {}
+                button.chainQuests = row.quests or {}
                 button.disclosure:SetText(row.collapsed and "+" or "-")
                 button.disclosure:Show()
                 button.label:ClearAllPoints()
@@ -7501,6 +9968,7 @@ UpdatePanelSearchVisibleRows = function(force)
             elseif row.kind == "requirement" then
                 button:EnableMouse(true)
                 button.requirementQuestIds = row.requirementQuestIds or {}
+                button.requirementKey = row.requirementKey
                 button.label:SetPoint("RIGHT", button, "RIGHT", 0, 0)
                 button.label:SetText(row.label or "")
                 button.label:SetTextColor(0.86, 0.86, 0.86)
@@ -7532,19 +10000,32 @@ UpdatePanelSearchVisibleRows = function(force)
                 button.prerequisiteWarning = row.prerequisiteWarning
                 if not row.source or row.source.type ~= "completed" then
                     button.dragSource = row.source
+                else
+                    button.selectionDisabled = true
                 end
             end
+            button.selectionHighlight:SetShown(
+                row.kind == "quest"
+                and DreamwayPanelQuestIsSelected(row.quest and row.quest.id)
+                or row.kind == "chain"
+                and DreamwayPanelAllQuestIdsSelected(row.questIds)
+            )
             button:Show()
         else
             button.renderedRowIndex = nil
             button.rowKind = nil
             button.quest = nil
             button.chainKey = nil
+            button.chainQuestIds = nil
+            button.chainQuests = nil
             button.requirementQuestIds = nil
+            button.requirementKey = nil
             button.prerequisiteWarning = nil
             button.dragSource = nil
+            button.selectionDisabled = nil
             button.completeMark:Hide()
             button.requirementHighlight:Hide()
+            button.selectionHighlight:Hide()
             button.disclosure:Hide()
             button:Hide()
         end
@@ -7567,7 +10048,7 @@ function SchedulePanelSearchVisibleRowsUpdate()
     end)
 end
 
-RefreshPanelSearchResults = function()
+RefreshPanelSearchResults = function(forceRebuild)
     if not panelSearchResults or not panelSearchResultsContent then
         return
     end
@@ -7592,6 +10073,12 @@ RefreshPanelSearchResults = function()
         return
     end
 
+    if forceRebuild == false and not panelSearchResultsDirty and panelSearchResultRows then
+        panelSearchResults:Show()
+        UpdatePanelSearchVisibleRows(true)
+        return
+    end
+
     for _, child in ipairs({ panelSearchResultsContent:GetChildren() }) do
         child:Hide()
     end
@@ -7605,6 +10092,7 @@ RefreshPanelSearchResults = function()
     local journey = ActiveJourney()
     local rows, totalMatches, shownMatches = PanelSearchRows(journey)
     panelSearchResultRows = rows
+    panelSearchResultsDirty = false
     panelSearchResults:Show()
 
     if #rows == 0 then
@@ -7797,7 +10285,11 @@ function panelSearchFilters.SetAllForMode(checked)
     panelSearchFilters.RefreshControls()
 end
 
-function panelSearchFilters.SetMode(modeName)
+function panelSearchFilters.SetMode(modeName, refreshSearch)
+    local previousMode = panelSearchFilters.mode
+    if previousMode ~= "search" and panelSearchFilters.scroll then
+        panelSearchFilters.scrollOffsets[previousMode] = panelSearchFilters.scroll:GetVerticalScroll() or 0
+    end
     if modeName ~= "character" and modeName ~= "zones" and modeName ~= "type" then
         modeName = "search"
     end
@@ -7840,7 +10332,9 @@ function panelSearchFilters.SetMode(modeName)
     panelSearchFilters.SetRegionShown(panelSearchFilters.checkAllButton, not isSearch)
     panelSearchFilters.SetRegionShown(panelSearchFilters.uncheckAllButton, not isSearch)
     panelSearchFilters.SetRegionShown(panelSearchFilters.scroll, not isSearch)
-    panelSearchFilters.SetRegionShown(panelSearchFilters.content, not isSearch)
+    for contentMode, content in pairs(panelSearchFilters.contents or {}) do
+        panelSearchFilters.SetRegionShown(content, not isSearch and contentMode == panelSearchFilters.mode)
+    end
 
     if isZones then
         panelSearchFilters.scopeChecks.starts:ClearAllPoints()
@@ -7867,10 +10361,19 @@ function panelSearchFilters.SetMode(modeName)
     end
     if not isSearch then
         panelSearchFilters.scroll:SetPoint("BOTTOMRIGHT", panelSearchResults, "BOTTOMRIGHT", -28, 8)
+        local content = panelSearchFilters.contents[panelSearchFilters.mode]
+        if content then
+            panelSearchFilters.scroll:SetScrollChild(content)
+            local viewportHeight = panelSearchFilters.scroll:GetHeight() or 0
+            local contentHeight = content:GetHeight() or 0
+            local maxScroll = math.max(0, contentHeight - viewportHeight)
+            local savedOffset = tonumber(panelSearchFilters.scrollOffsets[panelSearchFilters.mode]) or 0
+            panelSearchFilters.scroll:SetVerticalScroll(math.min(savedOffset, maxScroll))
+        end
     end
 
     if isSearch then
-        RefreshPanelSearchResults()
+        RefreshPanelSearchResults(refreshSearch ~= false)
     else
         panelSearchFilters.RefreshControls()
     end
@@ -7920,29 +10423,53 @@ function panelSearchFilters.CreateControls()
     panelSearchFilters.scroll:SetPoint("TOPLEFT", panelSearchResults, "TOPLEFT", 8, -76)
     panelSearchFilters.scroll:SetPoint("BOTTOMRIGHT", panelSearchResults, "BOTTOMRIGHT", -28, 8)
 
-    panelSearchFilters.content = CreateFrame("Frame", nil, panelSearchFilters.scroll)
-    panelSearchFilters.content:SetWidth(244)
+    panelSearchFilters.contents.zones = CreateFrame("Frame", nil, panelSearchFilters.scroll)
+    panelSearchFilters.contents.character = CreateFrame("Frame", nil, panelSearchFilters.scroll)
+    panelSearchFilters.contents.type = CreateFrame("Frame", nil, panelSearchFilters.scroll)
+    for _, content in pairs(panelSearchFilters.contents) do
+        content:SetWidth(244)
+        content:Hide()
+    end
+    panelSearchFilters.content = panelSearchFilters.contents.zones
     panelSearchFilters.scroll:SetScrollChild(panelSearchFilters.content)
 
     local y = -2
-    local unknownCheck = panelSearchFilters.CreateCheckButton(panelSearchFilters.content, "Unknown")
-    unknownCheck:SetPoint("TOPLEFT", panelSearchFilters.content, "TOPLEFT", 0, y)
-    unknownCheck.label:SetWidth(214)
-    unknownCheck.label:SetWordWrap(false)
-    unknownCheck:SetScript("OnClick", function(self)
-        panelSearchFilters.zoneIds[panelSearchFilters.unknownZoneId] = self:GetChecked() and true or false
-    end)
-    panelSearchFilters.zoneChecks[panelSearchFilters.unknownZoneId] = unknownCheck
-    y = y - 22
+    local zoneContent = panelSearchFilters.contents.zones
+    local characterContent = panelSearchFilters.contents.character
+    local typeContent = panelSearchFilters.contents.type
 
-    for _, zone in ipairs(panelSearchFilters.FilterZones()) do
+    local zoneEntries = panelSearchFilters.FilterZones()
+    zoneEntries[#zoneEntries + 1] = {
+        id = panelSearchFilters.unknownZoneId,
+        n = "Unknown",
+        r = "",
+        c = "unknown",
+    }
+    panelSearchFilters.SortZones(zoneEntries)
+
+    local currentZoneCategory
+    for _, zone in ipairs(zoneEntries) do
         local zoneId = tonumber(zone and zone.id)
         if zoneId then
-            local name = tostring(zone.n or zone.name or ("Zone " .. tostring(zoneId)))
-            local range = tostring(zone.r or zone.levelRange or "")
+            local category = panelSearchFilters.ZoneCategory(zone)
+            if category ~= currentZoneCategory then
+                currentZoneCategory = category
+                if category ~= "unknown" then
+                    local heading = CreateLabel(zoneContent, "GameFontNormalSmall")
+                    heading:SetPoint("TOPLEFT", zoneContent, "TOPLEFT", 0, y)
+                    heading:SetText(panelSearchFilters.zoneCategoryLabels[category] or "Other")
+                    heading:SetTextColor(1, 0.82, 0.12)
+                    y = y - 20
+                end
+            end
+            local name = panelSearchFilters.ZoneName(zone)
+            if name == "" then
+                name = "Zone " .. tostring(zoneId)
+            end
+            local range = panelSearchFilters.ZoneRange(zone)
             local label = range ~= "" and (name .. " [" .. range .. "]") or name
-            local check = panelSearchFilters.CreateCheckButton(panelSearchFilters.content, label)
-            check:SetPoint("TOPLEFT", panelSearchFilters.content, "TOPLEFT", 0, y)
+            local check = panelSearchFilters.CreateCheckButton(zoneContent, label)
+            check:SetPoint("TOPLEFT", zoneContent, "TOPLEFT", 0, y)
             check.label:SetWidth(214)
             check.label:SetWordWrap(false)
             check:SetScript("OnClick", function(self)
@@ -7952,11 +10479,11 @@ function panelSearchFilters.CreateControls()
             y = y - 22
         end
     end
-    local minY = y
+    zoneContent:SetHeight(math.max(24, -y + 8))
 
     local function createHeading(text, yOffset)
-        local label = CreateLabel(panelSearchFilters.content, "GameFontNormalSmall")
-        label:SetPoint("TOPLEFT", panelSearchFilters.content, "TOPLEFT", 0, yOffset)
+        local label = CreateLabel(characterContent, "GameFontNormalSmall")
+        label:SetPoint("TOPLEFT", characterContent, "TOPLEFT", 0, yOffset)
         label:SetText(text)
         label:SetTextColor(1, 0.82, 0.12)
         panelSearchFilters.characterLabels[#panelSearchFilters.characterLabels + 1] = label
@@ -7968,8 +10495,8 @@ function panelSearchFilters.CreateControls()
     for _, faction in ipairs(panelSearchFilters.FilterFactions()) do
         local id = faction and faction.id
         if id then
-            local check = panelSearchFilters.CreateCheckButton(panelSearchFilters.content, tostring(faction.n or id))
-            check:SetPoint("TOPLEFT", panelSearchFilters.content, "TOPLEFT", 0, y)
+            local check = panelSearchFilters.CreateCheckButton(characterContent, tostring(faction.n or id))
+            check:SetPoint("TOPLEFT", characterContent, "TOPLEFT", 0, y)
             check.label:SetWidth(214)
             check.label:SetWordWrap(false)
             panelSearchFilters.ApplyHexLabelColor(check.label, faction.c)
@@ -7988,8 +10515,8 @@ function panelSearchFilters.CreateControls()
         if mask then
             local name = tostring(race.n or ("Race " .. tostring(mask)))
             local faction = race.f and (" [" .. tostring(race.f) .. "]") or ""
-            local check = panelSearchFilters.CreateCheckButton(panelSearchFilters.content, name .. faction)
-            check:SetPoint("TOPLEFT", panelSearchFilters.content, "TOPLEFT", 0, y)
+            local check = panelSearchFilters.CreateCheckButton(characterContent, name .. faction)
+            check:SetPoint("TOPLEFT", characterContent, "TOPLEFT", 0, y)
             check.label:SetWidth(214)
             check.label:SetWordWrap(false)
             panelSearchFilters.ApplyHexLabelColor(check.label, race.c)
@@ -8006,8 +10533,8 @@ function panelSearchFilters.CreateControls()
     for _, classInfo in ipairs(panelSearchFilters.FilterClasses()) do
         local mask = tonumber(classInfo and classInfo.m)
         if mask then
-            local check = panelSearchFilters.CreateCheckButton(panelSearchFilters.content, tostring(classInfo.n or ("Class " .. tostring(mask))))
-            check:SetPoint("TOPLEFT", panelSearchFilters.content, "TOPLEFT", 0, y)
+            local check = panelSearchFilters.CreateCheckButton(characterContent, tostring(classInfo.n or ("Class " .. tostring(mask))))
+            check:SetPoint("TOPLEFT", characterContent, "TOPLEFT", 0, y)
             check.label:SetWidth(214)
             check.label:SetWordWrap(false)
             panelSearchFilters.ApplyHexLabelColor(check.label, classInfo.c)
@@ -8018,11 +10545,11 @@ function panelSearchFilters.CreateControls()
             y = y - 22
         end
     end
-    minY = math.min(minY, y)
+    characterContent:SetHeight(math.max(24, -y + 8))
 
     local typeY = -2
-    local typeHeading = CreateLabel(panelSearchFilters.content, "GameFontNormalSmall")
-    typeHeading:SetPoint("TOPLEFT", panelSearchFilters.content, "TOPLEFT", 0, typeY)
+    local typeHeading = CreateLabel(typeContent, "GameFontNormalSmall")
+    typeHeading:SetPoint("TOPLEFT", typeContent, "TOPLEFT", 0, typeY)
     typeHeading:SetText("Quest Types")
     typeHeading:SetTextColor(1, 0.82, 0.12)
     panelSearchFilters.typeLabels[#panelSearchFilters.typeLabels + 1] = typeHeading
@@ -8030,8 +10557,8 @@ function panelSearchFilters.CreateControls()
     for _, typeInfo in ipairs(panelSearchFilters.FilterTypes()) do
         local id = typeInfo and typeInfo.id
         if id then
-            local check = panelSearchFilters.CreateCheckButton(panelSearchFilters.content, tostring(typeInfo.n or id))
-            check:SetPoint("TOPLEFT", panelSearchFilters.content, "TOPLEFT", 0, typeY)
+            local check = panelSearchFilters.CreateCheckButton(typeContent, tostring(typeInfo.n or id))
+            check:SetPoint("TOPLEFT", typeContent, "TOPLEFT", 0, typeY)
             check.label:SetWidth(214)
             check.label:SetWordWrap(false)
             check:SetScript("OnClick", function(self)
@@ -8041,9 +10568,7 @@ function panelSearchFilters.CreateControls()
             typeY = typeY - 22
         end
     end
-    minY = math.min(minY, typeY)
-
-    panelSearchFilters.content:SetHeight(math.max(24, -minY + 8))
+    typeContent:SetHeight(math.max(24, -typeY + 8))
 
     panelSearchFilters.SetMode("search")
 end
@@ -8055,19 +10580,37 @@ local function CreateJourneyPanel()
     panelFrame:SetFrameStrata("DIALOG")
     panelFrame:SetMovable(true)
     panelFrame:EnableMouse(true)
+    panelFrame:EnableKeyboard(true)
+    if panelFrame.SetPropagateKeyboardInput then
+        panelFrame:SetPropagateKeyboardInput(true)
+    end
     panelFrame:RegisterForDrag("LeftButton")
     panelFrame:SetScript("OnDragStart", panelFrame.StartMoving)
     panelFrame:SetScript("OnDragStop", panelFrame.StopMovingOrSizing)
+    panelFrame:SetScript("OnKeyDown", function(self, key)
+        local consume = key == "ESCAPE" and DreamwayPanelSelectedQuestCount() > 0
+        if self.SetPropagateKeyboardInput then
+            self:SetPropagateKeyboardInput(not consume)
+        end
+        if consume then
+            DreamwayClearPanelQuestSelection(true)
+        end
+    end)
+    panelFrame:SetScript("OnKeyUp", function(self)
+        if self.SetPropagateKeyboardInput then
+            self:SetPropagateKeyboardInput(true)
+        end
+    end)
     SetFrameBackdrop(panelFrame, 0.02, 0.02, 0.025, 0.94, 0.75)
 
     panelFrame.logo = panelFrame:CreateTexture(nil, "ARTWORK")
-    panelFrame.logo:SetSize(30, 30)
-    panelFrame.logo:SetPoint("TOPLEFT", panelFrame, "TOPLEFT", 14, -9)
+    panelFrame.logo:SetSize(40, 40)
+    panelFrame.logo:SetPoint("TOPLEFT", panelFrame, "TOPLEFT", 12, -10)
     panelFrame.logo:SetTexture("Interface\\AddOns\\DreamwayQuestPlanner\\Media\\DreamwayIcon")
 
     panelFrame.title = CreateLabel(panelFrame, "GameFontNormalLarge")
-    panelFrame.title:SetPoint("LEFT", panelFrame.logo, "RIGHT", 7, 0)
-    panelFrame.title:SetWidth(330)
+    panelFrame.title:SetPoint("LEFT", panelFrame.logo, "RIGHT", 5, 4)
+    panelFrame.title:SetWidth(270)
     panelFrame.title:SetWordWrap(false)
     panelFrame.title:SetText("Dreamway")
     panelFrame.title:SetTextColor(1, 0.82, 0.12)
@@ -8079,38 +10622,91 @@ local function CreateJourneyPanel()
         panelFrame:Hide()
     end)
 
+    local settingsButton = CreateTinyButton(panelFrame, "", 22)
+    panelJourneyManager.settingsButton = settingsButton
+    settingsButton:SetPoint("TOPRIGHT", closeButton, "TOPLEFT", -6, 0)
+    settingsButton.icon = settingsButton:CreateTexture(nil, "ARTWORK")
+    settingsButton.icon:SetSize(16, 16)
+    settingsButton.icon:SetPoint("CENTER", settingsButton, "CENTER", 0, 0)
+    settingsButton.icon:SetTexture("Interface\\Buttons\\UI-OptionsButton")
+    settingsButton:SetScript("OnClick", function()
+        DreamwaySetPanelView(panelJourneyManager.view == "settings" and "planner" or "settings")
+    end)
+    ConfigurePanelTooltip(settingsButton, "Settings", "Configure Dreamway's tracker, map, and replay event log.")
+
+    panelJourneyManager.infoButton = CreateTinyButton(panelFrame, "i", 22)
+    panelJourneyManager.infoButton:SetPoint("TOPRIGHT", settingsButton, "TOPLEFT", -6, 0)
+    panelJourneyManager.infoButton:SetScript("OnClick", function()
+        DreamwaySetPanelView(panelJourneyManager.view == "info" and "planner" or "info")
+    end)
+    ConfigurePanelTooltip(panelJourneyManager.infoButton, "About Dreamway", "Learn how Dreamway, its companion web app, and Questie work together.")
+
+    panelJourneyManager.warningButton = CreateTinyButton(panelFrame, "!", 22)
+    panelJourneyManager.warningButton.label:SetTextColor(1, 0.72, 0.36)
+    panelJourneyManager.warningButton:SetBackdropColor(0.18, 0.105, 0.025, 0.82)
+    panelJourneyManager.warningButton:SetBackdropBorderColor(0.9, 0.55, 0.18, 0.78)
+    panelJourneyManager.warningButton.SetActive = function(self, active)
+        self.active = active
+        if active then
+            self:SetBackdropColor(0.28, 0.02, 0.02, 0.92)
+            self:SetBackdropBorderColor(1, 0.82, 0.12, 0.95)
+            self.label:SetTextColor(1, 0.82, 0.12)
+        else
+            self:SetBackdropColor(0.18, 0.105, 0.025, 0.82)
+            self:SetBackdropBorderColor(0.9, 0.55, 0.18, 0.78)
+            self.label:SetTextColor(1, 0.72, 0.36)
+        end
+    end
+    panelJourneyManager.warningButton:SetScript("OnEnter", function(self)
+        self:SetBackdropBorderColor(1, 0.82, 0.12, 0.95)
+    end)
+    panelJourneyManager.warningButton:SetScript("OnLeave", function(self)
+        self:SetActive(self.active)
+    end)
+    panelJourneyManager.warningButton:SetScript("OnClick", function()
+        DreamwaySetPanelView(panelJourneyManager.view == "warnings" and "planner" or "warnings")
+    end)
+    ConfigurePanelTooltip(panelJourneyManager.warningButton, "Journey Warnings", "Review every unavailable quest, character compatibility warning, and invalid prerequisite placement in this Journey.")
+    panelJourneyManager.warningButton:Hide()
+
     local manageButton = CreateTinyButton(panelFrame, "Manage Journeys", 124)
     panelJourneyManager.toggleButton = manageButton
-    manageButton:SetPoint("TOPRIGHT", closeButton, "TOPLEFT", -8, 0)
+    manageButton:SetPoint("TOPRIGHT", panelJourneyManager.infoButton, "TOPLEFT", -6, 0)
     manageButton:SetScript("OnClick", function()
-        DreamwayCloseJourneyMetadataMenu()
-        if panelImportArea then
-            panelImportArea:Hide()
-        end
-        if panelExportArea then
-            panelExportArea:Hide()
-        end
-        if panelJourneyManager.frame then
-            panelJourneyManager.frame:SetShown(not panelJourneyManager.frame:IsShown())
-        end
+        DreamwaySetPanelView("journeys")
     end)
 
-    panelJourneyManager.hiddenDrop = CreateBackdropFrame(nil, panelFrame)
-    panelJourneyManager.hiddenDrop:SetSize(86, 22)
-    panelJourneyManager.hiddenDrop:SetPoint("RIGHT", manageButton, "LEFT", -8, 0)
-    panelJourneyManager.hiddenDrop:EnableMouse(true)
-    SetFrameBackdrop(panelJourneyManager.hiddenDrop, 0.24, 0.025, 0.025, 0.92, 0.8)
-    panelJourneyManager.hiddenDrop.label = CreateLabel(panelJourneyManager.hiddenDrop, "GameFontNormalSmall")
-    panelJourneyManager.hiddenDrop.label:SetPoint("CENTER", panelJourneyManager.hiddenDrop, "CENTER", 0, 0)
-    panelJourneyManager.hiddenDrop.label:SetText("Hidden")
-    panelJourneyManager.hiddenDrop.label:SetTextColor(1, 0.38, 0.32)
+    panelJourneyManager.plannerButton = CreateTinyButton(panelFrame, "Planner", 66)
+    panelJourneyManager.plannerButton:SetPoint("TOPRIGHT", manageButton, "TOPLEFT", -6, 0)
+    panelJourneyManager.plannerButton:SetScript("OnClick", function()
+        local rebuildSearch = panelSearchFilters.mode ~= "search"
+        panelSearchFilters.SetMode("search", rebuildSearch)
+        DreamwaySetPanelView("planner")
+    end)
 
-    panelStatusText = CreateLabel(panelFrame, "GameFontHighlightSmall")
-    panelStatusText:SetPoint("LEFT", panelFrame.title, "RIGHT", 12, 0)
-    panelStatusText:SetPoint("RIGHT", panelJourneyManager.hiddenDrop, "LEFT", -10, 0)
+    panelJourneyManager.warningButton:SetPoint("TOPRIGHT", panelJourneyManager.plannerButton, "TOPLEFT", -6, 0)
+
+    panelJourneyManager.statusFrame = CreateBackdropFrame(nil, panelFrame)
+    panelJourneyManager.statusFrame:SetFrameLevel(panelFrame:GetFrameLevel() + 2)
+    SetFrameBackdrop(panelJourneyManager.statusFrame, 0.025, 0.03, 0.025, 0.72, 0.34)
+
+    panelStatusText = CreateLabel(panelJourneyManager.statusFrame, "GameFontHighlightSmall")
+    panelStatusText:SetPoint("LEFT", panelJourneyManager.statusFrame, "LEFT", 8, 0)
+    panelStatusText:SetPoint("RIGHT", panelJourneyManager.statusFrame, "RIGHT", -8, 0)
+    panelStatusText:SetHeight(14)
+    panelStatusText:SetJustifyH("CENTER")
+    panelStatusText:SetJustifyV("MIDDLE")
     panelStatusText:SetWordWrap(false)
     panelStatusText:SetText("Click a batch to make it current. Drag quests between batches or Hidden.")
     panelStatusText:SetTextColor(0.75, 0.75, 0.75)
+
+    panelJourneyManager.undoButton = CreateTinyButton(panelJourneyManager.statusFrame, "Undo", 52)
+    panelJourneyManager.undoButton:SetHeight(20)
+    panelJourneyManager.undoButton:SetPoint("RIGHT", panelJourneyManager.statusFrame, "RIGHT", -7, 0)
+    panelJourneyManager.undoButton:SetScript("OnClick", DreamwayUndoLastJourneyAction)
+    ConfigurePanelTooltip(panelJourneyManager.undoButton, "Undo", "Restore the Journey to its state before the most recent change.")
+    panelJourneyManager.undoButton:Hide()
+    DreamwayUpdatePanelStatusBounds()
 
     panelFrame.metadataText = CreateLabel(panelFrame, "GameFontDisableSmall")
     panelFrame.metadataText:SetPoint("TOPLEFT", panelFrame.title, "BOTTOMLEFT", 0, -5)
@@ -8118,15 +10714,15 @@ local function CreateJourneyPanel()
     panelFrame.metadataText:SetWordWrap(false)
 
     panelSearchResults = CreateBackdropFrame("Dreamway_JourneySearchColumn", panelFrame)
-    panelSearchResults:SetPoint("TOPRIGHT", panelFrame, "TOPRIGHT", -18, -58)
-    panelSearchResults:SetPoint("BOTTOMRIGHT", panelFrame, "BOTTOMRIGHT", -18, 24)
+    panelSearchResults:SetPoint("TOPRIGHT", panelFrame, "TOPRIGHT", -12, -58)
+    panelSearchResults:SetPoint("BOTTOMRIGHT", panelFrame, "BOTTOMRIGHT", -12, 12)
     panelSearchResults:SetWidth(286)
     panelSearchResults:SetFrameLevel(panelFrame:GetFrameLevel() + 2)
     SetFrameBackdrop(panelSearchResults, 0.01, 0.01, 0.012, 0.86, 0.4)
 
-    panelShowAssignedCheck = panelSearchFilters.CreateCheckButton(panelFrame, "Hide assigned")
+    panelShowAssignedCheck = panelSearchFilters.CreateCheckButton(panelFrame, "Hide assigned quests")
     panelShowAssignedCheck:SetPoint("BOTTOMLEFT", panelSearchResults, "TOPLEFT", 0, 3)
-    panelShowAssignedCheck.label:SetWidth(105)
+    panelShowAssignedCheck.label:SetWidth(135)
     panelShowAssignedCheck.label:SetWordWrap(false)
     panelShowAssignedCheck:SetChecked(not panelShowAssignedQuests)
     panelShowAssignedCheck:SetScript("OnClick", function(self)
@@ -8134,22 +10730,6 @@ local function CreateJourneyPanel()
         SaveDb()
         RefreshPanelSearchResults()
     end)
-
-    panelJourneyManager.previousBatchCheck = panelSearchFilters.CreateCheckButton(panelFrame, "Previous in progress")
-    panelJourneyManager.previousBatchCheck:SetPoint("BOTTOMLEFT", panelSearchResults, "TOPLEFT", 132, 3)
-    panelJourneyManager.previousBatchCheck.label:SetWidth(140)
-    panelJourneyManager.previousBatchCheck.label:SetWordWrap(false)
-    panelJourneyManager.previousBatchCheck:SetChecked(ProfileRecorder.showPreviousBatchQuests == true)
-    panelJourneyManager.previousBatchCheck:SetScript("OnClick", function(self)
-        ProfileRecorder.showPreviousBatchQuests = self:GetChecked() and true or false
-        SaveDb()
-        RefreshDreamwayTracker()
-    end)
-    ConfigurePanelTooltip(
-        panelJourneyManager.previousBatchCheck,
-        "Previous in progress",
-        "Include level-appropriate quests from earlier batches when they are still incomplete and in your quest log."
-    )
 
     panelSearchFilters.headerLabel = CreateLabel(panelSearchResults, "GameFontNormalSmall")
     panelSearchFilters.headerLabel:SetPoint("TOPLEFT", panelSearchResults, "TOPLEFT", 10, -10)
@@ -8199,8 +10779,9 @@ local function CreateJourneyPanel()
     end)
 
     panelSearchBox = CreateFrame("EditBox", "Dreamway_JourneySearchBox", panelSearchResults, BackdropTemplateMixin and "BackdropTemplate")
-    panelSearchBox:SetSize(246, 22)
-    panelSearchBox:SetPoint("TOPLEFT", panelSearchFilters.headerLabel, "BOTTOMLEFT", 0, -6)
+    panelSearchBox:SetHeight(22)
+    panelSearchBox:SetPoint("TOPLEFT", panelSearchResults, "TOPLEFT", 10, -32)
+    panelSearchBox:SetPoint("TOPRIGHT", panelSearchResults, "TOPRIGHT", -10, -32)
     panelSearchBox:SetAutoFocus(false)
     panelSearchBox:SetFontObject(ChatFontNormal)
     panelSearchBox:SetTextInsets(6, 6, 2, 2)
@@ -8211,8 +10792,9 @@ local function CreateJourneyPanel()
     panelSearchBox:SetScript("OnTextChanged", function(self)
         panelSearchText = string.lower(self:GetText() or "")
         ProfileRecorder.resetSearchScroll = true
-        if RefreshPanel then
-            RefreshPanel()
+        panelSearchResultsDirty = true
+        if RefreshPanelSearchResults then
+            RefreshPanelSearchResults()
         end
     end)
     SetFrameBackdrop(panelSearchBox, 0.01, 0.01, 0.012, 0.86, 0.38)
@@ -8230,15 +10812,56 @@ local function CreateJourneyPanel()
     panelSearchFilters.CreateControls()
 
     panelBatchScroll = CreateFrame("ScrollFrame", "Dreamway_JourneyScroll", panelFrame, "UIPanelScrollFrameTemplate")
-    panelBatchScroll:SetPoint("TOPLEFT", panelFrame, "TOPLEFT", 18, -58)
-    panelBatchScroll:SetPoint("BOTTOMRIGHT", panelFrame, "BOTTOMRIGHT", -326, 24)
+    panelBatchScroll:SetPoint("TOPLEFT", panelFrame, "TOPLEFT", 12, -58)
+    panelBatchScroll:SetPoint("BOTTOMRIGHT", panelFrame, "BOTTOMRIGHT", -300, 12)
     panelBatchScroll:HookScript("OnVerticalScroll", function()
-        UpdatePanelBatchVisibleColumns()
+        if ProfileRecorder.batchScrollPending then
+            return
+        end
+        ProfileRecorder.batchScrollPending = true
+        C_Timer.After(0, function()
+            ProfileRecorder.batchScrollPending = false
+            UpdatePanelBatchVisibleColumns()
+        end)
     end)
 
     panelBatchContent = CreateFrame("Frame", nil, panelBatchScroll)
     panelBatchContent:SetSize(710, 365)
     panelBatchScroll:SetScrollChild(panelBatchContent)
+
+    panelJourneyManager.hiddenDrop = CreateBackdropFrame(nil, panelFrame)
+    panelJourneyManager.hiddenDrop:SetPoint("TOPRIGHT", panelBatchScroll, "TOPRIGHT", -26, 0)
+    panelJourneyManager.hiddenDrop:SetPoint("BOTTOMRIGHT", panelBatchScroll, "BOTTOMRIGHT", -26, 0)
+    panelJourneyManager.hiddenDrop:SetWidth(30)
+    panelJourneyManager.hiddenDrop:SetFrameLevel(panelFrame:GetFrameLevel() + 4)
+    panelJourneyManager.hiddenDrop:EnableMouse(true)
+    SetFrameBackdrop(panelJourneyManager.hiddenDrop, 0.24, 0.025, 0.025, 0.9, 0.82)
+    panelJourneyManager.hiddenDrop.icon = CreateFrame("Frame", nil, panelJourneyManager.hiddenDrop)
+    panelJourneyManager.hiddenDrop.icon:SetSize(16, 18)
+    panelJourneyManager.hiddenDrop.icon:SetPoint("CENTER", panelJourneyManager.hiddenDrop, "CENTER", 0, 0)
+    panelJourneyManager.hiddenDrop.icon.body = panelJourneyManager.hiddenDrop.icon:CreateTexture(nil, "ARTWORK")
+    panelJourneyManager.hiddenDrop.icon.body:SetPoint("BOTTOM", panelJourneyManager.hiddenDrop.icon, "BOTTOM", 0, 0)
+    panelJourneyManager.hiddenDrop.icon.body:SetSize(12, 12)
+    panelJourneyManager.hiddenDrop.icon.body:SetColorTexture(1, 0.38, 0.32, 0.95)
+    panelJourneyManager.hiddenDrop.icon.lid = panelJourneyManager.hiddenDrop.icon:CreateTexture(nil, "ARTWORK")
+    panelJourneyManager.hiddenDrop.icon.lid:SetPoint("TOP", panelJourneyManager.hiddenDrop.icon, "TOP", 0, -3)
+    panelJourneyManager.hiddenDrop.icon.lid:SetSize(16, 2)
+    panelJourneyManager.hiddenDrop.icon.lid:SetColorTexture(1, 0.38, 0.32, 0.95)
+    panelJourneyManager.hiddenDrop.icon.handle = panelJourneyManager.hiddenDrop.icon:CreateTexture(nil, "ARTWORK")
+    panelJourneyManager.hiddenDrop.icon.handle:SetPoint("BOTTOM", panelJourneyManager.hiddenDrop.icon.lid, "TOP", 0, 1)
+    panelJourneyManager.hiddenDrop.icon.handle:SetSize(6, 2)
+    panelJourneyManager.hiddenDrop.icon.handle:SetColorTexture(1, 0.38, 0.32, 0.95)
+    ConfigurePanelTooltip(
+        panelJourneyManager.hiddenDrop,
+        "Hidden",
+        "Drop quests here to move them into the Journey's Hidden list."
+    )
+    panelJourneyManager.batchScrollBar = _G["Dreamway_JourneyScrollScrollBar"]
+    if panelJourneyManager.batchScrollBar then
+        panelJourneyManager.batchScrollBar:ClearAllPoints()
+        panelJourneyManager.batchScrollBar:SetPoint("TOPLEFT", panelJourneyManager.hiddenDrop, "TOPRIGHT", 4, -16)
+        panelJourneyManager.batchScrollBar:SetPoint("BOTTOMLEFT", panelJourneyManager.hiddenDrop, "BOTTOMRIGHT", 4, 16)
+    end
 
     panelImportArea = CreateBackdropFrame(nil, panelFrame)
     panelImportArea:SetPoint("TOPLEFT", panelFrame, "TOPLEFT", 18, -58)
@@ -8271,8 +10894,7 @@ local function CreateJourneyPanel()
     doImportButton:SetPoint("BOTTOMRIGHT", panelImportArea, "BOTTOMRIGHT", -12, 12)
     doImportButton:SetScript("OnClick", function()
         local ok, message = ImportJourneyText(panelImportEditBox:GetText())
-        panelStatusText:SetText(message)
-        panelStatusText:SetTextColor(ok and 0.35 or 1, ok and 1 or 0.25, ok and 0.35 or 0.25)
+        PanelSetStatus(message, ok)
         if ok then
             panelImportEditBox:SetText("")
             panelImportEditBox:ClearFocus()
@@ -8331,6 +10953,11 @@ local function CreateJourneyPanel()
 
     panelExportArea:Hide()
     DreamwayCreateJourneyManager()
+    DreamwayCreateSettingsPanel()
+    DreamwayCreateInfoPanel()
+    DreamwayCreateWarningsPanel()
+    panelJourneyManager.view = "planner"
+    DreamwayRefreshPanelNavigation()
     panelFrame:Hide()
 end
 
@@ -8378,7 +11005,9 @@ local function TryInitialize()
         return
     end
 
-    NormalizeDb()
+    if not databaseNormalized then
+        NormalizeDb()
+    end
 
     baseFrame = _G.Questie_BaseFrame
     headerFrame = _G.Questie_HeaderFrame
@@ -8392,8 +11021,21 @@ local function TryInitialize()
     CreateToggle()
     CreateDreamwayTracker()
     CreateJourneyPanel()
+    DreamwayInitializeMinimapButton()
     ProfileRecorder.RegisterQuestieCallbacks()
     HookQuestieUpdates()
+
+    -- Reapply the per-character selection after Questie's tracker frames exist.
+    -- This prevents full-login startup rendering from leaving a default batch active.
+    if startupJourneyId and (DreamwayDB.journeys[startupJourneyId] or DreamwayExampleJourneyById(startupJourneyId)) then
+        DreamwaySetActiveJourneyId(startupJourneyId)
+        if DreamwayExampleJourneyById(startupJourneyId) then
+            RefreshJourneyDerivedData(DreamwayWorkingExampleJourney(startupJourneyId, true))
+        end
+    end
+    batchIndex = tonumber(startupBatchIndex) or batchIndex
+    startupJourneyId = nil
+    startupBatchIndex = nil
 
     baseFrame:HookScript("OnShow", function()
         if mode == MODE_DREAMWAY then
@@ -8426,6 +11068,9 @@ events:RegisterEvent("PLAYER_LOGOUT")
 events:SetScript("OnEvent", function(_, event, ...)
     local firstArgument = select(1, ...)
     if event == "PLAYER_LOGIN" then
+        if not databaseNormalized then
+            NormalizeDb()
+        end
         ProfileRecorder.RefreshCharacterProfile()
         C_Timer.After(1, function()
             ProfileRecorder.RefreshCharacterProfile()
@@ -8494,6 +11139,15 @@ events:SetScript("OnEvent", function(_, event, ...)
         or event == "QUEST_LOG_UPDATE"
         or event == "QUEST_WATCH_UPDATE"
         or (event == "UNIT_QUEST_LOG_CHANGED" and (firstArgument == nil or firstArgument == "player"))
+    if relevantQuestUiEvent then
+        panelSearchResultsDirty = true
+        ProfileRecorder.panelNeedsRefresh = true
+    elseif event == "PLAYER_LEVEL_UP" then
+        ProfileRecorder.panelNeedsRefresh = true
+        if not panelFrame or not panelFrame:IsShown() then
+            panelSearchResultsDirty = true
+        end
+    end
     if initialized and mode == MODE_DREAMWAY and relevantQuestUiEvent then
         DreamwayScheduleUiRefresh(true)
     end

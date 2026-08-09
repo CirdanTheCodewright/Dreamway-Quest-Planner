@@ -16,6 +16,10 @@ Copy-Item -Path (Join-Path $source "*") -Destination $target -Recurse -Force
 
 After copying, read back `Dreamway.lua` from the live AddOns folder and confirm its size/content matches the workspace copy.
 
+## Addon Interface Views
+
+Prefer full-interface view swaps inside the main Dreamway panel over separate popup windows. Features such as Journey management, settings, information, and warning browsers should replace the Planner content while active and return through the shared Planner navigation. Reserve modal overlays only for brief confirmations or focused text entry that cannot reasonably use a full panel view.
+
 ## Previewing The Web App
 
 When testing `dreamway.html`, do not try to open it with a `file://` URL in the in-app browser. Browser policy blocks local file URLs. Also avoid relying on external Playwright from the shell here; the bundled environment may not have `playwright-core` available.
@@ -121,3 +125,16 @@ Quest Search can contain thousands of rows. Preserve its virtualized rendering w
 - Do not perform Questie database hydration, quest-completion API calls, prerequisite traversal, sorting, or filtering from the scrolling/rendering hot path. Resolve those when the result model is built and cache lightweight display values used by recycled rows.
 - Invalidate targeted caches only when their underlying state changes, such as player level, quest completion, Journey edits, game version, or filters.
 - Before deploying search-related changes, test an empty search with the largest practical result set and confirm mouse-wheel scrolling remains responsive while row frames remain bounded to the visible pool.
+
+## Addon Planner Performance
+
+The Planner also uses recycled batch columns and quest rows. Keep its scroll path lightweight:
+
+- Render only visible batch rows plus the single look-ahead row; do not restore broad batch overscan.
+- Bind click, hover, and drag handlers once when pooled quest rows are created. While scrolling, update row data fields instead of allocating new closures.
+- Cache difficulty-colored quest labels by quest, player level, and the relevant display setting.
+- Coalesce `OnVerticalScroll` updates and never refresh Quest Search, Journey warnings, quest metadata, or the full Planner from the scroll callback.
+
+## Addon Memory
+
+The generated quest database is already resident in memory. Quest Search must reference its immutable metadata arrays rather than cloning zone, prerequisite, and type arrays into additional catalogues or result objects. Canonical search entries are marked with `_dreamwayCanonical`; treat their referenced arrays as read-only, and clone only when creating a mutable Journey quest.
