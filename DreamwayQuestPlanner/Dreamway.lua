@@ -1,4 +1,5 @@
 local ADDON_NAME = ...
+DREAMWAY_VERSION = "0.5.0"
 
 local MODE_QUESTIE = "Questie"
 local MODE_DREAMWAY = "Dreamway"
@@ -120,6 +121,43 @@ local SECTION_ORDER = {
     { key = "pickup", label = "Pick up" },
     { key = "progress", label = "In Progress" },
     { key = "turnin", label = "Complete" },
+}
+
+ProfileRecorder.playerRaceMasks = {
+    [1] = 1,
+    [2] = 2,
+    [3] = 4,
+    [4] = 8,
+    [5] = 16,
+    [6] = 32,
+    [7] = 64,
+    [8] = 128,
+    [10] = 512,
+    [11] = 1024,
+}
+ProfileRecorder.playerRaceMasksByFile = {
+    Human = 1,
+    Orc = 2,
+    Dwarf = 4,
+    NightElf = 8,
+    Scourge = 16,
+    Tauren = 32,
+    Gnome = 64,
+    Troll = 128,
+    BloodElf = 512,
+    Draenei = 1024,
+}
+ProfileRecorder.playerClassMasksByFile = {
+    WARRIOR = 1,
+    PALADIN = 2,
+    HUNTER = 4,
+    ROGUE = 8,
+    PRIEST = 16,
+    DEATHKNIGHT = 32,
+    SHAMAN = 64,
+    MAGE = 128,
+    WARLOCK = 256,
+    DRUID = 1024,
 }
 
 local mode = MODE_QUESTIE
@@ -396,6 +434,9 @@ function DreamwaySettingsData()
     end
     if objective.showQuestLevels == nil then
         objective.showQuestLevels = true
+    end
+    if objective.showCompatibleQuestsOnly == nil then
+        objective.showCompatibleQuestsOnly = true
     end
     if objective.alwaysShowDefaultVersion ~= 1 then
         objective.alwaysShow = true
@@ -2310,6 +2351,56 @@ local function ShowQuestieTrackerMenu(quest)
     return shown
 end
 
+function DreamwayCurrentCharacterQuestMasks()
+    local _, raceFile, raceId = UnitRace("player")
+    local _, classFile, classId = UnitClass("player")
+    local raceMask = ProfileRecorder.playerRaceMasks[tonumber(raceId)]
+        or ProfileRecorder.playerRaceMasksByFile[raceFile]
+    local classMask = tonumber(classId) and (2 ^ (tonumber(classId) - 1))
+        or ProfileRecorder.playerClassMasksByFile[classFile]
+    return raceMask, classMask
+end
+
+function DreamwayQuestIsCompatibleWithCurrentCharacter(quest, playerRaceMask, playerClassMask, currentVersion)
+    local questId = tonumber(quest and quest.id)
+    if not questId then
+        return true
+    end
+
+    local record = DreamwayQuestZones
+        and DreamwayQuestZones.quests
+        and DreamwayQuestZones.quests[questId]
+    if not record then
+        return false
+    end
+
+    local recordVersion = record.gv and NormalizeDreamwayGameVersion(record.gv) or nil
+    if recordVersion
+        and recordVersion ~= currentVersion
+        and not (currentVersion == "sod" and recordVersion == "era")
+    then
+        return false
+    end
+
+    local requiredRaceMask = tonumber(record.rm) or tonumber(quest.requiredRaceMask) or 0
+    if requiredRaceMask > 0
+        and playerRaceMask
+        and DreamwayBitBand(requiredRaceMask, playerRaceMask) == 0
+    then
+        return false
+    end
+
+    local requiredClassMask = tonumber(record.cm) or tonumber(quest.requiredClassMask) or 0
+    if requiredClassMask > 0
+        and playerClassMask
+        and DreamwayBitBand(requiredClassMask, playerClassMask) == 0
+    then
+        return false
+    end
+
+    return true
+end
+
 local function GroupBatchQuests(journey, batch, currentIndex)
     local grouped = {
         prereq = {},
@@ -2318,10 +2409,16 @@ local function GroupBatchQuests(journey, batch, currentIndex)
         turnin = {},
     }
 
+    local compatibleOnly = DreamwaySettingsData().objectiveTracker.showCompatibleQuestsOnly == true
+    local playerRaceMask, playerClassMask = DreamwayCurrentCharacterQuestMasks()
+    local currentVersion = CurrentDreamwayGameVersion()
+
     for _, quest in ipairs(batch.quests or {}) do
-        local category = ClassifyQuest(quest)
-        if category and grouped[category] then
-            table.insert(grouped[category], quest)
+        if not compatibleOnly or DreamwayQuestIsCompatibleWithCurrentCharacter(quest, playerRaceMask, playerClassMask, currentVersion) then
+            local category = ClassifyQuest(quest)
+            if category and grouped[category] then
+                table.insert(grouped[category], quest)
+            end
         end
     end
 
@@ -2334,6 +2431,7 @@ local function GroupBatchQuests(journey, batch, currentIndex)
             for _, quest in ipairs(journey.batches[index].quests or {}) do
                 local questId = tonumber(quest.id)
                 if questId and not seen[questId]
+                    and (not compatibleOnly or DreamwayQuestIsCompatibleWithCurrentCharacter(quest, playerRaceMask, playerClassMask, currentVersion))
                     and IsQuestInLog(questId)
                     and not IsQuestCompleteInLog(questId)
                     and not IsQuestTurnedIn(questId)
@@ -2669,10 +2767,10 @@ function DreamwayConfigureTrackerItemButton(button, itemId, questId, size)
     button:SetPushedTexture(texture)
     button:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square")
     button:SetSize(size, size)
+    if button.cooldown then
+        button.cooldown:SetSize(size - 4, size - 4)
+    end
     button:RegisterForClicks("AnyUp", "AnyDown")
-    button:SetScript("OnEvent", button.OnEvent)
-    button:SetScript("OnShow", button.OnShow)
-    button:SetScript("OnHide", button.OnHide)
     button:SetScript("OnEnter", function(self)
         if not GameTooltip then
             return
@@ -2705,8 +2803,75 @@ function DreamwayConfigureTrackerItemButton(button, itemId, questId, size)
         button.count:SetText(button.charges or 0)
         button.count:SetShown((button.charges or 0) > 1)
     end
+    DreamwayRefreshTrackerItemButtonState(button)
     button:Show()
     return true
+end
+
+function DreamwayRefreshTrackerItemButtonState(button)
+    if not button or not button.itemId then
+        return
+    end
+
+    local getItemCount = C_Item and C_Item.GetItemCount or GetItemCount
+    local charges = getItemCount and getItemCount(button.itemId, nil, true) or 0
+    button.charges = charges or 0
+    if button.count then
+        button.count:SetText(button.charges)
+        button.count:SetShown(button.charges > 1)
+    end
+
+    if button.cooldown then
+        local start, duration, enabled
+        if QuestieCompat and QuestieCompat.GetItemCooldown then
+            start, duration, enabled = QuestieCompat.GetItemCooldown(button.itemId)
+        elseif GetItemCooldown then
+            start, duration, enabled = GetItemCooldown(button.itemId)
+        end
+        if enabled == 1 and duration and duration > 0 then
+            button.cooldown:SetCooldown(start or 0, duration, enabled)
+            button.cooldown:Show()
+        else
+            button.cooldown:Hide()
+        end
+    end
+end
+
+function DreamwayRefreshVisibleTrackerItemButtonStates()
+    if not dreamwayFrame or not dreamwayFrame.itemButtons then
+        return
+    end
+    for _, button in ipairs(dreamwayFrame.itemButtons) do
+        if button:IsShown() and button.itemId then
+            DreamwayRefreshTrackerItemButtonState(button)
+        end
+    end
+end
+
+function DreamwayCreateTrackerItemButton(index)
+    local button = CreateFrame(
+        "Button",
+        "Dreamway_TrackerItemButton" .. tostring(index),
+        dreamwayFrame,
+        "SecureActionButtonTemplate"
+    )
+    button.cooldown = CreateFrame("Cooldown", nil, button, "CooldownFrameTemplate")
+    button.cooldown:SetPoint("CENTER", button, "CENTER", 0, 0)
+    button.cooldown:Hide()
+    button.count = button:CreateFontString(nil, "ARTWORK", "Game10Font_o1")
+    button.count:Hide()
+    button.FakeHide = function(self)
+        self:RegisterForClicks()
+        self:SetAttribute("type1", nil)
+        self:SetAttribute("item1", nil)
+        self.itemId = nil
+        self.questID = nil
+        self.charges = 0
+        if self.cooldown then self.cooldown:Hide() end
+        if self.count then self.count:Hide() end
+    end
+    button:Hide()
+    return button
 end
 
 function DreamwayResetTrackerItemButtons()
@@ -3414,14 +3579,8 @@ local function CreateDreamwayTracker()
     dreamwayFrame.lineIndex = 0
     dreamwayFrame.itemButtons = {}
     dreamwayFrame.itemButtonIndex = 0
-    local trackerItemButton = ImportQuestieModule("TrackerItemButton")
-    if trackerItemButton and trackerItemButton.New then
-        for index = 1, 16 do
-            dreamwayFrame.itemButtons[index] = trackerItemButton.New("Dreamway_TrackerItemButton" .. tostring(index))
-            if dreamwayFrame.itemButtons[index] and dreamwayFrame.itemButtons[index].SetParent then
-                dreamwayFrame.itemButtons[index]:SetParent(dreamwayFrame)
-            end
-        end
+    for index = 1, 16 do
+        dreamwayFrame.itemButtons[index] = DreamwayCreateTrackerItemButton(index)
     end
 
     dreamwayFrame.leftArrow = CreateTinyButton(dreamwayFrame, "<", 20)
@@ -6008,6 +6167,126 @@ local function CommitJourneyCandidate(candidate, message, previousBatchIndex)
     return true
 end
 
+function DreamwayJourneyBatchIndexById(journey, batchId)
+    batchId = tostring(batchId or "")
+    for index, batch in ipairs(journey and journey.batches or {}) do
+        if tostring(batch.id or "") == batchId then
+            return index, batch
+        end
+    end
+    return nil, nil
+end
+
+function DreamwayCommitPanelBatchName(batchId, rawName)
+    local journey, errorMessage = EditableJourney()
+    if not journey then
+        PanelSetStatus(errorMessage, false)
+        return false
+    end
+
+    local index, batch = DreamwayJourneyBatchIndexById(journey, batchId)
+    if not batch then
+        PanelSetStatus("That batch no longer exists.", false)
+        RefreshPanelBatchSelection()
+        return false
+    end
+
+    local name = tostring(rawName or ""):match("^%s*(.-)%s*$") or ""
+    local restoreAutomaticName = name == ""
+    if restoreAutomaticName and batch.autoName == true then
+        RefreshPanelBatchSelection()
+        return true
+    end
+    if not restoreAutomaticName and batch.autoName ~= true and name == tostring(batch.name or "") then
+        RefreshPanelBatchSelection()
+        return true
+    end
+
+    local candidate = CloneJourney(journey)
+    local _, candidateBatch = DreamwayJourneyBatchIndexById(candidate, batchId)
+    if not candidateBatch then
+        PanelSetStatus("That batch no longer exists.", false)
+        RefreshPanelBatchSelection()
+        return false
+    end
+
+    local previousName = tostring(batch.name or ("Batch " .. tostring(index)))
+    if restoreAutomaticName then
+        candidateBatch.name = tostring(index)
+        candidateBatch.autoName = true
+    else
+        candidateBatch.name = name
+        candidateBatch.autoName = false
+    end
+
+    return CommitJourneyCandidate(candidate, function(updatedJourney)
+        local _, updatedBatch = DreamwayJourneyBatchIndexById(updatedJourney, batchId)
+        if restoreAutomaticName then
+            return "Restored automatic naming for " .. tostring(updatedBatch and updatedBatch.name or previousName) .. "."
+        end
+        return "Renamed " .. previousName .. " to " .. name .. "."
+    end, batchIndex)
+end
+
+function DreamwayCommitPanelBatchLevel(batchId, rawLevel)
+    local journey, errorMessage = EditableJourney()
+    if not journey then
+        PanelSetStatus(errorMessage, false)
+        return false
+    end
+
+    local _, batch = DreamwayJourneyBatchIndexById(journey, batchId)
+    if not batch then
+        PanelSetStatus("That batch no longer exists.", false)
+        RefreshPanelBatchSelection()
+        return false
+    end
+
+    local text = tostring(rawLevel or ""):match("^%s*(.-)%s*$") or ""
+    local restoreAutomaticLevel = text == ""
+    local level
+    if not restoreAutomaticLevel then
+        level = tonumber(text)
+        if not level then
+            PanelSetStatus("Enter a whole-number batch level, or leave it blank to calculate automatically.", false)
+            RefreshPanelBatchSelection()
+            return false
+        end
+        level = math.max(1, math.min(DreamwayCurrentMaxLevel(), math.floor(level + 0.5)))
+    end
+
+    if restoreAutomaticLevel and batch.expectedLevelManual ~= true then
+        RefreshPanelBatchSelection()
+        return true
+    end
+    if not restoreAutomaticLevel
+        and batch.expectedLevelManual == true
+        and tonumber(batch.expectedLevelOverride) == level
+    then
+        RefreshPanelBatchSelection()
+        return true
+    end
+
+    local candidate = CloneJourney(journey)
+    local _, candidateBatch = DreamwayJourneyBatchIndexById(candidate, batchId)
+    if not candidateBatch then
+        PanelSetStatus("That batch no longer exists.", false)
+        RefreshPanelBatchSelection()
+        return false
+    end
+
+    candidateBatch.expectedLevelManual = not restoreAutomaticLevel
+    candidateBatch.expectedLevelOverride = restoreAutomaticLevel and nil or level
+    local batchName = tostring(batch.name or "Batch")
+    return CommitJourneyCandidate(
+        candidate,
+        restoreAutomaticLevel
+            and ("Restored automatic level calculation for " .. batchName .. ".")
+            or ("Set " .. batchName .. " to level " .. tostring(level) .. "."),
+        batchIndex
+    )
+end
+
 function DreamwayUndoLastJourneyAction()
     local undoState = ProfileRecorder.panelJourneyUndo
     local activeJourneyId = DreamwayActiveJourneyId()
@@ -6712,6 +6991,9 @@ local function ShowJourneyExportArea(selectedJourney)
     local hiddenCount = #JourneyUnusedQuestRows(journey)
     local text = JourneyToDenseString(journey)
     if panelExportEditBox then
+        if panelExportArea and panelExportArea.label then
+            panelExportArea.label:SetText("Copy this Journey string into the web app")
+        end
         panelExportEditBox:SetText(text)
         panelExportArea:Show()
         panelExportEditBox:SetFocus()
@@ -7721,6 +8003,7 @@ function DreamwayRefreshSettingsPanel()
     local eventLog = settings.eventLog
 
     ui.previousCheck:SetChecked(objective.previousInProgress == true)
+    ui.compatibleCheck:SetChecked(objective.showCompatibleQuestsOnly == true)
     ui.levelCheck:SetChecked(objective.showQuestLevels == true)
     ui.alwaysShowCheck:SetChecked(objective.alwaysShow == true)
     ui.hideHiddenCheck:SetChecked(map.hideHiddenMarkers == true)
@@ -7871,6 +8154,69 @@ function DreamwayClearEventLog()
     PanelSetStatus("Cleared this character's replay event log.", true)
 end
 
+function DreamwayBuildDiagnostics()
+    local version, build, buildDate, interfaceVersion = GetBuildInfo()
+    local metadata = C_AddOns and C_AddOns.GetAddOnMetadata or GetAddOnMetadata
+    local questieVersion = metadata and metadata("Questie", "Version") or "unknown"
+    local profile = ProfileRecorder.EnsureCharacterProfile()
+    local journey = ActiveJourney()
+    local settings = DreamwaySettingsData()
+    local objective = settings.objectiveTracker or {}
+    local map = settings.map or {}
+    local eventLog = settings.eventLog or {}
+    local lines = {
+        "Dreamway " .. DREAMWAY_VERSION .. " diagnostics",
+        "Generated: " .. (date and date("%b %d, %Y, %I:%M %p") or tostring(time())),
+        "Client: " .. tostring(version or "unknown") .. " (build " .. tostring(build or "unknown") .. ", interface " .. tostring(interfaceVersion or "unknown") .. ", " .. tostring(buildDate or "unknown") .. ")",
+        "Game version: " .. DreamwayGameVersionLabel(CurrentDreamwayGameVersion()),
+        "Questie: " .. tostring(questieVersion or "unknown"),
+        "Character: " .. tostring(UnitName("player") or "unknown") .. " - " .. tostring(GetRealmName and GetRealmName() or "unknown") .. " | level " .. tostring(UnitLevel("player") or "unknown") .. " | " .. tostring(UnitFactionGroup("player") or "unknown"),
+        "Profile: " .. tostring(#(profile.completedQuestIds or {})) .. " completed quests, " .. tostring(#(profile.events or {})) .. " events, " .. tostring(tonumber(ProfileRecorder.unsavedEventCount) or 0) .. " unsaved events",
+        "Panel view: " .. tostring(panelJourneyManager.view or "planner") .. " | tracker mode: " .. tostring(mode or MODE_QUESTIE),
+        "Objective settings: previous=" .. tostring(objective.previousInProgress == true) .. ", compatibleOnly=" .. tostring(objective.showCompatibleQuestsOnly == true) .. ", itemButtons=" .. tostring(objective.questItemButtons or "always") .. ", levels=" .. tostring(objective.showQuestLevels == true) .. ", alwaysShow=" .. tostring(objective.alwaysShow == true),
+        "Map settings: hideHidden=" .. tostring(map.hideHiddenMarkers == true) .. ", currentBatchOnly=" .. tostring(map.hideExceptCurrentBatch == true),
+        "Event logging: enabled=" .. tostring(eventLog.enabled == true),
+    }
+    if journey then
+        local assignedCount = 0
+        for _, batch in ipairs(journey.batches or {}) do
+            assignedCount = assignedCount + #(batch.quests or {})
+        end
+        local hiddenCount = #JourneyUnusedQuestRows(journey)
+        local currentBatch = journey.batches and journey.batches[batchIndex]
+        local unavailableWarnings, prerequisiteWarnings, _, characterWarnings = JourneyWarningSummary(journey)
+        local function countWarnings(warnings)
+            local count = 0
+            for _ in pairs(warnings or {}) do count = count + 1 end
+            return count
+        end
+        lines[#lines + 1] = "Journey: " .. tostring(journey.name or journey.id or "unknown") .. " (" .. DreamwayGameVersionLabel(journey.gameVersion) .. ")"
+        lines[#lines + 1] = "Journey layout: " .. tostring(#(journey.batches or {})) .. " batches, " .. tostring(assignedCount) .. " assigned, " .. tostring(hiddenCount) .. " hidden"
+        lines[#lines + 1] = "Current batch: " .. (currentBatch and (tostring(currentBatch.name or batchIndex) .. " (" .. tostring(batchIndex) .. "/" .. tostring(#journey.batches) .. ")") or "none")
+        lines[#lines + 1] = "Journey timestamp: " .. tostring(journey.savedAt or "none")
+        lines[#lines + 1] = "Warnings: " .. tostring(countWarnings(unavailableWarnings)) .. " unavailable, " .. tostring(countWarnings(characterWarnings)) .. " character, " .. tostring(countWarnings(prerequisiteWarnings)) .. " prerequisite placement"
+    else
+        lines[#lines + 1] = "Journey: none"
+    end
+    return table.concat(lines, "\n")
+end
+
+function DreamwayShowDiagnostics()
+    if not panelExportArea or not panelExportEditBox then
+        return
+    end
+    if panelImportArea then
+        panelImportArea:Hide()
+    end
+    if panelExportArea.label then
+        panelExportArea.label:SetText("Diagnostics selected - press Ctrl+C to copy")
+    end
+    panelExportEditBox:SetText(DreamwayBuildDiagnostics())
+    panelExportArea:Show()
+    panelExportEditBox:SetFocus()
+    panelExportEditBox:HighlightText()
+end
+
 function DreamwayCreateSettingsPanel()
     local frame = CreateBackdropFrame("Dreamway_SettingsPanel", panelFrame)
     frame:SetPoint("TOPLEFT", panelFrame, "TOPLEFT", 12, -58)
@@ -7887,6 +8233,16 @@ function DreamwayCreateSettingsPanel()
         eventChecks = {},
     }
     panelJourneyManager.settings = ui
+
+    ui.copyDiagnosticsButton = CreateTinyButton(frame, "Copy diagnostics", 116)
+    ui.copyDiagnosticsButton:SetHeight(24)
+    ui.copyDiagnosticsButton:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -12, -10)
+    ui.copyDiagnosticsButton:SetScript("OnClick", DreamwayShowDiagnostics)
+    ConfigurePanelTooltip(
+        ui.copyDiagnosticsButton,
+        "Copy diagnostics",
+        "Open a preselected diagnostic summary. Press Ctrl+C to copy it for a bug report."
+    )
 
     local frameWidth = 1044
     local columnWidth = frameWidth / 3
@@ -7927,8 +8283,19 @@ function DreamwayCreateSettingsPanel()
         "Include level-appropriate quests from earlier batches when they are incomplete and still in your quest log."
     )
 
+    ui.compatibleCheck = DreamwayCreateSettingsCheck(frame, "Show compatible quests only", 18, -96, 290, function(self)
+        DreamwaySettingsData().objectiveTracker.showCompatibleQuestsOnly = self:GetChecked() and true or false
+        SaveDb()
+        RefreshDreamwayTracker()
+    end)
+    ConfigurePanelTooltip(
+        ui.compatibleCheck,
+        "Show compatible quests only",
+        "Hide batch quests unavailable to this character because of game version, faction, race, or class restrictions."
+    )
+
     local itemLabel = CreateLabel(frame, "GameFontHighlightSmall")
-    itemLabel:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -100)
+    itemLabel:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -128)
     itemLabel:SetText("Show quest item buttons")
     itemLabel:SetTextColor(0.88, 0.88, 0.88)
     ui.itemButton = CreateTinyButton(frame, "Always  v", 130)
@@ -7937,13 +8304,13 @@ function DreamwayCreateSettingsPanel()
         DreamwayShowQuestItemButtonMenu(self)
     end)
 
-    ui.levelCheck = DreamwayCreateSettingsCheck(frame, "Show quest levels", 18, -146, 290, function(self)
+    ui.levelCheck = DreamwayCreateSettingsCheck(frame, "Show quest levels", 18, -174, 290, function(self)
         DreamwaySettingsData().objectiveTracker.showQuestLevels = self:GetChecked() and true or false
         SaveDb()
         RefreshDreamwayTracker()
     end)
 
-    ui.alwaysShowCheck = DreamwayCreateSettingsCheck(frame, "Always show the objective tracker", 18, -174, 290, function(self)
+    ui.alwaysShowCheck = DreamwayCreateSettingsCheck(frame, "Always show the objective tracker", 18, -202, 290, function(self)
         DreamwaySettingsData().objectiveTracker.alwaysShow = self:GetChecked() and true or false
         SaveDb()
         if mode == MODE_DREAMWAY and DreamwaySettingsData().objectiveTracker.alwaysShow and baseFrame then
@@ -7959,7 +8326,7 @@ function DreamwayCreateSettingsPanel()
 
     ui.questieTrackerButton = CreateTinyButton(frame, "Open Questie Tracker Settings", 178)
     ui.questieTrackerButton:SetHeight(24)
-    ui.questieTrackerButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -210)
+    ui.questieTrackerButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 22, -238)
     ui.questieTrackerButton:SetScript("OnClick", DreamwayOpenQuestieTrackerSettings)
     ConfigurePanelTooltip(
         ui.questieTrackerButton,
@@ -8106,6 +8473,11 @@ function DreamwayCreateInfoPanel()
     title:SetJustifyH("LEFT")
     title:SetText("About Dreamway")
     title:SetTextColor(1, 0.82, 0.12)
+
+    local versionText = CreateLabel(frame, "GameFontDisableSmall")
+    versionText:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -12, -14)
+    versionText:SetText("Version " .. DREAMWAY_VERSION)
+    versionText:SetTextColor(0.65, 0.65, 0.65)
 
     local subtitle = CreateLabel(frame, "GameFontHighlightSmall")
     subtitle:SetPoint("TOP", title, "BOTTOM", 0, -7)
@@ -8898,6 +9270,72 @@ function PanelSearchRowsWithChainHeaders(questRows)
     return rows
 end
 
+function DreamwayCreatePanelBatchEditBox(parent, numeric)
+    local editBox = CreateFrame("EditBox", nil, parent, BackdropTemplateMixin and "BackdropTemplate")
+    editBox:SetAutoFocus(false)
+    editBox:SetFontObject(numeric and GameFontNormalSmall or GameFontNormal)
+    editBox:SetTextInsets(numeric and 3 or 5, numeric and 3 or 5, 1, 1)
+    editBox:SetJustifyH(numeric and "CENTER" or "LEFT")
+    editBox:SetMaxLetters(numeric and 3 or 80)
+    if numeric then
+        editBox:SetNumeric(true)
+    end
+    SetFrameBackdrop(editBox, 0.015, 0.015, 0.018, 0.82, 0.28)
+    editBox:SetBackdropBorderColor(0.48, 0.42, 0.25, 0.42)
+
+    editBox:SetScript("OnEditFocusGained", function(self)
+        self.editOriginalText = tostring(self:GetText() or "")
+        self.editDirty = false
+        self.editCancelled = false
+        self:SetBackdropBorderColor(1, 0.82, 0.12, 0.9)
+    end)
+    editBox:SetScript("OnTextChanged", function(self)
+        if not self.suppressTextChanged and self:HasFocus() then
+            self.editDirty = true
+        end
+    end)
+    editBox:SetScript("OnEnterPressed", function(self)
+        self:ClearFocus()
+    end)
+    editBox:SetScript("OnEscapePressed", function(self)
+        self.editCancelled = true
+        self.suppressTextChanged = true
+        self:SetText(self.editOriginalText or self.boundText or "")
+        self.suppressTextChanged = false
+        self:ClearFocus()
+    end)
+    editBox:SetScript("OnEditFocusLost", function(self)
+        self:SetBackdropBorderColor(0.48, 0.42, 0.25, 0.42)
+        local shouldCommit = self.editDirty and not self.editCancelled
+        local commitFunction = self.commitFunction
+        local batchId = self.boundBatchId
+        local value = self:GetText()
+        self.editDirty = false
+        self.editCancelled = false
+        self.editOriginalText = nil
+        if shouldCommit and commitFunction and batchId then
+            C_Timer.After(0, function()
+                commitFunction(batchId, value)
+            end)
+        end
+    end)
+    return editBox
+end
+
+function DreamwayBindPanelBatchEditBox(editBox, batchId, text, commitFunction)
+    if editBox:HasFocus() then
+        editBox:ClearFocus()
+    end
+    text = tostring(text or "")
+    editBox.boundBatchId = batchId
+    editBox.boundText = text
+    editBox.commitFunction = commitFunction
+    editBox.suppressTextChanged = true
+    editBox:SetText(text)
+    editBox:SetCursorPosition(0)
+    editBox.suppressTextChanged = false
+end
+
 local function HidePanelBatchColumn(column)
     if not column then
         return
@@ -8907,6 +9345,10 @@ local function HidePanelBatchColumn(column)
     column:SetScript("OnMouseDown", nil)
     column:SetScript("OnMouseUp", nil)
     if column.title then column.title:Hide() end
+    if column.nameEditBox then
+        if column.nameEditBox:HasFocus() then column.nameEditBox:ClearFocus() end
+        column.nameEditBox:Hide()
+    end
     if column.titleHitbox then
         column.titleHitbox:SetScript("OnMouseDown", nil)
         column.titleHitbox:SetScript("OnMouseUp", nil)
@@ -8918,6 +9360,11 @@ local function HidePanelBatchColumn(column)
     column.headerWasDragged = false
     if column.indexText then column.indexText:Hide() end
     if column.levelText then column.levelText:Hide() end
+    if column.levelControl then column.levelControl:Hide() end
+    if column.levelEditBox then
+        if column.levelEditBox:HasFocus() then column.levelEditBox:ClearFocus() end
+        column.levelEditBox:Hide()
+    end
     if column.batchCheck then column.batchCheck:Hide() end
     if column.zoneText then column.zoneText:Hide() end
     if column.zoneHitbox then
@@ -8974,6 +9421,22 @@ local function EnsurePanelBatchColumn(poolIndex)
     column.titleHitbox:RegisterForClicks("LeftButtonUp")
     column.titleHitbox:RegisterForDrag("LeftButton")
 
+    column.nameEditBox = DreamwayCreatePanelBatchEditBox(column, false)
+    column.nameEditBox:SetHeight(22)
+    column.nameEditBox:SetFrameLevel(column:GetFrameLevel() + 6)
+
+    column.levelControl = CreateFrame("Frame", nil, column)
+    column.levelControl:SetSize(43, 22)
+    column.levelControl:SetFrameLevel(column:GetFrameLevel() + 6)
+    column.levelEditBox = DreamwayCreatePanelBatchEditBox(column.levelControl, true)
+    column.levelEditBox:SetPoint("RIGHT", column.levelControl, "RIGHT", 0, 0)
+    column.levelEditBox:SetSize(29, 20)
+    column.levelEditBox:SetFrameLevel(column.levelControl:GetFrameLevel() + 1)
+    column.levelPrefix = CreateLabel(column.levelControl, "GameFontNormalSmall")
+    column.levelPrefix:SetPoint("RIGHT", column.levelEditBox, "LEFT", -2, 0)
+    column.levelPrefix:SetText("Lv")
+    column.levelPrefix:SetTextColor(0.74, 0.74, 0.74)
+
     column.indexText = CreateLabel(column, "GameFontDisableSmall")
     column.indexText:SetPoint("BOTTOMRIGHT", column, "BOTTOMRIGHT", -10, 8)
     column.indexText:SetJustifyH("RIGHT")
@@ -9011,9 +9474,9 @@ local function EnsurePanelBatchColumn(poolIndex)
     column.insertButton:SetBackdropColor(0.03, 0.03, 0.04, 0.7)
     column.insertButton:SetBackdropBorderColor(0.72, 0.58, 0.12, 0.7)
 
-    column.deleteButton = CreateTinyButton(column, "x", 18)
+    column.deleteButton = CreateTinyButton(column, "Delete batch", 74)
     column.deleteButton:SetHeight(18)
-    column.deleteButton:SetFrameLevel(column:GetFrameLevel() + 5)
+    column.deleteButton:SetFrameLevel(column:GetFrameLevel() + 7)
     column.deleteButton:SetBackdropColor(0.24, 0.025, 0.025, 0.92)
     column.deleteButton:SetBackdropBorderColor(0.9, 0.2, 0.18, 0.8)
     column.deleteButton.label:SetTextColor(1, 0.38, 0.32)
@@ -9071,11 +9534,10 @@ local function RenderPanelBatchColumn(column, batch, index, total, options)
     local expectedLevel = isHidden and nil or BatchExpectedLevel(batch)
     local batchComplete = (not isHidden) and IsBatchComplete(batch)
 
-    column.title:Show()
     column.title:ClearAllPoints()
     column.title:SetPoint("TOPLEFT", column, "TOPLEFT", 10, -10)
     local titleText
-    local titleWidth = expectedLevel and (batchComplete and 64 or 78) or (isHidden and 134 or 112)
+    local titleWidth = isHidden and 134 or 74
     column.title:SetWidth(titleWidth)
     column.title:SetHeight(16)
     column.title:SetWordWrap(false)
@@ -9083,15 +9545,29 @@ local function RenderPanelBatchColumn(column, batch, index, total, options)
         titleText = "Hidden"
         column.title:SetText(titleText)
         column.title:SetTextColor(1, 0.36, 0.32)
+        column.title:Show()
     else
         titleText = batch.name or tostring(index)
-        column.title:SetText(titleText)
-        column.title:SetTextColor(1, 0.82, 0.12)
+        column.title:Hide()
+        column.nameEditBox:ClearAllPoints()
+        column.nameEditBox:SetPoint("TOPLEFT", column, "TOPLEFT", 7, -6)
+        column.nameEditBox:SetPoint("RIGHT", column.levelControl, "LEFT", -4, 0)
+        DreamwayBindPanelBatchEditBox(column.nameEditBox, batch.id, titleText, DreamwayCommitPanelBatchName)
+        column.nameEditBox:SetTextColor(1, 0.82, 0.12)
+        ConfigurePanelTooltip(column.nameEditBox, titleText, "Edit this batch name. Leave it blank to restore automatic naming.")
+        column.nameEditBox:Show()
+
+        column.levelControl:ClearAllPoints()
+        column.levelControl:SetPoint("TOPRIGHT", column, "TOPRIGHT", -7, -6)
+        column.levelControl:Show()
+        DreamwayBindPanelBatchEditBox(column.levelEditBox, batch.id, expectedLevel or "", DreamwayCommitPanelBatchLevel)
+        ConfigurePanelTooltip(column.levelEditBox, "Expected level", "Edit this batch's expected level. Leave it blank to calculate it automatically.")
+        column.levelEditBox:Show()
     end
     local titleHeight = 16
     column.titleHitbox:ClearAllPoints()
-    column.titleHitbox:SetPoint("TOPLEFT", column, "TOPLEFT", 7, -6)
-    column.titleHitbox:SetSize(PANEL_BATCH_COLUMN_WIDTH - 14, titleHeight + 8)
+    column.titleHitbox:SetPoint("TOPLEFT", column, "TOPLEFT", 0, 0)
+    column.titleHitbox:SetSize(PANEL_BATCH_COLUMN_WIDTH, 50)
     ConfigurePanelTooltip(
         column.titleHitbox,
         titleText,
@@ -9108,28 +9584,15 @@ local function RenderPanelBatchColumn(column, batch, index, total, options)
         column.indexText:Show()
     end
 
-    if expectedLevel then
-        column.levelText:ClearAllPoints()
-        column.levelText:SetPoint("TOPRIGHT", column, "TOPRIGHT", batchComplete and -38 or -23, -12)
-        column.levelText:SetText("Lv " .. tostring(expectedLevel))
-        column.levelText:SetTextColor(0.74, 0.74, 0.74)
-        column.levelText:Show()
-
-        if batchComplete then
-            column.batchCheck:ClearAllPoints()
-            column.batchCheck:SetPoint("LEFT", column.levelText, "RIGHT", 3, 1)
-            column.batchCheck:SetTexture(COMPLETE_TEXTURE)
-            column.batchCheck:Show()
-        end
-    elseif batchComplete then
+    if batchComplete then
         column.batchCheck:ClearAllPoints()
-        column.batchCheck:SetPoint("TOPRIGHT", column, "TOPRIGHT", -10, -11)
+        column.batchCheck:SetPoint("BOTTOMLEFT", column, "BOTTOMLEFT", 88, 9)
         column.batchCheck:SetTexture(COMPLETE_TEXTURE)
         column.batchCheck:Show()
     end
 
     column.zoneText:ClearAllPoints()
-    column.zoneText:SetPoint("TOPLEFT", column.title, "BOTTOMLEFT", 0, -4)
+    column.zoneText:SetPoint("TOPLEFT", column, "TOPLEFT", 10, -34)
     column.zoneText:SetWidth(PANEL_BATCH_COLUMN_WIDTH - 20)
     column.zoneText:SetHeight(12)
     column.zoneText:SetWordWrap(false)
@@ -9225,7 +9688,7 @@ local function RenderPanelBatchColumn(column, batch, index, total, options)
 
     if not isHidden then
         column.deleteButton:ClearAllPoints()
-        column.deleteButton:SetPoint("TOPRIGHT", column, "TOPRIGHT", -3, -3)
+        column.deleteButton:SetPoint("BOTTOMLEFT", column, "BOTTOMLEFT", 8, 5)
         column.deleteButton:SetScript("OnClick", function()
             DreamwayConfirmDeleteBatch(index)
         end)
@@ -10514,8 +10977,7 @@ function panelSearchFilters.CreateControls()
         local mask = tonumber(race and race.m)
         if mask then
             local name = tostring(race.n or ("Race " .. tostring(mask)))
-            local faction = race.f and (" [" .. tostring(race.f) .. "]") or ""
-            local check = panelSearchFilters.CreateCheckButton(characterContent, name .. faction)
+            local check = panelSearchFilters.CreateCheckButton(characterContent, name)
             check:SetPoint("TOPLEFT", characterContent, "TOPLEFT", 0, y)
             check.label:SetWidth(214)
             check.label:SetWordWrap(false)
@@ -10920,6 +11382,7 @@ local function CreateJourneyPanel()
     local exportLabel = CreateLabel(panelExportArea, "GameFontNormal")
     exportLabel:SetPoint("TOPLEFT", panelExportArea, "TOPLEFT", 12, -10)
     exportLabel:SetText("Copy this Journey string into the web app")
+    panelExportArea.label = exportLabel
 
     local exportScroll = CreateFrame("ScrollFrame", nil, panelExportArea, "UIPanelScrollFrameTemplate")
     exportScroll:SetPoint("TOPLEFT", panelExportArea, "TOPLEFT", 12, -34)
@@ -11060,6 +11523,7 @@ events:RegisterEvent("CHAT_MSG_COMBAT_XP_GAIN")
 events:RegisterEvent("CHAT_MSG_LOOT")
 events:RegisterEvent("UI_INFO_MESSAGE")
 events:RegisterEvent("BAG_UPDATE_DELAYED")
+events:RegisterEvent("BAG_UPDATE_COOLDOWN")
 events:RegisterEvent("LOOT_CLOSED")
 events:RegisterEvent("PLAYER_INTERACTION_MANAGER_FRAME_HIDE")
 events:RegisterEvent("PLAYER_DEAD")
@@ -11111,6 +11575,8 @@ events:SetScript("OnEvent", function(_, event, ...)
         if firstArgument == nil or firstArgument == "player" then
             ProfileRecorder.ScheduleQuestObjectiveEventRefresh(true)
         end
+    elseif event == "BAG_UPDATE_COOLDOWN" then
+        DreamwayRefreshVisibleTrackerItemButtonStates()
     elseif event == "QUEST_LOG_UPDATE"
         or event == "BAG_UPDATE_DELAYED"
         or event == "LOOT_CLOSED"
@@ -11150,6 +11616,8 @@ events:SetScript("OnEvent", function(_, event, ...)
     end
     if initialized and mode == MODE_DREAMWAY and relevantQuestUiEvent then
         DreamwayScheduleUiRefresh(true)
+    elseif initialized and mode == MODE_DREAMWAY and event == "BAG_UPDATE_DELAYED" then
+        DreamwayScheduleUiRefresh(false)
     end
 end)
 

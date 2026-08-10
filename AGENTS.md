@@ -138,3 +138,7 @@ The Planner also uses recycled batch columns and quest rows. Keep its scroll pat
 ## Addon Memory
 
 The generated quest database is already resident in memory. Quest Search must reference its immutable metadata arrays rather than cloning zone, prerequisite, and type arrays into additional catalogues or result objects. Canonical search entries are marked with `_dreamwayCanonical`; treat their referenced arrays as read-only, and clone only when creating a mutable Journey quest.
+
+## Objective Tracker Item Buttons
+
+Dreamway's objective tracker must use its own lightweight secure quest-item buttons. Do not instantiate Questie's `TrackerItemButton` for Dreamway: it hooks cooldown, charge, and range checks into `OnUpdate`, creating persistent per-frame CPU use for every visible quest item. Refresh Dreamway item-button state only when the tracker is rendered and from inventory or cooldown events.

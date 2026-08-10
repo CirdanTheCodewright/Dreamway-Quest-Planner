@@ -18,6 +18,10 @@ World of Warcraft\_classic_era_\Interface\AddOns\DreamwayQuestPlanner
 
 Then restart WoW or run `/reload`.
 
+Release packages also include the companion web app in `WebApp`. Open
+`WebApp/dreamway.html` in a browser; keep the HTML, `data`, `assets`, and icon
+files together so its lazy-loaded quest databases and maps remain available.
+
 ## Test
 
 The addon adds a compact `Questie | Dreamway` toggle above the Questie tracker.

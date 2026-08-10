@@ -81,6 +81,18 @@ The current browser smoke test uses Playwright with the bundled Codex runtime:
 node tools/verify_dreamway_webapp.mjs
 ```
 
+## Building A Curse Package
+
+Build the installable addon folder and Curse-ready ZIP with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\build_curse_release.ps1
+```
+
+The package is written to `artifacts/release`. It contains the addon and the
+companion web app, but excludes the Questie checkout, generators, source map
+images, local backups, and development documentation.
+
 ## Privacy
 
 This project is private while the core Journey model, addon integration, and data licensing approach are still being worked out.

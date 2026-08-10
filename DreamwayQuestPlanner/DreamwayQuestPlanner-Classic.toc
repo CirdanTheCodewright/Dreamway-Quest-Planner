@@ -2,7 +2,7 @@
 ## Title: Dreamway Quest Planner
 ## Notes: Plan and follow Dreamway Journeys in game.
 ## Author: Codex
-## Version: 0.4.1
+## Version: 0.5.0
 ## RequiredDeps: Questie
 ## SavedVariables: DreamwayDB
 ## SavedVariablesPerCharacter: DreamwayProfile
