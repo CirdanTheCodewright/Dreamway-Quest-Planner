@@ -8235,8 +8235,8 @@ function DreamwayCreateSettingsPanel()
     panelJourneyManager.settings = ui
 
     ui.copyDiagnosticsButton = CreateTinyButton(frame, "Copy diagnostics", 116)
-    ui.copyDiagnosticsButton:SetHeight(24)
-    ui.copyDiagnosticsButton:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -12, -10)
+    ui.copyDiagnosticsButton:SetHeight(20)
+    ui.copyDiagnosticsButton:SetPoint("BOTTOMRIGHT", frame, "TOPRIGHT", -12, 2)
     ui.copyDiagnosticsButton:SetScript("OnClick", DreamwayShowDiagnostics)
     ConfigurePanelTooltip(
         ui.copyDiagnosticsButton,
