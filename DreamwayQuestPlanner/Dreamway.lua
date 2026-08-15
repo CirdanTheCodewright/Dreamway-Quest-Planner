@@ -253,44 +253,13 @@ local JourneyPrerequisiteWarnings
 local JourneyWarningSummary
 
 local fallbackJourney = {
-    id = "dreamway-sample",
-    name = "Sample Darkshore Journey",
+    id = "dreamway-empty",
+    name = "Dreamway",
     batches = {
         {
-            name = "Darkshore: Auberdine North Loop",
-            zones = { "Darkshore" },
-            quests = {
-                { name = "Buzzbox 827", category = "pickup" },
-                { name = "Cave Mushrooms", category = "pickup" },
-                { name = "Washed Ashore 0/1", category = "progress" },
-                { name = "Buzzbox 827: Tide Crawlers 3/6", category = "progress" },
-                { name = "The Red Crystal 0/1", category = "progress" },
-                { name = "Bashal'Aran", category = "turnin" },
-                { name = "The Absent Minded Prospector", category = "turnin" },
-            },
-        },
-        {
-            name = "Darkshore: Bashal'Aran Sweep",
-            zones = { "Darkshore" },
-            quests = {
-                { name = "Tools of the Highborne", category = "pickup" },
-                { name = "For Love Eternal", category = "pickup" },
-                { name = "The Tower of Althalaxx 2/6", category = "progress" },
-                { name = "Deep Ocean, Vast Sea 0/2", category = "progress" },
-                { name = "Cave Mushrooms", category = "turnin" },
-            },
-        },
-        {
-            name = "Darkshore: South Beach Return",
-            zones = { "Darkshore" },
-            quests = {
-                { name = "Fruit of the Sea", category = "pickup" },
-                { name = "Beached Sea Creature 0/1", category = "progress" },
-                { name = "The Family and the Fishing Pole 4/6", category = "progress" },
-                { name = "Buzzbox 411", category = "turnin" },
-                { name = "Washed Ashore", category = "turnin" },
-                { name = "Fruit of the Sea", category = "turnin" },
-            },
+            name = "",
+            zones = {},
+            quests = {},
         },
     },
 }
@@ -453,7 +422,6 @@ local function NormalizeDb()
     end
     if characterSelection.activeJourneyId
         and not DreamwayDB.journeys[characterSelection.activeJourneyId]
-        and not DreamwayExampleJourneyById(characterSelection.activeJourneyId)
     then
         characterSelection.activeJourneyId = nil
         characterSelection.currentBatch = 1
@@ -7122,7 +7090,7 @@ function DreamwayManagerSelectedJourney()
         return journey
     end
     local journeys = DreamwaySortedJourneys()
-    journey = journeys[1] or DreamwayWorkingExampleJourney(DREAMWAY_EXAMPLE_JOURNEYS[1] and DREAMWAY_EXAMPLE_JOURNEYS[1].id, false)
+    journey = journeys[1]
     panelJourneyManager.selectedJourneyId = journey and journey.id or nil
     return journey
 end
@@ -7937,26 +7905,35 @@ function DreamwayUpdatePanelStatusBounds()
 end
 
 function DreamwaySetPlannerContentShown(shown)
+    local activeJourneyId = DreamwayActiveJourneyId()
+    local hasActiveJourney = activeJourneyId
+        and DreamwayDB
+        and DreamwayDB.journeys
+        and DreamwayDB.journeys[activeJourneyId] ~= nil
+    local showJourneyContent = shown and hasActiveJourney
     if panelJourneyManager.statusFrame then
-        panelJourneyManager.statusFrame:SetShown(shown)
+        panelJourneyManager.statusFrame:SetShown(showJourneyContent)
     end
     if panelBatchScroll then
-        panelBatchScroll:SetShown(shown)
+        panelBatchScroll:SetShown(showJourneyContent)
     end
     if panelJourneyManager.hiddenDrop then
-        panelJourneyManager.hiddenDrop:SetShown(shown)
+        panelJourneyManager.hiddenDrop:SetShown(showJourneyContent)
     end
     if panelJourneyManager.batchScrollBar then
-        panelJourneyManager.batchScrollBar:SetShown(shown)
+        panelJourneyManager.batchScrollBar:SetShown(showJourneyContent)
     end
     if panelSearchResults then
-        panelSearchResults:SetShown(shown)
+        panelSearchResults:SetShown(showJourneyContent)
     end
     if panelShowAssignedCheck then
-        panelShowAssignedCheck:SetShown(shown)
+        panelShowAssignedCheck:SetShown(showJourneyContent)
         if panelShowAssignedCheck.label then
-            panelShowAssignedCheck.label:SetShown(shown)
+            panelShowAssignedCheck.label:SetShown(showJourneyContent)
         end
+    end
+    if panelJourneyManager.emptyPlanner then
+        panelJourneyManager.emptyPlanner:SetShown(shown and not hasActiveJourney)
     end
     DreamwayUpdateUndoButton()
 end
@@ -10090,13 +10067,24 @@ function RefreshPanel(options)
     end
     options = options or {}
 
+    local activeJourneyId = DreamwayActiveJourneyId()
+    local hasActiveJourney = activeJourneyId
+        and DreamwayDB
+        and DreamwayDB.journeys
+        and DreamwayDB.journeys[activeJourneyId] ~= nil
     local journey = ActiveJourney()
     ClampBatchIndex(journey)
-    panelFrame.title:SetText("Dreamway - " .. (journey.name or "Journey"))
+    panelFrame.title:SetText(hasActiveJourney and ("Dreamway - " .. (journey.name or "Journey")) or "Dreamway")
     if panelFrame.metadataText then
-        panelFrame.metadataText:SetText(DreamwayJourneyMetadataSummary(journey))
+        panelFrame.metadataText:SetText(hasActiveJourney and DreamwayJourneyMetadataSummary(journey) or "No Journey active")
     end
     DreamwayRefreshJourneyWarningCache(journey)
+    DreamwaySetPlannerContentShown(panelJourneyManager.view == "planner")
+
+    if not hasActiveJourney then
+        ProfileRecorder.panelNeedsRefresh = false
+        return
+    end
 
     UpdatePanelBatchVisibleColumns(true)
     if RefreshPanelSearchResults then
@@ -11405,6 +11393,23 @@ local function CreateJourneyPanel()
     panelBatchContent:SetSize(710, 365)
     panelBatchScroll:SetScrollChild(panelBatchContent)
 
+    panelJourneyManager.emptyPlanner = CreateBackdropFrame(nil, panelFrame)
+    panelJourneyManager.emptyPlanner:SetPoint("TOPLEFT", panelFrame, "TOPLEFT", 12, -58)
+    panelJourneyManager.emptyPlanner:SetPoint("BOTTOMRIGHT", panelFrame, "BOTTOMRIGHT", -12, 12)
+    panelJourneyManager.emptyPlanner:SetFrameLevel(panelFrame:GetFrameLevel() + 2)
+    panelJourneyManager.emptyPlanner:EnableMouse(true)
+    SetFrameBackdrop(panelJourneyManager.emptyPlanner, 0.01, 0.01, 0.012, 0.72, 0.35)
+    panelJourneyManager.emptyPlanner.title = CreateLabel(panelJourneyManager.emptyPlanner, "GameFontNormalLarge")
+    panelJourneyManager.emptyPlanner.title:SetPoint("CENTER", panelJourneyManager.emptyPlanner, "CENTER", 0, 18)
+    panelJourneyManager.emptyPlanner.title:SetText("No Journey loaded")
+    panelJourneyManager.emptyPlanner.title:SetTextColor(1, 0.82, 0.12)
+    panelJourneyManager.emptyPlanner.message = CreateLabel(panelJourneyManager.emptyPlanner, "GameFontHighlight")
+    panelJourneyManager.emptyPlanner.message:SetPoint("TOP", panelJourneyManager.emptyPlanner.title, "BOTTOM", 0, -12)
+    panelJourneyManager.emptyPlanner.message:SetWidth(620)
+    panelJourneyManager.emptyPlanner.message:SetJustifyH("CENTER")
+    panelJourneyManager.emptyPlanner.message:SetText("Click Manage Journeys to create, import, or start from an example Journey.")
+    panelJourneyManager.emptyPlanner:Hide()
+
     panelJourneyManager.hiddenDrop = CreateBackdropFrame(nil, panelFrame)
     panelJourneyManager.hiddenDrop:SetPoint("TOPRIGHT", panelBatchScroll, "TOPRIGHT", -26, 0)
     panelJourneyManager.hiddenDrop:SetPoint("BOTTOMRIGHT", panelBatchScroll, "BOTTOMRIGHT", -26, 0)
@@ -11604,11 +11609,8 @@ local function TryInitialize()
 
     -- Reapply the per-character selection after Questie's tracker frames exist.
     -- This prevents full-login startup rendering from leaving a default batch active.
-    if startupJourneyId and (DreamwayDB.journeys[startupJourneyId] or DreamwayExampleJourneyById(startupJourneyId)) then
+    if startupJourneyId and DreamwayDB.journeys[startupJourneyId] then
         DreamwaySetActiveJourneyId(startupJourneyId)
-        if DreamwayExampleJourneyById(startupJourneyId) then
-            RefreshJourneyDerivedData(DreamwayWorkingExampleJourney(startupJourneyId, true))
-        end
     end
     batchIndex = tonumber(startupBatchIndex) or batchIndex
     startupJourneyId = nil
