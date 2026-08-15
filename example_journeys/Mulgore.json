@@ -1,0 +1,1215 @@
+{
+  "schemaVersion": 1,
+  "app": "Dreamway",
+  "kind": "Journey",
+  "gameVersion": "era",
+  "savedAt": "2026-08-10T15:16:54.130Z",
+  "savedAction": "saved",
+  "id": "valaroma",
+  "name": "Mulgore",
+  "character": {
+    "race": "Tauren",
+    "raceMask": 32,
+    "faction": "Horde",
+    "class": "All classes",
+    "classMask": 0
+  },
+  "hiddenQuestIds": [
+    5844
+  ],
+  "hiddenQuests": [
+    {
+      "id": 5844,
+      "name": "Welcome!",
+      "requiredLevel": 1,
+      "questLevel": 1,
+      "preQuestSingle": [],
+      "preQuestGroup": [],
+      "startZoneIds": [],
+      "objectiveZoneIds": [],
+      "endZoneIds": [
+        215
+      ],
+      "zoneIds": [
+        215
+      ],
+      "zones": [
+        "Mulgore"
+      ],
+      "hidden": true,
+      "unused": true
+    }
+  ],
+  "unusedQuestIds": [
+    5844
+  ],
+  "unusedQuests": [
+    {
+      "id": 5844,
+      "name": "Welcome!",
+      "requiredLevel": 1,
+      "questLevel": 1,
+      "preQuestSingle": [],
+      "preQuestGroup": [],
+      "startZoneIds": [],
+      "objectiveZoneIds": [],
+      "endZoneIds": [
+        215
+      ],
+      "zoneIds": [
+        215
+      ],
+      "zones": [
+        "Mulgore"
+      ],
+      "hidden": true,
+      "unused": true
+    }
+  ],
+  "batches": [
+    {
+      "id": "batch-ms12uwfr-1",
+      "name": "Red Cloud Mesa #1",
+      "autoName": false,
+      "expectedLevel": 2,
+      "expectedLevelManual": false,
+      "expectedLevelOverride": null,
+      "zones": [
+        "Mulgore"
+      ],
+      "questIds": [
+        752,
+        753,
+        747
+      ],
+      "quests": [
+        {
+          "id": 752,
+          "name": "A Humble Task",
+          "requiredLevel": 1,
+          "questLevel": 2,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 753,
+          "name": "A Humble Task",
+          "requiredLevel": 1,
+          "questLevel": 3,
+          "preQuestSingle": [
+            752
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [
+            215
+          ],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 747,
+          "name": "The Hunt Begins",
+          "requiredLevel": 1,
+          "questLevel": 2,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [
+            215
+          ],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "batch-ms12uwfs-2",
+      "name": "Red Cloud Mesa #2",
+      "autoName": false,
+      "expectedLevel": 2,
+      "expectedLevelManual": false,
+      "expectedLevelOverride": null,
+      "zones": [
+        "Mulgore"
+      ],
+      "questIds": [
+        755,
+        3091,
+        3092,
+        3093,
+        3094,
+        750
+      ],
+      "quests": [
+        {
+          "id": 755,
+          "name": "Rites of the Earthmother",
+          "requiredLevel": 1,
+          "questLevel": 3,
+          "preQuestSingle": [
+            753
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 3091,
+          "name": "Simple Note",
+          "requiredLevel": 1,
+          "questLevel": 1,
+          "preQuestSingle": [
+            747
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 3092,
+          "name": "Etched Note",
+          "requiredLevel": 1,
+          "questLevel": 1,
+          "preQuestSingle": [
+            747
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 3093,
+          "name": "Rune-Inscribed Note",
+          "requiredLevel": 1,
+          "questLevel": 1,
+          "preQuestSingle": [
+            747
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 3094,
+          "name": "Verdant Note",
+          "requiredLevel": 1,
+          "questLevel": 1,
+          "preQuestSingle": [
+            747
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 750,
+          "name": "The Hunt Continues",
+          "requiredLevel": 1,
+          "questLevel": 3,
+          "preQuestSingle": [
+            747
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [
+            215
+          ],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "batch-ms12uwfs-3",
+      "name": "Brambleblade Ravine",
+      "autoName": false,
+      "expectedLevel": 4,
+      "expectedLevelManual": false,
+      "expectedLevelOverride": null,
+      "zones": [
+        "Mulgore"
+      ],
+      "questIds": [
+        757,
+        780,
+        781,
+        3376
+      ],
+      "quests": [
+        {
+          "id": 757,
+          "name": "Rite of Strength",
+          "requiredLevel": 1,
+          "questLevel": 4,
+          "preQuestSingle": [
+            755
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [
+            215
+          ],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 780,
+          "name": "The Battleboars",
+          "requiredLevel": 1,
+          "questLevel": 4,
+          "preQuestSingle": [
+            750
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [
+            215
+          ],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 781,
+          "name": "Attack on Camp Narache",
+          "requiredLevel": 1,
+          "questLevel": 4,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 3376,
+          "name": "Break Sharptusk!",
+          "requiredLevel": 3,
+          "questLevel": 5,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [
+            215
+          ],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "batch-ms12uwfs-4",
+      "name": "To Bloodhoof Village",
+      "autoName": false,
+      "expectedLevel": 5,
+      "expectedLevelManual": false,
+      "expectedLevelOverride": null,
+      "zones": [
+        "Mulgore"
+      ],
+      "questIds": [
+        763,
+        1656
+      ],
+      "quests": [
+        {
+          "id": 763,
+          "name": "Rites of the Earthmother",
+          "requiredLevel": 1,
+          "questLevel": 5,
+          "preQuestSingle": [
+            757
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 1656,
+          "name": "A Task Unfinished",
+          "requiredLevel": 1,
+          "questLevel": 5,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "batch-ms12uwfs-5",
+      "name": "Southern Mulgore",
+      "autoName": false,
+      "expectedLevel": 6,
+      "expectedLevelManual": false,
+      "expectedLevelOverride": null,
+      "zones": [
+        "Mulgore"
+      ],
+      "questIds": [
+        767,
+        771,
+        745,
+        748,
+        754,
+        761,
+        766
+      ],
+      "quests": [
+        {
+          "id": 767,
+          "name": "Rite of Vision",
+          "requiredLevel": 3,
+          "questLevel": 6,
+          "preQuestSingle": [
+            763
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 771,
+          "name": "Rite of Vision",
+          "requiredLevel": 3,
+          "questLevel": 7,
+          "preQuestSingle": [
+            767
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 745,
+          "name": "Sharing the Land",
+          "requiredLevel": 1,
+          "questLevel": 6,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [
+            215
+          ],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 748,
+          "name": "Poison Water",
+          "requiredLevel": 4,
+          "questLevel": 5,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 754,
+          "name": "Winterhoof Cleansing",
+          "requiredLevel": 4,
+          "questLevel": 6,
+          "preQuestSingle": [
+            748
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [
+            215
+          ],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 761,
+          "name": "Swoop Hunting",
+          "requiredLevel": 4,
+          "questLevel": 6,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [
+            215
+          ],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 766,
+          "name": "Mazzranache",
+          "requiredLevel": 5,
+          "questLevel": 8,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "batch-ms12uwfs-6",
+      "name": "Central Mulgore",
+      "autoName": false,
+      "expectedLevel": 8,
+      "expectedLevelManual": false,
+      "expectedLevelOverride": null,
+      "zones": [
+        "Mulgore"
+      ],
+      "questIds": [
+        756,
+        758,
+        743,
+        749,
+        751
+      ],
+      "quests": [
+        {
+          "id": 756,
+          "name": "Thunderhorn Totem",
+          "requiredLevel": 4,
+          "questLevel": 7,
+          "preQuestSingle": [
+            754
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 758,
+          "name": "Thunderhorn Cleansing",
+          "requiredLevel": 4,
+          "questLevel": 8,
+          "preQuestSingle": [
+            756
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [
+            215
+          ],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 743,
+          "name": "Dangers of the Windfury",
+          "requiredLevel": 5,
+          "questLevel": 8,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [
+            215
+          ],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 749,
+          "name": "The Ravaged Caravan",
+          "requiredLevel": 5,
+          "questLevel": 8,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 751,
+          "name": "The Ravaged Caravan",
+          "requiredLevel": 5,
+          "questLevel": 8,
+          "preQuestSingle": [
+            749
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "batch-ms12uwfs-7",
+      "name": "Rite of Vision",
+      "autoName": false,
+      "expectedLevel": 8,
+      "expectedLevelManual": false,
+      "expectedLevelOverride": null,
+      "zones": [
+        "Mulgore"
+      ],
+      "questIds": [
+        772,
+        746
+      ],
+      "quests": [
+        {
+          "id": 772,
+          "name": "Rite of Vision",
+          "requiredLevel": 3,
+          "questLevel": 7,
+          "preQuestSingle": [
+            771
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 746,
+          "name": "Dwarven Digging",
+          "requiredLevel": 6,
+          "questLevel": 8,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "batch-ms12uwfs-8",
+      "name": "Northern Mulgore",
+      "autoName": false,
+      "expectedLevel": 10,
+      "expectedLevelManual": false,
+      "expectedLevelOverride": null,
+      "zones": [
+        "Mulgore",
+        "Thunder Bluff"
+      ],
+      "questIds": [
+        773,
+        759,
+        764,
+        765,
+        833,
+        861
+      ],
+      "quests": [
+        {
+          "id": 773,
+          "name": "Rite of Wisdom",
+          "requiredLevel": 3,
+          "questLevel": 10,
+          "preQuestSingle": [
+            772
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 759,
+          "name": "Wildmane Totem",
+          "requiredLevel": 4,
+          "questLevel": 10,
+          "preQuestSingle": [
+            758
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 764,
+          "name": "The Venture Co.",
+          "requiredLevel": 5,
+          "questLevel": 10,
+          "preQuestSingle": [
+            751
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [
+            215
+          ],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 765,
+          "name": "Supervisor Fizsprocket",
+          "requiredLevel": 5,
+          "questLevel": 12,
+          "preQuestSingle": [
+            751
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [
+            215
+          ],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 833,
+          "name": "A Sacred Burial",
+          "requiredLevel": 7,
+          "questLevel": 10,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [
+            215
+          ],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 861,
+          "name": "The Hunter's Way",
+          "requiredLevel": 10,
+          "questLevel": 10,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            1638
+          ],
+          "zoneIds": [
+            215,
+            1638
+          ],
+          "zones": [
+            "Mulgore",
+            "Thunder Bluff"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "batch-ms12uwfs-9",
+      "name": "Final Mulgore",
+      "autoName": false,
+      "expectedLevel": 12,
+      "expectedLevelManual": false,
+      "expectedLevelOverride": null,
+      "zones": [
+        "Mulgore",
+        "Thunder Bluff"
+      ],
+      "questIds": [
+        775,
+        776,
+        760,
+        770
+      ],
+      "quests": [
+        {
+          "id": 775,
+          "name": "Journey into Thunder Bluff",
+          "requiredLevel": 3,
+          "questLevel": 10,
+          "preQuestSingle": [
+            773
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            1638
+          ],
+          "zoneIds": [
+            215,
+            1638
+          ],
+          "zones": [
+            "Mulgore",
+            "Thunder Bluff"
+          ]
+        },
+        {
+          "id": 776,
+          "name": "Rites of the Earthmother",
+          "requiredLevel": 3,
+          "questLevel": 14,
+          "preQuestSingle": [
+            775
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            1638
+          ],
+          "objectiveZoneIds": [
+            215
+          ],
+          "endZoneIds": [
+            1638
+          ],
+          "zoneIds": [
+            215,
+            1638
+          ],
+          "zones": [
+            "Thunder Bluff",
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 760,
+          "name": "Wildmane Cleansing",
+          "requiredLevel": 4,
+          "questLevel": 10,
+          "preQuestSingle": [
+            759
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            215
+          ],
+          "objectiveZoneIds": [
+            215
+          ],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        },
+        {
+          "id": 770,
+          "name": "The Demon Scarred Cloak",
+          "requiredLevel": 6,
+          "questLevel": 12,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            215
+          ],
+          "zoneIds": [
+            215
+          ],
+          "zones": [
+            "Mulgore"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "batch-ms12w4zk-a",
+      "name": "Journey to the Crossroads",
+      "autoName": false,
+      "expectedLevel": 11,
+      "expectedLevelManual": false,
+      "expectedLevelOverride": null,
+      "zones": [
+        "The Barrens",
+        "Thunder Bluff"
+      ],
+      "questIds": [
+        854,
+        860
+      ],
+      "quests": [
+        {
+          "id": 854,
+          "name": "Journey to the Crossroads",
+          "requiredLevel": 9,
+          "questLevel": 12,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            17
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            17
+          ],
+          "zoneIds": [
+            17,
+            215
+          ],
+          "zones": [
+            "The Barrens"
+          ]
+        },
+        {
+          "id": 860,
+          "name": "Sergra Darkthorn",
+          "requiredLevel": 10,
+          "questLevel": 10,
+          "preQuestSingle": [
+            861
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            1638
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            17
+          ],
+          "zoneIds": [
+            17,
+            1638
+          ],
+          "zones": [
+            "Thunder Bluff",
+            "The Barrens"
+          ]
+        }
+      ]
+    }
+  ]
+}

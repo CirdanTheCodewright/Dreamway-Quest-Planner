@@ -1,0 +1,1727 @@
+{
+  "schemaVersion": 1,
+  "app": "Dreamway",
+  "kind": "Journey",
+  "gameVersion": "era",
+  "savedAt": "2026-08-15T15:32:34.612Z",
+  "savedAction": "saved",
+  "id": "tdsg",
+  "name": "Darkshore",
+  "character": {
+    "race": "All races",
+    "raceMask": 0,
+    "faction": "Alliance",
+    "class": "All classes",
+    "classMask": 0
+  },
+  "hiddenQuestIds": [
+    951,
+    994,
+    995,
+    993,
+    986,
+    1003,
+    1002,
+    1141
+  ],
+  "hiddenQuests": [
+    {
+      "id": 951,
+      "name": "Mathystra Relics",
+      "requiredLevel": 12,
+      "questLevel": 20,
+      "preQuestSingle": [
+        950
+      ],
+      "preQuestGroup": [],
+      "startZoneIds": [
+        148
+      ],
+      "objectiveZoneIds": [
+        148
+      ],
+      "endZoneIds": [
+        148
+      ],
+      "zoneIds": [
+        148
+      ],
+      "zones": [
+        "Darkshore"
+      ],
+      "hidden": true,
+      "unused": true
+    },
+    {
+      "id": 994,
+      "name": "Escape Through Force",
+      "requiredLevel": 10,
+      "questLevel": 22,
+      "preQuestSingle": [
+        993
+      ],
+      "preQuestGroup": [],
+      "startZoneIds": [
+        148
+      ],
+      "objectiveZoneIds": [
+        148
+      ],
+      "endZoneIds": [
+        148
+      ],
+      "zoneIds": [
+        148
+      ],
+      "zones": [
+        "Darkshore"
+      ],
+      "hidden": true,
+      "unused": true
+    },
+    {
+      "id": 995,
+      "name": "Escape Through Stealth",
+      "requiredLevel": 10,
+      "questLevel": 20,
+      "preQuestSingle": [
+        993
+      ],
+      "preQuestGroup": [],
+      "startZoneIds": [
+        148
+      ],
+      "objectiveZoneIds": [
+        148
+      ],
+      "endZoneIds": [
+        148
+      ],
+      "zoneIds": [
+        148
+      ],
+      "zones": [
+        "Darkshore"
+      ],
+      "hidden": true,
+      "unused": true
+    },
+    {
+      "id": 993,
+      "name": "A Lost Master",
+      "requiredLevel": 10,
+      "questLevel": 20,
+      "preQuestSingle": [
+        986
+      ],
+      "preQuestGroup": [],
+      "startZoneIds": [
+        148
+      ],
+      "objectiveZoneIds": [],
+      "endZoneIds": [
+        148
+      ],
+      "zoneIds": [
+        148
+      ],
+      "zones": [
+        "Darkshore"
+      ],
+      "hidden": true,
+      "unused": true
+    },
+    {
+      "id": 986,
+      "name": "A Lost Master",
+      "requiredLevel": 10,
+      "questLevel": 20,
+      "preQuestSingle": [
+        985
+      ],
+      "preQuestGroup": [],
+      "startZoneIds": [
+        148
+      ],
+      "objectiveZoneIds": [
+        148
+      ],
+      "endZoneIds": [
+        148
+      ],
+      "zoneIds": [
+        148
+      ],
+      "zones": [
+        "Darkshore"
+      ],
+      "hidden": true,
+      "unused": true
+    },
+    {
+      "id": 1003,
+      "name": "Buzzbox 525",
+      "requiredLevel": 7,
+      "questLevel": 16,
+      "preQuestSingle": [
+        1002
+      ],
+      "preQuestGroup": [],
+      "startZoneIds": [
+        148
+      ],
+      "objectiveZoneIds": [
+        148
+      ],
+      "endZoneIds": [
+        148
+      ],
+      "zoneIds": [
+        148
+      ],
+      "zones": [
+        "Darkshore"
+      ],
+      "hidden": true,
+      "unused": true
+    },
+    {
+      "id": 1002,
+      "name": "Buzzbox 323",
+      "requiredLevel": 7,
+      "questLevel": 14,
+      "preQuestSingle": [
+        1001
+      ],
+      "preQuestGroup": [],
+      "startZoneIds": [
+        148
+      ],
+      "objectiveZoneIds": [
+        148
+      ],
+      "endZoneIds": [
+        148
+      ],
+      "zoneIds": [
+        148
+      ],
+      "zones": [
+        "Darkshore"
+      ],
+      "hidden": true,
+      "unused": true
+    },
+    {
+      "id": 1141,
+      "name": "The Family and the Fishing Pole",
+      "requiredLevel": 10,
+      "questLevel": 14,
+      "preQuestSingle": [],
+      "preQuestGroup": [],
+      "startZoneIds": [
+        148
+      ],
+      "objectiveZoneIds": [
+        148
+      ],
+      "endZoneIds": [
+        148
+      ],
+      "zoneIds": [
+        148
+      ],
+      "zones": [
+        "Darkshore"
+      ],
+      "hidden": true,
+      "unused": true
+    }
+  ],
+  "unusedQuestIds": [
+    951,
+    994,
+    995,
+    993,
+    986,
+    1003,
+    1002,
+    1141
+  ],
+  "unusedQuests": [
+    {
+      "id": 951,
+      "name": "Mathystra Relics",
+      "requiredLevel": 12,
+      "questLevel": 20,
+      "preQuestSingle": [
+        950
+      ],
+      "preQuestGroup": [],
+      "startZoneIds": [
+        148
+      ],
+      "objectiveZoneIds": [
+        148
+      ],
+      "endZoneIds": [
+        148
+      ],
+      "zoneIds": [
+        148
+      ],
+      "zones": [
+        "Darkshore"
+      ],
+      "hidden": true,
+      "unused": true
+    },
+    {
+      "id": 994,
+      "name": "Escape Through Force",
+      "requiredLevel": 10,
+      "questLevel": 22,
+      "preQuestSingle": [
+        993
+      ],
+      "preQuestGroup": [],
+      "startZoneIds": [
+        148
+      ],
+      "objectiveZoneIds": [
+        148
+      ],
+      "endZoneIds": [
+        148
+      ],
+      "zoneIds": [
+        148
+      ],
+      "zones": [
+        "Darkshore"
+      ],
+      "hidden": true,
+      "unused": true
+    },
+    {
+      "id": 995,
+      "name": "Escape Through Stealth",
+      "requiredLevel": 10,
+      "questLevel": 20,
+      "preQuestSingle": [
+        993
+      ],
+      "preQuestGroup": [],
+      "startZoneIds": [
+        148
+      ],
+      "objectiveZoneIds": [
+        148
+      ],
+      "endZoneIds": [
+        148
+      ],
+      "zoneIds": [
+        148
+      ],
+      "zones": [
+        "Darkshore"
+      ],
+      "hidden": true,
+      "unused": true
+    },
+    {
+      "id": 993,
+      "name": "A Lost Master",
+      "requiredLevel": 10,
+      "questLevel": 20,
+      "preQuestSingle": [
+        986
+      ],
+      "preQuestGroup": [],
+      "startZoneIds": [
+        148
+      ],
+      "objectiveZoneIds": [],
+      "endZoneIds": [
+        148
+      ],
+      "zoneIds": [
+        148
+      ],
+      "zones": [
+        "Darkshore"
+      ],
+      "hidden": true,
+      "unused": true
+    },
+    {
+      "id": 986,
+      "name": "A Lost Master",
+      "requiredLevel": 10,
+      "questLevel": 20,
+      "preQuestSingle": [
+        985
+      ],
+      "preQuestGroup": [],
+      "startZoneIds": [
+        148
+      ],
+      "objectiveZoneIds": [
+        148
+      ],
+      "endZoneIds": [
+        148
+      ],
+      "zoneIds": [
+        148
+      ],
+      "zones": [
+        "Darkshore"
+      ],
+      "hidden": true,
+      "unused": true
+    },
+    {
+      "id": 1003,
+      "name": "Buzzbox 525",
+      "requiredLevel": 7,
+      "questLevel": 16,
+      "preQuestSingle": [
+        1002
+      ],
+      "preQuestGroup": [],
+      "startZoneIds": [
+        148
+      ],
+      "objectiveZoneIds": [
+        148
+      ],
+      "endZoneIds": [
+        148
+      ],
+      "zoneIds": [
+        148
+      ],
+      "zones": [
+        "Darkshore"
+      ],
+      "hidden": true,
+      "unused": true
+    },
+    {
+      "id": 1002,
+      "name": "Buzzbox 323",
+      "requiredLevel": 7,
+      "questLevel": 14,
+      "preQuestSingle": [
+        1001
+      ],
+      "preQuestGroup": [],
+      "startZoneIds": [
+        148
+      ],
+      "objectiveZoneIds": [
+        148
+      ],
+      "endZoneIds": [
+        148
+      ],
+      "zoneIds": [
+        148
+      ],
+      "zones": [
+        "Darkshore"
+      ],
+      "hidden": true,
+      "unused": true
+    },
+    {
+      "id": 1141,
+      "name": "The Family and the Fishing Pole",
+      "requiredLevel": 10,
+      "questLevel": 14,
+      "preQuestSingle": [],
+      "preQuestGroup": [],
+      "startZoneIds": [
+        148
+      ],
+      "objectiveZoneIds": [
+        148
+      ],
+      "endZoneIds": [
+        148
+      ],
+      "zoneIds": [
+        148
+      ],
+      "zones": [
+        "Darkshore"
+      ],
+      "hidden": true,
+      "unused": true
+    }
+  ],
+  "batches": [
+    {
+      "id": "batch-mrccwscj-8",
+      "name": "Darkshore #1",
+      "autoName": false,
+      "expectedLevel": 13,
+      "expectedLevelManual": false,
+      "expectedLevelOverride": null,
+      "zones": [
+        "Darkshore"
+      ],
+      "questIds": [
+        983,
+        1001,
+        984,
+        2118,
+        3524,
+        4681
+      ],
+      "quests": [
+        {
+          "id": 983,
+          "name": "Buzzbox 827",
+          "requiredLevel": 7,
+          "questLevel": 10,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 1001,
+          "name": "Buzzbox 411",
+          "requiredLevel": 7,
+          "questLevel": 12,
+          "preQuestSingle": [
+            983
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 984,
+          "name": "How Big a Threat?",
+          "requiredLevel": 10,
+          "questLevel": 14,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 2118,
+          "name": "Plagued Lands",
+          "requiredLevel": 10,
+          "questLevel": 14,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 3524,
+          "name": "Washed Ashore",
+          "requiredLevel": 11,
+          "questLevel": 13,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 4681,
+          "name": "Washed Ashore",
+          "requiredLevel": 11,
+          "questLevel": 14,
+          "preQuestSingle": [
+            3524
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "batch-mrccy1ru-9",
+      "name": "Darkshore North",
+      "autoName": false,
+      "expectedLevel": 13,
+      "expectedLevelManual": false,
+      "expectedLevelOverride": null,
+      "zones": [
+        "Darkshore"
+      ],
+      "questIds": [
+        954,
+        955,
+        956,
+        2138,
+        4723,
+        4811
+      ],
+      "quests": [
+        {
+          "id": 954,
+          "name": "Bashal'Aran",
+          "requiredLevel": 7,
+          "questLevel": 12,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 955,
+          "name": "Bashal'Aran",
+          "requiredLevel": 7,
+          "questLevel": 12,
+          "preQuestSingle": [
+            954
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 956,
+          "name": "Bashal'Aran",
+          "requiredLevel": 7,
+          "questLevel": 13,
+          "preQuestSingle": [
+            955
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 2138,
+          "name": "Cleansing of the Infected",
+          "requiredLevel": 10,
+          "questLevel": 16,
+          "preQuestSingle": [
+            2118
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 4723,
+          "name": "Beached Sea Creature",
+          "requiredLevel": 11,
+          "questLevel": 13,
+          "preQuestSingle": [
+            4681
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 4811,
+          "name": "The Red Crystal",
+          "requiredLevel": 12,
+          "questLevel": 14,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "batch-mrccyslg-a",
+      "name": "Darkshore South",
+      "autoName": false,
+      "expectedLevel": 14,
+      "expectedLevelManual": false,
+      "expectedLevelOverride": null,
+      "zones": [
+        "Darkshore"
+      ],
+      "questIds": [
+        957,
+        953,
+        958,
+        985,
+        4761,
+        4722,
+        4728,
+        963,
+        4812,
+        4813
+      ],
+      "quests": [
+        {
+          "id": 957,
+          "name": "Bashal'Aran",
+          "requiredLevel": 7,
+          "questLevel": 13,
+          "preQuestSingle": [
+            956
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 953,
+          "name": "The Fall of Ameth'Aran",
+          "requiredLevel": 9,
+          "questLevel": 12,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 958,
+          "name": "Tools of the Highborne",
+          "requiredLevel": 9,
+          "questLevel": 12,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 985,
+          "name": "How Big a Threat?",
+          "requiredLevel": 10,
+          "questLevel": 14,
+          "preQuestSingle": [
+            984
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 4761,
+          "name": "Thundris Windweaver",
+          "requiredLevel": 11,
+          "questLevel": 15,
+          "preQuestSingle": [
+            984
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 4722,
+          "name": "Beached Sea Turtle",
+          "requiredLevel": 11,
+          "questLevel": 13,
+          "preQuestSingle": [
+            4681
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 4728,
+          "name": "Beached Sea Creature",
+          "requiredLevel": 12,
+          "questLevel": 14,
+          "preQuestSingle": [
+            4681
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 963,
+          "name": "For Love Eternal",
+          "requiredLevel": 11,
+          "questLevel": 16,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 4812,
+          "name": "As Water Cascades",
+          "requiredLevel": 12,
+          "questLevel": 14,
+          "preQuestSingle": [
+            4811
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 4813,
+          "name": "The Fragments Within",
+          "requiredLevel": 12,
+          "questLevel": 14,
+          "preQuestSingle": [
+            4812
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "batch-mrcd9tro-b",
+      "name": "North #2",
+      "autoName": false,
+      "expectedLevel": 17,
+      "expectedLevelManual": false,
+      "expectedLevelOverride": null,
+      "zones": [
+        "Darkshore"
+      ],
+      "questIds": [
+        4762,
+        2139,
+        4725,
+        4727,
+        947,
+        982,
+        965,
+        966
+      ],
+      "quests": [
+        {
+          "id": 4762,
+          "name": "The Cliffspring River",
+          "requiredLevel": 11,
+          "questLevel": 15,
+          "preQuestSingle": [
+            4761
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 2139,
+          "name": "Tharnariun's Hope",
+          "requiredLevel": 10,
+          "questLevel": 18,
+          "preQuestSingle": [
+            2138
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 4725,
+          "name": "Beached Sea Turtle",
+          "requiredLevel": 12,
+          "questLevel": 15,
+          "preQuestSingle": [
+            4681
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 4727,
+          "name": "Beached Sea Turtle",
+          "requiredLevel": 12,
+          "questLevel": 15,
+          "preQuestSingle": [
+            4681
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 947,
+          "name": "Cave Mushrooms",
+          "requiredLevel": 12,
+          "questLevel": 17,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 982,
+          "name": "Deep Ocean, Vast Sea",
+          "requiredLevel": 13,
+          "questLevel": 17,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 965,
+          "name": "The Tower of Althalaxx",
+          "requiredLevel": 13,
+          "questLevel": 18,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 966,
+          "name": "The Tower of Althalaxx",
+          "requiredLevel": 13,
+          "questLevel": 18,
+          "preQuestSingle": [
+            965
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "batch-mrcdj1w4-c",
+      "name": "North #3",
+      "autoName": false,
+      "expectedLevel": 19,
+      "expectedLevelManual": false,
+      "expectedLevelOverride": null,
+      "zones": [
+        "Darkshore"
+      ],
+      "questIds": [
+        4763,
+        2098,
+        2078,
+        1138
+      ],
+      "quests": [
+        {
+          "id": 4763,
+          "name": "The Blackwood Corrupted",
+          "requiredLevel": 15,
+          "questLevel": 18,
+          "preQuestSingle": [
+            4762
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 2098,
+          "name": "Gyromast's Retrieval",
+          "requiredLevel": 14,
+          "questLevel": 20,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 2078,
+          "name": "Gyromast's Revenge",
+          "requiredLevel": 14,
+          "questLevel": 20,
+          "preQuestSingle": [
+            2098
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 1138,
+          "name": "Fruit of the Sea",
+          "requiredLevel": 15,
+          "questLevel": 17,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "batch-mrcdmylk-d",
+      "name": "South #2",
+      "autoName": false,
+      "expectedLevel": 18,
+      "expectedLevelManual": false,
+      "expectedLevelOverride": null,
+      "zones": [
+        "Darkshore",
+        "Ashenvale",
+        "Ironforge"
+      ],
+      "questIds": [
+        5713,
+        945,
+        968,
+        4730,
+        4731,
+        4732,
+        4733,
+        948,
+        944,
+        949,
+        950,
+        729,
+        731,
+        4740
+      ],
+      "quests": [
+        {
+          "id": 5713,
+          "name": "One Shot. One Kill.",
+          "requiredLevel": 10,
+          "questLevel": 15,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            331
+          ],
+          "zoneIds": [
+            148,
+            331
+          ],
+          "zones": [
+            "Darkshore",
+            "Ashenvale"
+          ]
+        },
+        {
+          "id": 945,
+          "name": "Therylune's Escape",
+          "requiredLevel": 10,
+          "questLevel": 18,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            331
+          ],
+          "zoneIds": [
+            148,
+            331
+          ],
+          "zones": [
+            "Darkshore",
+            "Ashenvale"
+          ]
+        },
+        {
+          "id": 968,
+          "name": "The Powers Below",
+          "requiredLevel": 10,
+          "questLevel": 20,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            1537
+          ],
+          "zoneIds": [
+            148,
+            1537
+          ],
+          "zones": [
+            "Darkshore",
+            "Ironforge"
+          ]
+        },
+        {
+          "id": 4730,
+          "name": "Beached Sea Creature",
+          "requiredLevel": 12,
+          "questLevel": 16,
+          "preQuestSingle": [
+            4681
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 4731,
+          "name": "Beached Sea Turtle",
+          "requiredLevel": 13,
+          "questLevel": 19,
+          "preQuestSingle": [
+            4681
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 4732,
+          "name": "Beached Sea Turtle",
+          "requiredLevel": 13,
+          "questLevel": 19,
+          "preQuestSingle": [
+            4681
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 4733,
+          "name": "Beached Sea Creature",
+          "requiredLevel": 13,
+          "questLevel": 19,
+          "preQuestSingle": [
+            4681
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 948,
+          "name": "Onu",
+          "requiredLevel": 12,
+          "questLevel": 17,
+          "preQuestSingle": [
+            947
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 944,
+          "name": "The Master's Glaive",
+          "requiredLevel": 12,
+          "questLevel": 17,
+          "preQuestSingle": [
+            948
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 949,
+          "name": "The Twilight Camp",
+          "requiredLevel": 12,
+          "questLevel": 17,
+          "preQuestSingle": [
+            944
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 950,
+          "name": "Return to Onu",
+          "requiredLevel": 12,
+          "questLevel": 17,
+          "preQuestSingle": [
+            949
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 729,
+          "name": "The Absent Minded Prospector",
+          "requiredLevel": 15,
+          "questLevel": 20,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 731,
+          "name": "The Absent Minded Prospector",
+          "requiredLevel": 15,
+          "questLevel": 20,
+          "preQuestSingle": [
+            729
+          ],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [
+            148
+          ],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        },
+        {
+          "id": 4740,
+          "name": "WANTED: Murkdeep!",
+          "requiredLevel": 15,
+          "questLevel": 18,
+          "preQuestSingle": [],
+          "preQuestGroup": [],
+          "startZoneIds": [
+            148
+          ],
+          "objectiveZoneIds": [],
+          "endZoneIds": [
+            148
+          ],
+          "zoneIds": [
+            148
+          ],
+          "zones": [
+            "Darkshore"
+          ]
+        }
+      ]
+    }
+  ]
+}

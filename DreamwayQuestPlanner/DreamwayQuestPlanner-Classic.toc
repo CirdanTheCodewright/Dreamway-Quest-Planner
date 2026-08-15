@@ -2,11 +2,12 @@
 ## Title: Dreamway Quest Planner
 ## Notes: Plan and follow Dreamway Journeys in game.
 ## Author: Codex
-## Version: 0.5.0
+## Version: 0.6.0
 ## RequiredDeps: Questie
 ## IconTexture: Interface\AddOns\DreamwayQuestPlanner\Media\DreamwayIcon.tga
 ## SavedVariables: DreamwayDB
 ## SavedVariablesPerCharacter: DreamwayProfile
 
 DreamwayQuestZones.lua
+DreamwayExampleJourneys.lua
 Dreamway.lua

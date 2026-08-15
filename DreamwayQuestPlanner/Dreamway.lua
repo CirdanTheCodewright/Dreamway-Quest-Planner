@@ -1,5 +1,5 @@
 local ADDON_NAME = ...
-DREAMWAY_VERSION = "0.5.0"
+DREAMWAY_VERSION = "0.6.0"
 
 local MODE_QUESTIE = "Questie"
 local MODE_DREAMWAY = "Dreamway"
@@ -292,30 +292,6 @@ local fallbackJourney = {
                 { name = "Fruit of the Sea", category = "turnin" },
             },
         },
-    },
-}
-
-DREAMWAY_EXAMPLE_JOURNEYS = {
-    {
-        id = "example-journey-test",
-        name = "Example Journey Test",
-        gameVersion = "era",
-        isExample = true,
-        character = {
-            race = "Human",
-            raceMask = 1,
-            faction = "Alliance",
-            class = "All classes",
-            classMask = 0,
-        },
-        batches = {
-            { id = "example-elwynn-1", name = "Northshire Start", autoName = false, quests = { { id = 783 }, { id = 7 }, { id = 5261 }, { id = 33 } }, zones = { "Elwynn Forest" } },
-            { id = "example-elwynn-2", name = "Northshire Finish", autoName = false, quests = { { id = 18 }, { id = 6 } }, zones = { "Elwynn Forest" } },
-        },
-        hiddenQuestIds = {},
-        hiddenQuests = {},
-        unusedQuestIds = {},
-        unusedQuests = {},
     },
 }
 
@@ -7277,8 +7253,44 @@ function DreamwayActivateManagedJourney()
         return
     end
     if journey.isExample == true then
-        journey = DreamwayWorkingExampleJourney(journey.exampleSourceId or journey.id, true)
+        local source = journey
+        local nameBase = tostring(source.name or "Example Journey")
+        local name = nameBase
+        local existingNames = {}
+        for _, existing in pairs(DreamwayDB.journeys or {}) do
+            existingNames[string.lower(tostring(existing.name or ""))] = true
+        end
+        if existingNames[string.lower(name)] then
+            name = nameBase .. " Copy"
+            local copyNumber = 2
+            while existingNames[string.lower(name)] do
+                name = nameBase .. " Copy " .. tostring(copyNumber)
+                copyNumber = copyNumber + 1
+            end
+        end
+
+        local idBase = "addon-" .. tostring(time and time() or 0)
+        local id = idBase
+        local suffix = 2
+        while DreamwayDB.journeys[id] do
+            id = idBase .. "-" .. tostring(suffix)
+            suffix = suffix + 1
+        end
+
+        journey = CloneJourney(source)
+        journey.id = id
+        journey.name = name
+        journey.isExample = nil
+        journey.exampleSourceId = nil
+        journey.savedAt = ProfileRecorder.UpdatedAt(ProfileRecorder.LocalTimestamp())
         RefreshJourneyDerivedData(journey)
+        DreamwayDB.journeys[id] = journey
+        ProfileRecorder.exampleJourneyWorkingCopy = nil
+        panelJourneyManager.selectedJourneyId = id
+        SaveDb()
+        DreamwayRefreshJourneyManager()
+        PanelSetStatus("Created editable Journey " .. name .. ".", true)
+        return
     end
     DreamwaySetActiveJourneyId(journey.id)
     batchIndex = 1
@@ -7554,7 +7566,7 @@ function DreamwayRefreshJourneyManager()
         row:ClearAllPoints()
         row:SetPoint("TOPLEFT", panelJourneyManager.listContent, "TOPLEFT", 0, -nextY)
         row.label:SetText(tostring(journey.name or journeyId))
-        row.activeLabel:SetShown(journeyId == DreamwayActiveJourneyId())
+        row.activeLabel:Hide()
         row:SetActive(selected and journeyId == selected.id)
         row:SetScript("OnClick", function()
             DreamwayCloseJourneyMetadataMenu()
@@ -7588,7 +7600,13 @@ function DreamwayRefreshJourneyManager()
 
     selected.character = selected.character or {}
     local isExample = selected.isExample == true
-    panelJourneyManager.exportButton.label:SetText(isExample and "Save as New" or "Export Selected")
+    panelJourneyManager.exportButton.label:SetText("Export Selected")
+    if isExample then
+        panelJourneyManager.exportButton:Disable()
+    end
+    panelJourneyManager.activateButton.label:SetText(isExample and "Create from example" or "Make Active")
+    panelJourneyManager.activateButton:SetWidth(isExample and 128 or 90)
+    panelJourneyManager.deleteButton:SetShown(not isExample)
     for _, button in ipairs({
         panelJourneyManager.deleteButton,
         panelJourneyManager.factionButton,
@@ -7621,8 +7639,8 @@ function DreamwayRefreshJourneyManager()
     if prerequisiteCount > 0 then warningText = warningText .. "  |  " .. tostring(prerequisiteCount) .. " invalid placement" .. (prerequisiteCount == 1 and "" or "s") end
     if characterCount > 0 then warningText = warningText .. "  |  " .. tostring(characterCount) .. " character warning" .. (characterCount == 1 and "" or "s") end
     panelJourneyManager.countText:SetText(tostring(#(selected.batches or {})) .. " batches  |  " .. tostring(questCount) .. " assigned quests  |  " .. tostring(hiddenCount) .. " hidden" .. warningText .. savedText)
-    local isActive = selected.id == DreamwayActiveJourneyId()
-    panelJourneyManager.activeText:SetText(isActive and "Currently active" or "Not active")
+    local isActive = not isExample and selected.id == DreamwayActiveJourneyId()
+    panelJourneyManager.activeText:SetText(isExample and "Packaged read-only example" or (isActive and "Currently active" or "Not active"))
     panelJourneyManager.activeText:SetTextColor(isActive and 0.35 or 0.75, isActive and 1 or 0.75, isActive and 0.35 or 0.75)
 end
 
@@ -8440,26 +8458,130 @@ function DreamwayCreateSettingsPanel()
     frame:Hide()
 end
 
--- ABOUT COPY: Edit the section titles and body text in this table.
+-- ABOUT COPY: Mirrored from Dreamway Info.docx.
 local DREAMWAY_INFO_SECTIONS = {
     {
-        title = "Plan Your Own Route",
-        body = "Dreamway organizes quests into Journeys made of ordered batches. Each batch represents a group of quests you intend to pick up, work on, and turn in together.\n\nUse the Planner to select a Journey, move quests between batches, hide quests you do not intend to complete, and keep the current batch visible in the objective tracker.",
+        title = "What is Dreamway?",
+        body = [=[Dreamway is exclusive to Classic WoW and has three main features:
+
+- Browse and understand the games' quests and quests chains
+- Design a journey for your character that organizes quests into batches
+- Record and replay your character's history to visualize their path through the world
+
+Some questing addons define your path for you, then have you "follow the arrow" from 1-60. Dreamway is designed for people who want to engage with and understand the progression structure of Classic WoW. It doesn't do the thinking for you, it just provides you with all the information you need to figure out your journey for yourself, without having to visit many individual Wowhead pages.
+
+When you quest with Dreamway, you understand how to sequence quests to line up prerequisites, work on multiple chains in parallel, and reduce the amount of back-and-forth required to progress. You still have to make every decision yourself - but the information needed to make that decision is right at your fingertips.
+
+Dreamway includes both an in-game addon and web application in the install package. The web application has a rich set of features for designing your journey, and the addon lets you edit your journey in game. A journey can be passed back and forth between the two as often as you like. While out questing, your Questie objective tracker can be replaced by the Dreamway objective tracker, which shows you all quests in the current batch - even if you haven't picked them up or completed their prerequisites yet.
+
+The web application can be accessed by visiting Interface > AddOns > DreamwayQuestPlanner > WebApp and clicking on Dreamway.html. It is recommended to create a shortcut for easier access - instructions to do this are in the same folder as the web app.]=],
     },
     {
-        title = "Companion Web App",
-        body = "The companion dreamway.html app is the primary place to browse the complete quest database, inspect maps and quest chains, build or revise Journeys, and replay a character's recorded history.\n\nTransfer Journeys between the web app and addon with the compact import and export strings in Manage Journeys. Character profiles and replay events are stored locally in WoW SavedVariables.",
+        title = "Searching for quests",
+        body = [=[Dreamway lets you search for quests by zone, faction, race, class, level, and many other filters. Set your desired filters to see all matching quests or use the search bar to find specific quests or quest chains. Quests are organized by level and by chain, allowing you to see every step of a chain at once. You can also choose whether to hide quests that you've already assigned to a batch.
+
+In the web app, Dreamway includes a map view so you can see the pickup point of every quest that matches your search at once. When you target a quest or quest chain, it also shows you objective and hand-in locations. You can select multiple quests at a time using ctrl and shift to visualize them together. The web application also lets you choose a character level, and will render quests as grey, green, yellow, orange, or red depending on their difficulty relative to that level. By default, the "Zone" filter will be whichever map view you currently have selected, but you can change this to specific or all zones.
+
+In the addon, you do not have a map view and cannot manually select your character's level - it will always use the level of the character you're playing. Otherwise, the same search and filter options are available.]=],
     },
     {
-        title = "Questie Acknowledgement",
-        body = "Dreamway depends on Questie for its underlying quest database and in-game quest and map integration. Dreamway is an independent project and is not produced or endorsed by the Questie team.\n\nMany thanks to the Questie maintainers and contributors for the extensive Classic quest data and addon infrastructure that make Dreamway possible.",
+        title = "Building a journey",
+        body = [=[A journey is a plan for how you will quest across Azeroth. It's made up of an ordered list of batches, where each batch contains a list of quests to be completed together. Generally, a batch should begin and end back in town - with each batch representing a loop of the zone or a visit to a specific section of the zone.
+
+You add new batches to a journey by pressing the + button beside existing batches. Each batch will get a name and expected level automatically based on the quests you put into it, or you can manually rename a batch and set its level yourself.
+
+Quests are added to a batch by dragging and dropping them inside the borders of a batch, or by dragging them directly onto the "new batch" button. You can assign quests one at a time, or select multiple quests using the ctrl and shift buttons to move several at once.
+
+Dreamway will not allow you to place a quest in an invalid batch. To assign the quest Big Game Hunter to a batch, every prerequisite quest chain (Tiger Master, Panther Mastery, and Raptor Mastery) must already be assigned to the same or an earlier batch.
+
+You can also move quests that you don't want to use to the "Hidden" section by dragging them onto the red bar with the trash can icon. This will remove them from search results (if you have "Hide assigned" checked), and while the objective tracker is in Dreamway view, those quests will be hidden from your map and minimap as well.
+
+The recommended workflow is to begin in the web app, then export your journey to the addon once you're happy with the draft - but you can work entirely in the addon if you prefer. The idea is to keep assigning quests to batches (or the Hidden pile) until your Quest Search results are empty.]=],
+    },
+    {
+        title = "Saving and moving your journey",
+        body = [=[A journey can be saved in both the web app and the addon, and can be freely moved between the two. A new journey can be created from the Settings panel in the web application or the "Manage Journeys" section of the addon.
+
+In the web app, a journey can be saved as a .json file anywhere on your computer. Click the "Save Journey" button while in Planner view, then choose where you'd like to save it. In the addon, your journey will be continuously saved - but improperly closing WoW or suffering a crash could result in a loss of work. Use /reload to firmly save at any time.
+
+A journey can be moved between the web app and addon by copying a string of text representing the journey. To export from the web app to the addon, click "Copy Addon String" in the web app's Planner to move it to your clipboard immediately, then click "Import Journey" in the "Manage Journeys" section. To export from addon to web app, click "Export Selected" in the addon's "Manage Journeys" section, then press ctrl+c to copy the text. Finally, return to the web app and press "Import Journey" in the Settings pane. Note: you must close the currently active journey before you can import load, or create a new journey in the web app.
+
+When you create or import a journey into the addon, it gets added to your list of available journeys - which persists across all of your characters. Each character can have a different active journey selected, and can be on a different active batch within that journey.]=],
+    },
+    {
+        title = "Questing with Dreamway",
+        body = [=[While using Dreamway, you'll have a toggle above your Questie objective tracker to switch between Questie mode and Dreamway mode. While in Questie mode, everything will behave exactly as it would without Dreamway. While in Dreamway mode, the quests you see in your objective tracker are those in the currently selected batch - not necessarily the quests you're tracking in your quest log. You can change your active batch by pressing the arrow to either side of the batch name or clicking on the batch in the Dreamway panel.
+
+In Dreamway mode, quests are presented in one of four groups:
+
+- Quests you still need to complete the prerequisite for
+- Quests that are available to pick up
+- Quests you're currently working on
+- Completed quests that are ready to hand in
+
+Clicking on a quest you haven't picked up yet will open a tooltip for that quest that tells you where you can pick it up. Clicking on an active quest will open it in your quest log.]=],
+    },
+    {
+        title = "Character profile and replay",
+        body = [=[By default, Dreamway will record your character's actions in an event log. This log includes quest pickups, quest hand-ins, mob kills, player deaths, quest objective progress, a quest being marked as completed, level ups, logins, and logouts. You can turn each of these on or off individually or disable the event log entirely in the Settings panel of the addon. You can also delete the existing event log if you wish. Because World of Warcraft only saves properly when you log out or /reload the UI, if the game crashes you may lose part of the log. Use the /reload command any time to ensure your events are saved.
+
+Dreamway saved a profile for each of your characters that includes all quests that character has completed and the event log for the character. This can be found in WoW's install folder under WTF> Account > accountname > servername > charactername > SavedVariables, and is called DreamwayQuestPlanner. The profile can be loaded into the web app from the Settings panel.
+
+Once loaded, the list of completed quests will be reflected in the Quest Search, Planner, and Map panels. A green checkmark will show next to quests that character has completed, and all complete quests will be added to a "Complete" pile before any batches in your Journey. This allows you to assign follow ups to completed quests to batches even if the prerequisites aren't explicitly assigned yet. It will also hide the quests from search results if "Hide assigned" is selected.
+
+Loading a profile also allows you to use the Replay feature. Replay provides a timeline of the entire event log, placing an icon on the world or zone map at the location each event occurred. You can playback the event log at 1x, 10x, 60x, 600x,and 6000x speed. It can be paused at any time, and you can scrub through the log by interacting with the playback bar above the map.]=],
+    },
+    {
+        title = "Controls",
+        body = [=[The Dreamway web app supports keyboard controls for power users to navigate more quickly. The up/down arrows or W/S keys can cycle between quests in Quest Search or Batch Summary. Left/right arrows or A/D keys can switch the currently selected batch in your journey. Pressing enter or the spacebar will assign the currently targeted quest(s) to the currently targeted batch. The escape key can be used to deselect quests and batches.
+
+While in map view in the web app, right click can be used to zoom out to the world map. Clicking on empty space will deselect quests, but the targeted batch will stay selected until you press the escape key.
+
+In both the addon and web app, multiple quests and quest chains can be selected at once using the ctrl and shift keys. Hold ctrl to add quests you click on to the pile of selected quests. Hold shift to add all quests between your original target and your current click to the pile of selected quests. All selected quests will show their pickup points, objectives, and handin locations on the map. If you drag a quest while multiple quests are selected, you can move all selected quests to a batch at once.]=],
+    },
+    {
+        title = "Status and known issues",
+        body = [=[- Dreamway is currently in public testing. It is feature complete and performing well, but the goal is to collect feedback to further refine and polish before the launch of Classic+
+- The tool currently supports Classic Era, Season of Discovery, The Burning Crusade, and Wrath of the Lich King. Supports for Cataclysm and Mists of Pandaria are planned for the future
+- Dreamway is currently available in English only. Translations will be available in a future version
+- The web app does not render properly at lower resolutions or smaller window sizes
+- Clicking on zones in world or continent map view to open the zone map can be inconsistent, particularly for Northrend. Some areas of the map that should be clickable are not
+- Interactions with other addons (particularly those that replace Questie's objective tracker) have not been tested]=],
+    },
+    {
+        title = "Questie acknowledgement",
+        body = [=[Dreamway is built on top of Questie's database, and requires Questie as a dependency in WoW. A big thank you to the Questie team for their incredible work and their permissive licensing. Dreamway uses the same GNU LGPLv3 license as Questie, and the source is available on GitHub at https://github.com/CirdanTheCodewright/Dreamway-Quest-Planner.
+
+Dreamway will be updated after each Questie database update. If and when Classic+ launches, Dreamway will have all Classic+ exclusive quests as they become available in the Questie database.]=],
+    },
+    {
+        title = "FAQ",
+        body = [=[Q: Why does Dreamway include a web app, why not do everything in game?
+
+A: Lua addons in World of Warcraft have limitations that a web application doesn't. Some additional functionality of Dreamway's web app could be ported to the addon, but it would come at the cost of added complexity and reduced performance in game. With this setup, you get rich functionality when building a journey, then great performance while in game.
+
+Q: Why include the web app as a download instead of hosting a website?
+
+A: Web hosting comes with costs, and I'm not interested in trying to monetize Dreamway in any way to fund web hosting. Additionally, because Dreamway includes map images and large databases, loading it as a website could be slow and/or costly. Opening it from your own disc is performant and free.
+
+Q: Why doesn't Dreamway come packaged with complete journeys for me to use?
+
+A: There are already several good addons out there for people who don't want to have to put much thought into their questing route. Dreamway isn't meant to compete with RestedXP, Guidelime, or other "no thought required" quest helpers. It's for people who want to engage with the complexity and nuance of Classic WoW questing. That said, there's nothing stopping people from sharing their complete journeys with each other.
+
+Q: Was AI used to create Dreamway?
+
+A: Yes, I used the Codex tool to assist in the creation of the Dreamway web app and addon. I'm an experienced programmer, but Codex was a great help in laying out the structure of things and diagnosing problems. AI was also used to create the icon for Dreamway, based on an in-game reference image. All text of any length was written by hand, without the use of AI.
+
+Q: Why can't I filter quests by level in the addon like I can in the web app?
+
+A: I want to encourage people to use both the web app and addon together, without making it impossible to skip the web app entirely if you prefer. The preferred workflow is to do initial journey creation and major revisions in the web app, but have total freedom to edit inside the addon. It is possible to work entirely in the addon if you prefer, just building the journey as you go.]=],
     },
 }
 
 function DreamwayCreateInfoPanel()
     local frame = CreateBackdropFrame("Dreamway_InfoPanel", panelFrame)
-    frame:SetPoint("TOPLEFT", panelFrame, "TOPLEFT", 12, -58)
-    frame:SetPoint("BOTTOMRIGHT", panelFrame, "BOTTOMRIGHT", -12, 12)
+    frame:SetPoint("TOP", panelFrame, "TOP", 0, -58)
+    frame:SetSize(760, 458)
     frame:SetFrameLevel(panelFrame:GetFrameLevel() + 8)
     frame:EnableMouse(true)
     SetFrameBackdrop(frame, 0.01, 0.01, 0.012, 0.99, 0.72)
@@ -8479,15 +8601,8 @@ function DreamwayCreateInfoPanel()
     versionText:SetText("Version " .. DREAMWAY_VERSION)
     versionText:SetTextColor(0.65, 0.65, 0.65)
 
-    local subtitle = CreateLabel(frame, "GameFontHighlightSmall")
-    subtitle:SetPoint("TOP", title, "BOTTOM", 0, -7)
-    subtitle:SetWidth(920)
-    subtitle:SetJustifyH("LEFT")
-    subtitle:SetText("A flexible quest planner for building your own route through World of Warcraft Classic.")
-    subtitle:SetTextColor(0.72, 0.72, 0.72)
-
     local scroll = CreateFrame("ScrollFrame", "Dreamway_InfoScroll", frame, "UIPanelScrollFrameTemplate")
-    scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -72)
+    scroll:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -58)
     scroll:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -34, 18)
 
     local content = CreateFrame("Frame", nil, scroll)
@@ -8497,11 +8612,10 @@ function DreamwayCreateInfoPanel()
     local sections = {}
     local function layoutSections()
         local contentWidth = math.max(320, scroll:GetWidth() - 24)
-        local width = math.max(320, math.floor(contentWidth * 0.50))
+        local width = math.min(620, math.max(320, contentWidth - 44))
         local y = -4
         content:SetWidth(contentWidth)
         title:SetWidth(width)
-        subtitle:SetWidth(width)
 
         for _, section in ipairs(sections) do
             section.header:ClearAllPoints()

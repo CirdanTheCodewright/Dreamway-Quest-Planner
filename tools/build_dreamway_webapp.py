@@ -13,7 +13,8 @@ from PIL import Image
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DREAMWAY_VERSION = "0.5.0"
+DREAMWAY_VERSION = "0.6.0"
+EXAMPLE_JOURNEY_DIR = ROOT / "example_journeys"
 QUESTIE_DATABASE = ROOT / "Questie" / "Database"
 QUESTIE = QUESTIE_DATABASE / "Classic"
 QUESTIE_TBC = QUESTIE_DATABASE / "TBC"
@@ -4464,6 +4465,45 @@ def write_generated_text(output_path, content, encoding="utf-8"):
     temporary_path.replace(output_path)
 
 
+def load_example_journeys():
+    examples = []
+    for path in sorted(EXAMPLE_JOURNEY_DIR.glob("*.json")):
+        source = json.loads(path.read_text(encoding="utf-8"))
+        hidden_quest_ids = [int(quest_id) for quest_id in source.get("hiddenQuestIds") or []]
+        example_slug = re.sub(r"[^a-z0-9]+", "-", path.stem.lower()).strip("-")
+        examples.append({
+            "schemaVersion": int(source.get("schemaVersion") or 1),
+            "app": "Dreamway",
+            "kind": "journey",
+            "gameVersion": source.get("gameVersion") or "era",
+            "savedAt": "",
+            "savedAction": "",
+            # Packaged templates live in a separate identity namespace so they
+            # can never collide with an imported or user-created Journey.
+            "id": f"example-{example_slug}",
+            "sourceJourneyId": source.get("id") or "",
+            "name": source.get("name") or path.stem,
+            "character": source.get("character") or {},
+            "hiddenQuestIds": hidden_quest_ids,
+            "batches": [
+                {
+                    "id": batch.get("id") or f"example-{path.stem.lower()}-{index}",
+                    "name": batch.get("name") or f"Batch {index}",
+                    "autoName": bool(batch.get("autoName", False)),
+                    "expectedLevel": batch.get("expectedLevel"),
+                    "expectedLevelManual": bool(batch.get("expectedLevelManual", False)),
+                    "expectedLevelOverride": batch.get("expectedLevelOverride"),
+                    "zones": list(batch.get("zones") or []),
+                    "questIds": [int(quest_id) for quest_id in batch.get("questIds") or []],
+                }
+                for index, batch in enumerate(source.get("batches") or [], 1)
+            ],
+        })
+    if not examples:
+        raise RuntimeError(f"No example Journeys found in {EXAMPLE_JOURNEY_DIR}")
+    return examples
+
+
 def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     records, chains, zones, continents, npc_names, world_groups = classic_bundle
     payload = json.dumps({
@@ -4472,6 +4512,9 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     }, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     quest_count = len(records)
     zone_count = len(zones)
+    example_journeys_json = json.dumps(
+        load_example_journeys(), ensure_ascii=False, separators=(",", ":")
+    ).replace("</", "<\\/")
     html = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -5287,6 +5330,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
 
     .info-dialog {{
       width: min(760px, calc(100vw - 36px));
+      height: min(720px, calc(100vh - 48px));
       grid-template-rows: auto minmax(0, 1fr);
     }}
 
@@ -5484,6 +5528,23 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
 
     .info-accordion-content p + p {{
       margin-top: 9px;
+    }}
+
+    .info-accordion-content ul {{
+      margin: 0;
+      padding-left: 20px;
+      color: #d7c8ad;
+      font-size: 0.86rem;
+      line-height: 1.55;
+    }}
+
+    .info-accordion-content li + li {{
+      margin-top: 5px;
+    }}
+
+    .info-faq-question {{
+      color: #fff0c7 !important;
+      font-weight: 850;
     }}
 
     .info-accordion-content a {{
@@ -6080,8 +6141,33 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       background: rgba(0, 0, 0, 0.24);
     }}
 
-    .journey-string-import[hidden] {{
+    .journey-string-import[hidden],
+    .journey-example-picker[hidden] {{
       display: none;
+    }}
+
+    .journey-example-picker {{
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid rgba(255, 211, 79, 0.28);
+      border-radius: 6px;
+      background: rgba(0, 0, 0, 0.24);
+    }}
+
+    .journey-example-picker > span {{
+      color: #e9d9b7;
+      font-size: 0.76rem;
+      font-weight: 750;
+      text-align: center;
+      text-transform: uppercase;
+    }}
+
+    .journey-example-choices {{
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 8px;
     }}
 
     .journey-string-import label {{
@@ -8822,6 +8908,10 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
             <div class="journey-setup-actions">
               <button class="journey-load-button" id="journey-example-button" type="button">Load Example Journey</button>
             </div>
+            <div class="journey-example-picker" id="journey-example-picker" hidden>
+              <span>Choose an example Journey</span>
+              <div class="journey-example-choices" id="journey-example-choices"></div>
+            </div>
             <div class="journey-string-import" id="journey-string-import" hidden>
               <label for="journey-string-input">Journey string</label>
               <textarea id="journey-string-input" spellcheck="false" autocomplete="off"></textarea>
@@ -9012,25 +9102,114 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
           </div>
         </div>
         <div class="info-dialog-body">
-          <!-- ABOUT COPY: Edit these accordion headings and paragraphs. -->
+          <!-- ABOUT COPY: Mirrored from Dreamway Info.docx. -->
           <details class="info-accordion" open>
-            <summary>What Dreamway Is</summary>
+            <summary>What is Dreamway?</summary>
             <div class="info-accordion-content">
-              <p>Dreamway is a planning companion for Classic World of Warcraft across Classic Era, Season of Discovery, The Burning Crusade, and Wrath of the Lich King. It combines a geographic quest browser, a Journey planner for grouping quests into practical batches, an in-game Journey tracker, and a Replay view built from your character's recorded progress.</p>
+              <p>Dreamway is exclusive to Classic WoW and has three main features:</p>
+              <ul>
+                <li>Browse and understand the games&rsquo; quests and quests chains</li>
+                <li>Design a journey for your character that organizes quests into batches</li>
+                <li>Record and replay your character&rsquo;s history to visualize their path through the world</li>
+              </ul>
+              <p>Some questing addons define your path for you, then have you &ldquo;follow the arrow&rdquo; from 1-60. Dreamway is designed for people who want to engage with and understand the progression structure of Classic WoW. It doesn&rsquo;t do the thinking for you, it just provides you with all the information you need to figure out your journey for yourself, without having to visit many individual Wowhead pages.</p>
+              <p>When you quest with Dreamway, you understand how to sequence quests to line up prerequisites, work on multiple chains in parallel, and reduce the amount of back-and-forth required to progress. You still have to make every decision yourself &ndash; but the information needed to make that decision is right at your fingertips.</p>
+              <p>Dreamway includes both an in-game addon and web application in the install package. The web application has a rich set of features for designing your journey, and the addon lets you edit your journey in game. A journey can be passed back and forth between the two as often as you like. While out questing, your Questie objective tracker can be replaced by the Dreamway objective tracker, which shows you all quests in the current batch &ndash; even if you haven&rsquo;t picked them up or completed their prerequisites yet.</p>
+              <p>The web application can be accessed by visiting Interface &gt; AddOns &gt; DreamwayQuestPlanner &gt; WebApp and clicking on Dreamway.html. It is recommended to create a shortcut for easier access &ndash; instructions to do this are in the same folder as the web app.</p>
             </div>
           </details>
           <details class="info-accordion">
-            <summary>How To Use It</summary>
+            <summary>Searching for quests</summary>
             <div class="info-accordion-content">
-              <p>Choose your game version in Settings, then create or load a Journey. Search and filter the quest catalogue, inspect quest locations on the map, and drag quests into Planner batches in the order you want to complete them.</p>
-              <p>Copy the addon string to use that Journey in game. Import a Dreamway character profile to recognize completed quests and replay recorded pickups, objectives, hand-ins, kills, deaths, and levels.</p>
+              <p>Dreamway lets you search for quests by zone, faction, race, class, level, and many other filters. Set your desired filters to see all matching quests or use the search bar to find specific quests or quest chains. Quests are organized by level and by chain, allowing you to see every step of a chain at once. You can also choose whether to hide quests that you&rsquo;ve already assigned to a batch.</p>
+              <p>In the web app, Dreamway includes a map view so you can see the pickup point of every quest that matches your search at once. When you target a quest or quest chain, it also shows you objective and hand-in locations. You can select multiple quests at a time using ctrl and shift to visualize them together. The web application also lets you choose a character level, and will render quests as grey, green, yellow, orange, or red depending on their difficulty relative to that level. By default, the &ldquo;Zone&rdquo; filter will be whichever map view you currently have selected, but you can change this to specific or all zones.</p>
+              <p>In the addon, you do not have a map view and cannot manually select your character&rsquo;s level &ndash; it will always use the level of the character you&rsquo;re playing. Otherwise, the same search and filter options are available.</p>
             </div>
           </details>
           <details class="info-accordion">
-            <summary>Acknowledgements</summary>
+            <summary>Building a journey</summary>
             <div class="info-accordion-content">
-              <p>Dreamway is built on quest data and conventions from <a href="https://github.com/Questie/Questie" target="_blank" rel="noopener noreferrer">Questie</a>. Deep thanks to the Questie team and its contributors for maintaining the database and addon that make this project possible.</p>
-              <p>World of Warcraft and its related assets are trademarks of Blizzard Entertainment. Dreamway is an independent community project and is not affiliated with Blizzard Entertainment or the Questie team.</p>
+              <p>A journey is a plan for how you will quest across Azeroth. It&rsquo;s made up of an ordered list of batches, where each batch contains a list of quests to be completed together. Generally, a batch should begin and end back in town &ndash; with each batch representing a loop of the zone or a visit to a specific section of the zone.</p>
+              <p>You add new batches to a journey by pressing the + button beside existing batches. Each batch will get a name and expected level automatically based on the quests you put into it, or you can manually rename a batch and set its level yourself.</p>
+              <p>Quests are added to a batch by dragging and dropping them inside the borders of a batch, or by dragging them directly onto the &ldquo;new batch&rdquo; button. You can assign quests one at a time, or select multiple quests using the ctrl and shift buttons to move several at once.</p>
+              <p>Dreamway will not allow you to place a quest in an invalid batch. To assign the quest Big Game Hunter to a batch, every prerequisite quest chain (Tiger Master, Panther Mastery, and Raptor Mastery) must already be assigned to the same or an earlier batch.</p>
+              <p>You can also move quests that you don&rsquo;t want to use to the &ldquo;Hidden&rdquo; section by dragging them onto the red bar with the trash can icon. This will remove them from search results (if you have &ldquo;Hide assigned&rdquo; checked), and while the objective tracker is in Dreamway view, those quests will be hidden from your map and minimap as well.</p>
+              <p>The recommended workflow is to begin in the web app, then export your journey to the addon once you&rsquo;re happy with the draft &ndash; but you can work entirely in the addon if you prefer. The idea is to keep assigning quests to batches (or the Hidden pile) until your Quest Search results are empty.</p>
+            </div>
+          </details>
+          <details class="info-accordion">
+            <summary>Saving and moving your journey</summary>
+            <div class="info-accordion-content">
+              <p>A journey can be saved in both the web app and the addon, and can be freely moved between the two. A new journey can be created from the Settings panel in the web application or the &ldquo;Manage Journeys&rdquo; section of the addon.</p>
+              <p>In the web app, a journey can be saved as a .json file anywhere on your computer. Click the &ldquo;Save Journey&rdquo; button while in Planner view, then choose where you&rsquo;d like to save it. In the addon, your journey will be continuously saved &ndash; but improperly closing WoW or suffering a crash could result in a loss of work. Use /reload to firmly save at any time.</p>
+              <p>A journey can be moved between the web app and addon by copying a string of text representing the journey. To export from the web app to the addon, click &ldquo;Copy Addon String&rdquo; in the web app&rsquo;s Planner to move it to your clipboard immediately, then click &ldquo;Import Journey&rdquo; in the &ldquo;Manage Journeys&rdquo; section. To export from addon to web app, click &ldquo;Export Selected&rdquo; in the addon&rsquo;s &ldquo;Manage Journeys&rdquo; section, then press ctrl+c to copy the text. Finally, return to the web app and press &ldquo;Import Journey&rdquo; in the Settings pane. Note: you must close the currently active journey before you can import load, or create a new journey in the web app.</p>
+              <p>When you create or import a journey into the addon, it gets added to your list of available journeys &ndash; which persists across all of your characters. Each character can have a different active journey selected, and can be on a different active batch within that journey.</p>
+            </div>
+          </details>
+          <details class="info-accordion">
+            <summary>Questing with Dreamway</summary>
+            <div class="info-accordion-content">
+              <p>While using Dreamway, you&rsquo;ll have a toggle above your Questie objective tracker to switch between Questie mode and Dreamway mode. While in Questie mode, everything will behave exactly as it would without Dreamway. While in Dreamway mode, the quests you see in your objective tracker are those in the currently selected batch &ndash; not necessarily the quests you&rsquo;re tracking in your quest log. You can change your active batch by pressing the arrow to either side of the batch name or clicking on the batch in the Dreamway panel.</p>
+              <p>In Dreamway mode, quests are presented in one of four groups:</p>
+              <ul>
+                <li>Quests you still need to complete the prerequisite for</li>
+                <li>Quests that are available to pick up</li>
+                <li>Quests you&rsquo;re currently working on</li>
+                <li>Completed quests that are ready to hand in</li>
+              </ul>
+              <p>Clicking on a quest you haven&rsquo;t picked up yet will open a tooltip for that quest that tells you where you can pick it up. Clicking on an active quest will open it in your quest log.</p>
+            </div>
+          </details>
+          <details class="info-accordion">
+            <summary>Character profile and replay</summary>
+            <div class="info-accordion-content">
+              <p>By default, Dreamway will record your character&rsquo;s actions in an event log. This log includes quest pickups, quest hand-ins, mob kills, player deaths, quest objective progress, a quest being marked as completed, level ups, logins, and logouts. You can turn each of these on or off individually or disable the event log entirely in the Settings panel of the addon. You can also delete the existing event log if you wish. Because World of Warcraft only saves properly when you log out or /reload the UI, if the game crashes you may lose part of the log. Use the /reload command any time to ensure your events are saved.</p>
+              <p>Dreamway saved a profile for each of your characters that includes all quests that character has completed and the event log for the character. This can be found in WoW&rsquo;s install folder under WTF&gt; Account &gt; accountname &gt; servername &gt; charactername &gt; SavedVariables, and is called DreamwayQuestPlanner. The profile can be loaded into the web app from the Settings panel.</p>
+              <p>Once loaded, the list of completed quests will be reflected in the Quest Search, Planner, and Map panels. A green checkmark will show next to quests that character has completed, and all complete quests will be added to a &ldquo;Complete&rdquo; pile before any batches in your Journey. This allows you to assign follow ups to completed quests to batches even if the prerequisites aren&rsquo;t explicitly assigned yet. It will also hide the quests from search results if &ldquo;Hide assigned&rdquo; is selected.</p>
+              <p>Loading a profile also allows you to use the Replay feature. Replay provides a timeline of the entire event log, placing an icon on the world or zone map at the location each event occurred. You can playback the event log at 1x, 10x, 60x, 600x,and 6000x speed. It can be paused at any time, and you can scrub through the log by interacting with the playback bar above the map.</p>
+            </div>
+          </details>
+          <details class="info-accordion">
+            <summary>Controls</summary>
+            <div class="info-accordion-content">
+              <p>The Dreamway web app supports keyboard controls for power users to navigate more quickly. The up/down arrows or W/S keys can cycle between quests in Quest Search or Batch Summary. Left/right arrows or A/D keys can switch the currently selected batch in your journey. Pressing enter or the spacebar will assign the currently targeted quest(s) to the currently targeted batch. The escape key can be used to deselect quests and batches.</p>
+              <p>While in map view in the web app, right click can be used to zoom out to the world map. Clicking on empty space will deselect quests, but the targeted batch will stay selected until you press the escape key.</p>
+              <p>In both the addon and web app, multiple quests and quest chains can be selected at once using the ctrl and shift keys. Hold ctrl to add quests you click on to the pile of selected quests. Hold shift to add all quests between your original target and your current click to the pile of selected quests. All selected quests will show their pickup points, objectives, and handin locations on the map. If you drag a quest while multiple quests are selected, you can move all selected quests to a batch at once.</p>
+            </div>
+          </details>
+          <details class="info-accordion">
+            <summary>Status and known issues</summary>
+            <div class="info-accordion-content">
+              <ul>
+                <li>Dreamway is currently in public testing. It is feature complete and performing well, but the goal is to collect feedback to further refine and polish before the launch of Classic+</li>
+                <li>The tool currently supports Classic Era, Season of Discovery, The Burning Crusade, and Wrath of the Lich King. Supports for Cataclysm and Mists of Pandaria are planned for the future</li>
+                <li>Dreamway is currently available in English only. Translations will be available in a future version</li>
+                <li>The web app does not render properly at lower resolutions or smaller window sizes</li>
+                <li>Clicking on zones in world or continent map view to open the zone map can be inconsistent, particularly for Northrend. Some areas of the map that should be clickable are not</li>
+                <li>Interactions with other addons (particularly those that replace Questie&rsquo;s objective tracker) have not been tested</li>
+              </ul>
+            </div>
+          </details>
+          <details class="info-accordion">
+            <summary>Questie acknowledgement</summary>
+            <div class="info-accordion-content">
+              <p>Dreamway is built on top of Questie&rsquo;s database, and requires Questie as a dependency in WoW. A big thank you to the Questie team for their incredible work and their permissive licensing. Dreamway uses the same GNU LGPLv3 license as Questie, and the source is available on GitHub at <a href="https://github.com/CirdanTheCodewright/Dreamway-Quest-Planner" target="_blank" rel="noopener noreferrer">https://github.com/CirdanTheCodewright/Dreamway-Quest-Planner</a>.</p>
+              <p>Dreamway will be updated after each Questie database update. If and when Classic+ launches, Dreamway will have all Classic+ exclusive quests as they become available in the Questie database.</p>
+            </div>
+          </details>
+          <details class="info-accordion">
+            <summary>FAQ</summary>
+            <div class="info-accordion-content">
+              <p class="info-faq-question">Q: Why does Dreamway include a web app, why not do everything in game?</p>
+              <p>A: Lua addons in World of Warcraft have limitations that a web application doesn&rsquo;t. Some additional functionality of Dreamway&rsquo;s web app could be ported to the addon, but it would come at the cost of added complexity and reduced performance in game. With this setup, you get rich functionality when building a journey, then great performance while in game.</p>
+              <p class="info-faq-question">Q: Why include the web app as a download instead of hosting a website?</p>
+              <p>A: Web hosting comes with costs, and I&rsquo;m not interested in trying to monetize Dreamway in any way to fund web hosting. Additionally, because Dreamway includes map images and large databases, loading it as a website could be slow and/or costly. Opening it from your own disc is performant and free.</p>
+              <p class="info-faq-question">Q: Why doesn&rsquo;t Dreamway come packaged with complete journeys for me to use?</p>
+              <p>A: There are already several good addons out there for people who don&rsquo;t want to have to put much thought into their questing route. Dreamway isn&rsquo;t meant to compete with RestedXP, Guidelime, or other &ldquo;no thought required&rdquo; quest helpers. It&rsquo;s for people who want to engage with the complexity and nuance of Classic WoW questing. That said, there&rsquo;s nothing stopping people from sharing their complete journeys with each other.</p>
+              <p class="info-faq-question">Q: Was AI used to create Dreamway?</p>
+              <p>A: Yes, I used the Codex tool to assist in the creation of the Dreamway web app and addon. I&rsquo;m an experienced programmer, but Codex was a great help in laying out the structure of things and diagnosing problems. AI was also used to create the icon for Dreamway, based on an in-game reference image. All text of any length was written by hand, without the use of AI.</p>
+              <p class="info-faq-question">Q: Why can&rsquo;t I filter quests by level in the addon like I can in the web app?</p>
+              <p>A: I want to encourage people to use both the web app and addon together, without making it impossible to skip the web app entirely if you prefer. The preferred workflow is to do initial journey creation and major revisions in the web app, but have total freedom to edit inside the addon. It is possible to work entirely in the addon if you prefer, just building the journey as you go.</p>
             </div>
           </details>
         </div>
@@ -9282,6 +9461,8 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     const journeyImportButton = document.querySelector("#journey-import-button");
     const journeyLoadButton = document.querySelector("#journey-load-button");
     const journeyExampleButton = document.querySelector("#journey-example-button");
+    const journeyExamplePicker = document.querySelector("#journey-example-picker");
+    const journeyExampleChoices = document.querySelector("#journey-example-choices");
     const journeyLoadInput = document.querySelector("#journey-load-input");
     const journeyStringImport = document.querySelector("#journey-string-import");
     const journeyStringInput = document.querySelector("#journey-string-input");
@@ -9346,20 +9527,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     let pendingCataloguePointerScrollTop = null;
     let currentGameVersion = "era";
     let activeJourney = null;
-    const EXAMPLE_JOURNEYS = Object.freeze([{{
-      schemaVersion: 1,
-      gameVersion: "era",
-      savedAt: "",
-      savedAction: "",
-      id: "example-journey-test",
-      name: "Example Journey Test",
-      character: {{ race: "Human", raceMask: 1, faction: "Alliance", class: "All classes", classMask: 0 }},
-      hiddenQuestIds: [],
-      batches: [
-        {{ id: "example-elwynn-1", name: "Northshire Start", autoName: false, questIds: [783, 7, 5261, 33] }},
-        {{ id: "example-elwynn-2", name: "Northshire Finish", autoName: false, questIds: [18, 6] }},
-      ],
-    }}]);
+    const EXAMPLE_JOURNEYS = Object.freeze({example_journeys_json});
     let journeyBatchCounter = 0;
     let selectedBatchId = null;
     let showSelectedBatchOnMap = true;
@@ -11766,7 +11934,22 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       return true;
     }}
 
-    function loadExampleJourney(exampleId = "example-journey-test") {{
+    function setExampleJourneyPickerOpen(open) {{
+      journeyExamplePicker.hidden = !open;
+      journeyExampleButton.setAttribute("aria-expanded", String(open));
+      if (!open) return;
+      journeyExampleChoices.replaceChildren();
+      EXAMPLE_JOURNEYS.forEach((example) => {{
+        const button = document.createElement("button");
+        button.className = "journey-load-button";
+        button.type = "button";
+        button.textContent = example.name;
+        button.addEventListener("click", () => loadExampleJourney(example.id));
+        journeyExampleChoices.append(button);
+      }});
+    }}
+
+    function loadExampleJourney(exampleId) {{
       const template = EXAMPLE_JOURNEYS.find((journey) => journey.id === exampleId);
       if (!template) {{
         showJourneyMessage("That packaged example Journey is unavailable.");
@@ -11778,6 +11961,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       activeJourney.exampleSourceName = template.name;
       activeJourney.savedAt = "";
       activeJourney.savedAction = "";
+      setExampleJourneyPickerOpen(false);
       renderJourney();
       updateSettingsStatus();
       showJourneyMessage(`Loaded example Journey "${{template.name}}". Save it as a new Journey to keep changes.`, "ok");
@@ -16652,7 +16836,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     settingsJourneyCloseButton.addEventListener("click", closeCurrentJourney);
     journeyImportButton.addEventListener("click", () => setJourneyStringImportOpen(journeyStringImport.hidden));
     journeyLoadButton.addEventListener("click", () => journeyLoadInput.click());
-    journeyExampleButton.addEventListener("click", () => loadExampleJourney());
+    journeyExampleButton.addEventListener("click", () => setExampleJourneyPickerOpen(journeyExamplePicker.hidden));
     journeyLoadInput.addEventListener("change", () => {{
       importJourneyFile(journeyLoadInput.files?.[0]);
       journeyLoadInput.value = "";
@@ -17001,6 +17185,59 @@ def lua_string_array(values):
     return "{" + ",".join(lua_string(value) for value in values or [] if value) + "}"
 
 
+def render_addon_example_journeys_lua(example_journeys):
+    lines = [
+        "-- Generated by tools/build_dreamway_webapp.py. Do not edit by hand.",
+        "DREAMWAY_EXAMPLE_JOURNEYS = {",
+    ]
+    for example in example_journeys:
+        character = example.get("character") or {}
+        lines.extend([
+            "  {",
+            f"    schemaVersion = {int(example.get('schemaVersion') or 1)},",
+            f"    id = {lua_string(example.get('id'))},",
+            f"    name = {lua_string(example.get('name'))},",
+            f"    gameVersion = {lua_string(example.get('gameVersion') or 'era')},",
+            "    savedAt = \"\",",
+            "    savedAction = \"\",",
+            "    isExample = true,",
+            "    character = {",
+            f"      race = {lua_string(character.get('race') or 'All races')},",
+            f"      raceMask = {int(character.get('raceMask') or 0)},",
+            f"      faction = {lua_string(character.get('faction') or 'All factions')},",
+            f"      class = {lua_string(character.get('class') or 'All classes')},",
+            f"      classMask = {int(character.get('classMask') or 0)},",
+            "    },",
+            "    batches = {",
+        ])
+        for batch in example.get("batches") or []:
+            quest_ids = batch.get("questIds") or []
+            expected_level = batch.get("expectedLevel")
+            expected_level_override = batch.get("expectedLevelOverride")
+            fields = [
+                f"id={lua_string(batch.get('id'))}",
+                f"name={lua_string(batch.get('name'))}",
+                f"autoName={'true' if batch.get('autoName') else 'false'}",
+                f"expectedLevel={int(expected_level)}" if isinstance(expected_level, int) else "expectedLevel=nil",
+                f"expectedLevelManual={'true' if batch.get('expectedLevelManual') else 'false'}",
+                f"expectedLevelOverride={int(expected_level_override)}" if isinstance(expected_level_override, int) else "expectedLevelOverride=nil",
+                f"quests={{{','.join('{id=' + str(int(quest_id)) + '}' for quest_id in quest_ids)}}}",
+                f"zones={lua_string_array(batch.get('zones') or [])}",
+            ]
+            lines.append("      {" + ",".join(fields) + "},")
+        hidden_ids = example.get("hiddenQuestIds") or []
+        lines.extend([
+            "    },",
+            f"    hiddenQuestIds = {lua_number_array(hidden_ids)},",
+            "    hiddenQuests = {" + ",".join("{id=" + str(int(quest_id)) + "}" for quest_id in hidden_ids) + "},",
+            "    unusedQuestIds = {},",
+            "    unusedQuests = {},",
+            "  },",
+        ])
+    lines.extend(["}", ""])
+    return "\n".join(lines)
+
+
 def lua_reputation_rewards(values):
     entries = []
     for reward in values or []:
@@ -17246,6 +17483,7 @@ def render_addon_quest_zones_lua(records, zones, game_version="era"):
 
 
 def main():
+    example_journeys = load_example_journeys()
     map_source_count, unique_map_count = prepare_webp_map_assets()
     classic_bundle = build_classic_records()
     tbc_bundle = build_version_records("tbc")
@@ -17262,13 +17500,17 @@ def main():
     addon_zones = ROOT / "DreamwayQuestPlanner" / "DreamwayQuestZones.lua"
     addon_zones_tbc = ROOT / "DreamwayQuestPlanner" / "DreamwayQuestZones-BCC.lua"
     addon_zones_wotlk = ROOT / "DreamwayQuestPlanner" / "DreamwayQuestZones-WOTLKC.lua"
+    addon_examples = ROOT / "DreamwayQuestPlanner" / "DreamwayExampleJourneys.lua"
     addon_zones.write_text(render_addon_quest_zones_lua(records, zones, "era"), encoding="utf-8")
     addon_zones_tbc.write_text(render_addon_quest_zones_lua(tbc_bundle[0], tbc_bundle[2], "tbc"), encoding="utf-8")
     addon_zones_wotlk.write_text(render_addon_quest_zones_lua(wotlk_bundle[0], wotlk_bundle[2], "wotlk"), encoding="utf-8")
+    addon_examples.write_text(render_addon_example_journeys_lua(example_journeys), encoding="utf-8")
     print(f"Wrote {output}")
     print(f"Wrote {addon_zones}")
     print(f"Wrote {addon_zones_tbc}")
     print(f"Wrote {addon_zones_wotlk}")
+    print(f"Wrote {addon_examples}")
+    print(f"Example Journeys: {len(example_journeys)}")
     print(f"Quest records: {len(records)}")
     print(f"Chains: {len(chains)}")
     print(f"Zone maps: {len(zones)}")
