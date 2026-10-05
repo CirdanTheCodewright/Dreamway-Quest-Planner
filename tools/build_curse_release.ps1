@@ -1,5 +1,5 @@
 param(
-    [string]$Version = "0.6.0",
+    [string]$Version = "0.8.0",
     [string]$OutputRoot = (Join-Path $PSScriptRoot "..\artifacts\release")
 )
 
@@ -12,7 +12,11 @@ $webRoot = Join-Path $packageRoot "WebApp"
 $zipPath = Join-Path $outputRoot ("DreamwayQuestPlanner-{0}.zip" -f $Version)
 
 if (Test-Path $outputRoot) {
-    Remove-Item -Path $outputRoot -Recurse -Force
+    $allowedRoot = [System.IO.Path]::GetFullPath((Join-Path $root "artifacts")) + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $outputRoot.StartsWith($allowedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to clear an output folder outside the workspace artifacts directory: $outputRoot"
+    }
+    Remove-Item -LiteralPath $outputRoot -Recurse -Force
 }
 
 New-Item -ItemType Directory -Path $packageRoot | Out-Null

@@ -16,6 +16,8 @@ Copy-Item -Path (Join-Path $source "*") -Destination $target -Recurse -Force
 
 After copying, read back `Dreamway.lua` from the live AddOns folder and confirm its size/content matches the workspace copy.
 
+Also deploy every new addon build to the Forever beta installation at `G:\World of Warcraft\_classic_beta_\Interface\AddOns\DreamwayQuestPlanner`, in addition to the Era installation above. Copy the whole addon contents using the same `Copy-Item -Path` approach, creating the destination folder if necessary. Read back and verify `Dreamway.lua` in both installations before the final response.
+
 ## Addon Interface Views
 
 Prefer full-interface view swaps inside the main Dreamway panel over separate popup windows. Features such as Journey management, settings, information, and warning browsers should replace the Planner content while active and return through the shared Planner navigation. Reserve modal overlays only for brief confirmations or focused text entry that cannot reasonably use a full panel view.

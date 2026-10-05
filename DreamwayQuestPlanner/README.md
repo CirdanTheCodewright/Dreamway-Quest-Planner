@@ -3,7 +3,7 @@
 Questie companion addon for planning and following Dreamway Journeys in game.
 
 Dreamway ships flavor-specific metadata for Classic Era/Season of Discovery,
-Burning Crusade Classic, and Wrath of the Lich King Classic. Only the database
+WoW Forever beta, Burning Crusade Classic, and Wrath of the Lich King Classic. Only the database
 for the running client is loaded.
 
 ## Install

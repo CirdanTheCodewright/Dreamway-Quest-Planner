@@ -10,28 +10,30 @@ from collections import Counter, defaultdict, deque
 from pathlib import Path
 
 from PIL import Image
+from questiedb_source import load_flavor, load_questie_categories
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DREAMWAY_VERSION = "0.6.0"
+DREAMWAY_VERSION = "0.8.0"
 EXAMPLE_JOURNEY_DIR = ROOT / "example_journeys"
 QUESTIE_DATABASE = ROOT / "Questie" / "Database"
-QUESTIE = QUESTIE_DATABASE / "Classic"
-QUESTIE_TBC = QUESTIE_DATABASE / "TBC"
-QUESTIE_WOTLK = QUESTIE_DATABASE / "Wotlk"
-QUEST_XP_CLASSIC = QUESTIE_DATABASE / "QuestXP" / "DB" / "xpDB-classic.lua"
-QUEST_XP_TBC = QUESTIE_DATABASE / "QuestXP" / "DB" / "xpDB-tbc.lua"
-QUEST_XP_WOTLK = QUESTIE_DATABASE / "QuestXP" / "DB" / "xpDB-wotlk.lua"
-QUEST_DB_SCHEMA = QUESTIE_DATABASE / "questDB.lua"
-CLASSIC_REPUTATION_FIXES = QUESTIE_DATABASE / "Corrections" / "Automatic" / "classicQuestReputationFixes.lua"
-CLASSIC_QUEST_FIXES = QUESTIE_DATABASE / "Corrections" / "classicQuestFixes.lua"
-CLASSIC_ITEM_FIXES = QUESTIE_DATABASE / "Corrections" / "classicItemFixes.lua"
-TBC_QUEST_FIXES = QUESTIE_DATABASE / "Corrections" / "tbcQuestFixes.lua"
-TBC_ITEM_FIXES = QUESTIE_DATABASE / "Corrections" / "tbcItemFixes.lua"
-WOTLK_QUEST_FIXES = QUESTIE_DATABASE / "Corrections" / "wotlkQuestFixes.lua"
-WOTLK_ITEM_FIXES = QUESTIE_DATABASE / "Corrections" / "wotlkItemFixes.lua"
-SOD_QUEST_FIXES = QUESTIE_DATABASE / "Corrections" / "sodQuestFixes.lua"
-SOD_BASE_DIR = QUESTIE_DATABASE / "Corrections" / "Automatic"
+QUESTIEDB = ROOT / "QuestieDB"
+QUESTIE = QUESTIEDB / "data" / "Classic"
+QUESTIE_TBC = QUESTIEDB / "data" / "TBC"
+QUESTIE_WOTLK = QUESTIEDB / "data" / "Wotlk"
+QUEST_XP_CLASSIC = QUESTIEDB / "support/QuestXP" / "xpDB-classic.lua"
+QUEST_XP_TBC = QUESTIEDB / "support/QuestXP" / "xpDB-tbc.lua"
+QUEST_XP_WOTLK = QUESTIEDB / "support/QuestXP" / "xpDB-wotlk.lua"
+QUEST_DB_SCHEMA = QUESTIEDB / "src" / "corrections" / "enum" / "quests.lua"
+CLASSIC_REPUTATION_FIXES = QUESTIEDB / "src" / "corrections" / "Era" / "classicQuestReputationFixes.lua"
+CLASSIC_QUEST_FIXES = QUESTIEDB / "src" / "corrections" / "Era" / "classicQuestFixes.lua"
+CLASSIC_ITEM_FIXES = QUESTIEDB / "src" / "corrections" / "Era" / "classicItemFixes.lua"
+TBC_QUEST_FIXES = QUESTIEDB / "src" / "corrections" / "Tbc" / "tbcQuestFixes.lua"
+TBC_ITEM_FIXES = QUESTIEDB / "src" / "corrections" / "Tbc" / "tbcItemFixes.lua"
+WOTLK_QUEST_FIXES = QUESTIEDB / "src" / "corrections" / "Wotlk" / "wotlkQuestFixes.lua"
+WOTLK_ITEM_FIXES = QUESTIEDB / "src" / "corrections" / "Wotlk" / "wotlkItemFixes.lua"
+SOD_QUEST_FIXES = QUESTIEDB / "src" / "corrections" / "Sod" / "sodQuestFixes.lua"
+SOD_BASE_DIR = QUESTIEDB / "src/corrections/Sod"
 SOD_BASE_QUESTS = SOD_BASE_DIR / "sodBaseQuests.lua"
 SOD_BASE_NPCS = SOD_BASE_DIR / "sodBaseNPCs.lua"
 SOD_BASE_OBJECTS = SOD_BASE_DIR / "sodBaseObjects.lua"
@@ -116,15 +118,17 @@ CLASSIC_CLASS_IDS = {
     "DEATH_KNIGHT": 32,
 }
 RACE_REQUIREMENT_OPTIONS = (
-    (1, "Human", "Alliance", ("era", "sod", "tbc", "wotlk")),
-    (4, "Dwarf", "Alliance", ("era", "sod", "tbc", "wotlk")),
-    (8, "Night Elf", "Alliance", ("era", "sod", "tbc", "wotlk")),
-    (64, "Gnome", "Alliance", ("era", "sod", "tbc", "wotlk")),
+    (4294967296, "Skyborne (Alliance)", "Alliance", ("forever",)),
+    (8589934592, "Skyborne (Horde)", "Horde", ("forever",)),
+    (1, "Human", "Alliance", ("era", "sod", "tbc", "wotlk", "forever")),
+    (4, "Dwarf", "Alliance", ("era", "sod", "tbc", "wotlk", "forever")),
+    (8, "Night Elf", "Alliance", ("era", "sod", "tbc", "wotlk", "forever")),
+    (64, "Gnome", "Alliance", ("era", "sod", "tbc", "wotlk", "forever")),
     (1024, "Draenei", "Alliance", ("tbc", "wotlk")),
-    (2, "Orc", "Horde", ("era", "sod", "tbc", "wotlk")),
-    (16, "Undead", "Horde", ("era", "sod", "tbc", "wotlk")),
-    (32, "Tauren", "Horde", ("era", "sod", "tbc", "wotlk")),
-    (128, "Troll", "Horde", ("era", "sod", "tbc", "wotlk")),
+    (2, "Orc", "Horde", ("era", "sod", "tbc", "wotlk", "forever")),
+    (16, "Undead", "Horde", ("era", "sod", "tbc", "wotlk", "forever")),
+    (32, "Tauren", "Horde", ("era", "sod", "tbc", "wotlk", "forever")),
+    (128, "Troll", "Horde", ("era", "sod", "tbc", "wotlk", "forever")),
     (512, "Blood Elf", "Horde", ("tbc", "wotlk")),
 )
 CLASS_REQUIREMENT_OPTIONS = (
@@ -427,12 +431,12 @@ def load_sod_defined_quest_fixes():
     function_text = re.sub(r"--[^\r\n]*", "", function_text)
 
     zone_ids = load_named_integer_constants(
-        QUESTIE_DATABASE / "Zones" / "data" / "zoneIds.lua",
-        "ZoneDB.zoneIDs",
+        QUESTIEDB / "src/corrections/enum/zones.lua",
+        "constants.zoneIDs",
     )
     sort_keys = load_named_integer_constants(QUESTIE_DATABASE / "Constants.lua", "QuestieDB.sortKeys")
-    quest_flags = load_named_integer_constants(QUEST_DB_SCHEMA, "QuestieDB.questFlags")
-    special_flags = load_named_integer_constants(QUESTIE_DATABASE / "QuestieDB.lua", "QuestieDB.specialFlags")
+    quest_flags = load_named_integer_constants(QUEST_DB_SCHEMA, "constants.questFlags")
+    special_flags = load_named_integer_constants(QUESTIEDB / "src/corrections/enum/quests.lua", "constants.specialFlags")
     faction_ids = load_faction_ids()
     profession_ids = {name.upper().replace(" ", "_"): value for value, name in PROFESSION_REQUIREMENT_NAMES.items()}
     specialization_ids = {
@@ -494,8 +498,8 @@ def faction_display_name(key):
 
 
 def load_faction_ids():
-    text = QUEST_DB_SCHEMA.read_text(encoding="utf-8")
-    match = re.search(r"QuestieDB\.factionIDs\s*=\s*\{(.*?)^\}", text, flags=re.S | re.M)
+    text = (QUESTIEDB / "src/corrections/enum/factions.lua").read_text(encoding="utf-8")
+    match = re.search(r"constants\.factionIDs\s*=\s*\{(.*?)^\}", text, flags=re.S | re.M)
     if not match:
         return {}
     return {
@@ -1764,6 +1768,8 @@ def render_html(records, chains):
     ];
     const RACES = [
       {{ label: "All races", mask: null, color: "#fff0ce" }},
+      {{ label: "Skyborne (Alliance)", mask: 4294967296, faction: "Alliance", color: "#5aa9ff", versions: ["forever"] }},
+      {{ label: "Skyborne (Horde)", mask: 8589934592, faction: "Horde", color: "#ff6b5f", versions: ["forever"] }},
       {{ label: "Human", mask: 1, faction: "Alliance", color: "#5aa9ff" }},
       {{ label: "Dwarf", mask: 4, faction: "Alliance", color: "#5aa9ff" }},
       {{ label: "Night Elf", mask: 8, faction: "Alliance", color: "#5aa9ff" }},
@@ -2661,12 +2667,12 @@ UIMAP_WOTLK = CSV_DIR / "uimap_wotlk.csv"
 QUESTSORT_WOTLK = CSV_DIR / "questsort_wotlk.csv"
 AREATABLE_WOTLK = CSV_DIR / "areatable_wotlk.csv"
 MAP_WOTLK = CSV_DIR / "map_wotlk.csv"
-AREA_ID_TO_UI_MAP = ROOT / "Questie" / "Database" / "Zones" / "data" / "areaIdToUiMapId.lua"
-SUBZONE_TO_PARENT = ROOT / "Questie" / "Database" / "Zones" / "data" / "subZoneToParentZone.lua"
+AREA_ID_TO_UI_MAP = QUESTIEDB / "support/Zones/areaIdToUiMapId.lua"
+SUBZONE_TO_PARENT = QUESTIEDB / "support/Zones/subZoneToParentZone.lua"
 QUEST_TAG_INFO_CORRECTIONS = ROOT / "Questie" / "Database" / "Corrections" / "questTagInfoCorrections.lua"
 HOLIDAY_QUEST_DIR = ROOT / "Questie" / "Database" / "Corrections" / "Holidays" / "quests"
 QUEST_BLACKLIST = ROOT / "Questie" / "Database" / "Corrections" / "QuestieQuestBlacklist.lua"
-CLASSIC_QUEST_FIXES = ROOT / "Questie" / "Database" / "Corrections" / "classicQuestFixes.lua"
+CLASSIC_QUEST_FIXES = QUESTIEDB / "src" / "corrections" / "Era" / "classicQuestFixes.lua"
 MAP_ASSET_DIR = ROOT / "assets" / "classic-maps" / "zones"
 LEGACY_MAP_ASSET_DIR = ROOT / "assets" / "maps"
 CONTINENT_MAP_ASSET_DIR = ROOT / "assets" / "classic-maps" / "continents"
@@ -2674,6 +2680,8 @@ TBC_MAP_ASSET_DIR = ROOT / "assets" / "tbc-maps" / "zones"
 TBC_CONTINENT_MAP_ASSET_DIR = ROOT / "assets" / "tbc-maps" / "continents"
 WOTLK_MAP_ASSET_DIR = ROOT / "assets" / "wotlk-maps" / "zones"
 WOTLK_CONTINENT_MAP_ASSET_DIR = ROOT / "assets" / "wotlk-maps" / "continents"
+FOREVER_MAP_ASSET_DIR = ROOT / "assets" / "forever-maps" / "maps"
+FOREVER_MAP_MANIFEST = ROOT / "assets" / "forever-maps" / "manifest.json"
 WEBP_MAP_ASSET_DIR = ROOT / "assets" / "dreamway-maps"
 VERSION_DATA_DIR = ROOT / "data"
 MAP_WEB_PATHS = {}
@@ -3009,8 +3017,8 @@ def load_map_instance_areas(map_table_path):
     return instances
 
 
-def load_instance_zone_data(area_table_path, map_table_path, subzones, world_continent_ids):
-    area_to_ui = load_lua_return_table_merge(AREA_ID_TO_UI_MAP)
+def load_instance_zone_data(area_table_path, map_table_path, subzones, world_continent_ids, area_mapping_path=AREA_ID_TO_UI_MAP):
+    area_to_ui = load_lua_return_table_merge(area_mapping_path)
     map_categories = load_map_location_categories(map_table_path)
     map_instance_areas = load_map_instance_areas(map_table_path)
     area_rows = {}
@@ -3159,8 +3167,8 @@ def load_classic_quest_fix_category_ids():
 def load_quest_objective_location_corrections(path):
     text = path.read_text(encoding="utf-8")
     zone_ids = load_named_integer_constants(
-        QUESTIE_DATABASE / "Zones" / "data" / "zoneIds.lua",
-        "ZoneDB.zoneIDs",
+        QUESTIEDB / "src/corrections/enum/zones.lua",
+        "constants.zoneIDs",
     )
     constants = {f"zoneIDs.{name}": value for name, value in zone_ids.items()}
     corrections = {}
@@ -3261,10 +3269,8 @@ def derive_quest_type_ids(quest_id, quest, quest_sort_names, quest_tag_correctio
     zone_or_sort = table_value(quest, 16)
     quest_sort_name = add_type_from_sort(type_ids, zone_or_sort, quest_sort_names) if isinstance(zone_or_sort, int) and zone_or_sort < 0 else None
 
-    if table_value(quest, 6):
-        type_ids.add("class")
-    if table_value(quest, 17) or table_value(quest, 30) or table_value(quest, 34):
-        type_ids.add("profession")
+    # Questie's Journey groups by zoneOrSort, not by class/profession eligibility.
+    # Those restrictions are still displayed separately as requirements.
     if CITY_DONATION_QUEST_PATTERN.search(quest_name):
         type_ids.add("city-donation")
     if quest_id in breadcrumb_ids:
@@ -3311,7 +3317,8 @@ def load_world_area_data(
     version="era",
 ):
     ui_names = load_uimap_names(ui_map_path)
-    area_to_ui = load_lua_return_table_merge(AREA_ID_TO_UI_MAP)
+    mapping = QUESTIEDB / "support/Forever/Zones/areaIdToUiMapId.lua" if version == "forever" else AREA_ID_TO_UI_MAP
+    area_to_ui = load_lua_return_table_merge(mapping)
     zones = {}
     continents = {}
 
@@ -3434,6 +3441,81 @@ def load_world_area_data(
     return zones, continents
 
 
+def load_forever_map_data(legacy_zones, continents):
+    """Use native UiMap images and child rectangles; never invert native quest points."""
+    manifest = json.loads(FOREVER_MAP_MANIFEST.read_text(encoding="utf-8"))
+    if manifest.get("artworkState") != "fully-explored":
+        raise ValueError("Forever maps must include native exploration overlays; run download_forever_maps.py")
+    maps = {entry["id"]: entry for entry in manifest["maps"]}
+    reverse = load_lua_return_table_merge(QUESTIEDB / "support/Forever/Zones/uiMapIdToAreaId.lua")
+    transforms = json.loads((QUESTIEDB / "data/Forever/conversion.json").read_text(encoding="utf-8"))
+    bounds = {entry["ui_map_id"]: entry["target_bounds"] for entry in transforms["geometry"]["transforms"]}
+    continent_ids = {1414: 1, 1415: 0}
+    zones = {key: value for key, value in legacy_zones.items() if value.get("isInstance")}
+    for ui_id, continent_id in continent_ids.items():
+        entry = maps[ui_id]
+        continent = continents[continent_id]
+        continent["image"] = to_web_path(ROOT / entry["image"])
+        left, top, right, bottom = entry["crop"]
+        continent.update(cropLeftPct=left / entry["w"] * 100,
+                         cropTopPct=top / entry["h"] * 100,
+                         cropWidthPct=(right - left) / entry["w"] * 100,
+                         cropHeightPct=(bottom - top) / entry["h"] * 100)
+
+    for ui_id, entry in maps.items():
+        if entry["k"] in ("world", "continent"):
+            continue
+        area_id = reverse.get(ui_id)
+        if not area_id:
+            raise ValueError(f"Native Forever map {ui_id} lacks a QuestieDB AreaID")
+        parent_id = entry["p"]
+        continent_id = continent_ids.get(parent_id)
+        rect = None
+        if continent_id is not None:
+            child = next((row for row in maps[parent_id]["ch"] if row[0] == ui_id), None)
+            if child:
+                continent = continents[continent_id]
+                rect = {
+                    "left": (child[1] * 100 - continent["cropLeftPct"]) / continent["cropWidthPct"] * 100,
+                    "top": (child[2] * 100 - continent["cropTopPct"]) / continent["cropHeightPct"] * 100,
+                    "width": (child[3] - child[1]) * 100 / continent["cropWidthPct"] * 100,
+                    "height": (child[4] - child[2]) * 100 / continent["cropHeightPct"] * 100,
+                }
+        world_group = "azeroth"
+        if parent_id == 947:
+            # The island has its own map and no continent-level assignment.
+            # Show it as a full-size world view without inventing an ocean position.
+            continent_id = ui_id
+            world_group = f"island-{ui_id}"
+            rect = {"left": 0, "top": 0, "width": 100, "height": 100}
+            continents[continent_id] = {
+                "id": continent_id, "name": entry["n"], "worldGroup": world_group,
+                "x": 0, "y": 0, "width": 100, "height": 100,
+                "image": to_web_path(ROOT / entry["image"]),
+            }
+        if continent_id is None:
+            # Battleground UiMaps have a zone parent, not a geographic world rectangle.
+            continent_id = legacy_zones.get(area_id, {}).get("continentId", ui_id)
+        zone = {**legacy_zones.get(area_id, {}), "id": area_id, "areaId": area_id,
+                "uiMapId": ui_id, "name": entry["n"], "continentId": continent_id,
+                "worldContinentId": continent_id, "worldGroup": world_group,
+                "image": to_web_path(ROOT / entry["image"]), "worldRect": rect,
+                "worldRectOverride": True, "isInstance": entry["k"] == "other",
+                "locationCategory": "battleground" if entry["k"] == "other" else "city" if entry["city"] else "zone",
+                "nativeLevelRange": entry["lv"]}
+        native_bounds = bounds.get(ui_id)
+        if native_bounds:
+            zone.update({key: native_bounds[key] for key in ("left", "right", "top", "bottom")})
+        zones[area_id] = zone
+    # Hit testing should use the cropped native continent images and their native rectangles.
+    for continent_id, continent in continents.items():
+        native_id = next((ui_id for ui_id, id in continent_ids.items() if id == continent_id), None)
+        continent["zoneHitGrid"] = build_continent_zone_hit_grid(
+            continent_id, zones.values(), FOREVER_MAP_ASSET_DIR,
+            image_path=FOREVER_MAP_ASSET_DIR / f"{native_id}.jpg" if native_id else None)
+    return zones, continents
+
+
 def crop_continent_bounds_to_zones(zones, continents):
     for continent_id, continent in continents.items():
         continent_zones = [zone for zone in zones.values() if zone["continentId"] == continent_id]
@@ -3460,6 +3542,7 @@ def prepare_webp_map_assets():
         TBC_CONTINENT_MAP_ASSET_DIR,
         WOTLK_MAP_ASSET_DIR,
         WOTLK_CONTINENT_MAP_ASSET_DIR,
+        FOREVER_MAP_ASSET_DIR,
     )
     source_paths = {
         path.resolve()
@@ -3573,7 +3656,7 @@ def choose_zone_for_world_cell(x, y, continent_zones):
     return min(candidates, key=lambda item: item[0])[1]
 
 
-def build_continent_zone_hit_grid(continent_id, zones, continent_asset_dir=CONTINENT_MAP_ASSET_DIR):
+def build_continent_zone_hit_grid(continent_id, zones, continent_asset_dir=CONTINENT_MAP_ASSET_DIR, image_path=None):
     continent_zones = [
         zone
         for zone in sorted(zones, key=lambda item: (item["name"], item["id"]))
@@ -3582,7 +3665,7 @@ def build_continent_zone_hit_grid(continent_id, zones, continent_asset_dir=CONTI
     if not continent_zones or len(continent_zones) >= len(ZONE_HIT_GRID_ALPHABET):
         return None
 
-    image_path = continent_asset_dir / f"{continent_id}.jpg"
+    image_path = image_path or continent_asset_dir / f"{continent_id}.jpg"
     if not image_path.exists():
         return None
 
@@ -3927,8 +4010,8 @@ def dedupe_spatial_points(points):
 def race_requirement_name(mask):
     if mask is None or mask == 0:
         return "Any race"
-    alliance = bool(mask & ALLIANCE_RACE_MASK)
-    horde = bool(mask & HORDE_RACE_MASK)
+    alliance = bool(mask & (ALLIANCE_RACE_MASK | 4294967296))
+    horde = bool(mask & (HORDE_RACE_MASK | 8589934592))
     if alliance and horde:
         return "Alliance or Horde"
     if alliance:
@@ -3938,7 +4021,7 @@ def race_requirement_name(mask):
     return f"Race mask {mask}"
 
 
-def npc_source_faction_mask(quest, npcs):
+def npc_source_faction_mask(quest, npcs, version="era"):
     starts = table_value(quest, 1)
     factions = set()
     for npc_id in source_refs(starts, 0):
@@ -3950,9 +4033,9 @@ def npc_source_faction_mask(quest, npcs):
         elif isinstance(faction, str) and "A" in faction and "H" in faction:
             return 0
     if factions == {"A"}:
-        return ALLIANCE_RACE_MASK
+        return 4294967373 if version == "forever" else ALLIANCE_RACE_MASK
     if factions == {"H"}:
-        return HORDE_RACE_MASK
+        return 8589934770 if version == "forever" else HORDE_RACE_MASK
     return 0
 
 
@@ -3967,7 +4050,7 @@ def effective_required_race_mask(quest_id, quest, version, npcs, previous_quests
         if isinstance(previous_mask, int) and previous_mask:
             return previous_mask
 
-    return npc_source_faction_mask(quest, npcs)
+    return npc_source_faction_mask(quest, npcs, version)
 
 
 def quest_requirement_lines(quest, quests, items, faction_names, version, race_mask=None):
@@ -4131,7 +4214,7 @@ def reputation_reward_records(value, faction_names):
 
 
 def item_rewards_by_quest(items, corrections_path=CLASSIC_ITEM_FIXES):
-    corrections = load_item_reward_corrections(corrections_path)
+    corrections = load_item_reward_corrections(corrections_path) if corrections_path else {}
     rewards = defaultdict(list)
     for item_id, item in items.items():
         if not isinstance(item_id, int) or not isinstance(item, list):
@@ -4151,39 +4234,23 @@ def build_version_records(version="classic"):
     is_tbc = version == "tbc"
     is_wotlk = version == "wotlk"
     is_expansion = is_tbc or is_wotlk
-    database_dir = QUESTIE_WOTLK if is_wotlk else QUESTIE_TBC if is_tbc else QUESTIE
-    prefix = "wotlk" if is_wotlk else "tbc" if is_tbc else "classic"
-    quests = load_lua_data(database_dir / f"{prefix}QuestDB.lua")
-    npcs = load_lua_data(database_dir / f"{prefix}NpcDB.lua")
-    objects = load_lua_data(database_dir / f"{prefix}ObjectDB.lua")
-    items = load_lua_data(database_dir / f"{prefix}ItemDB.lua")
-    previous_quests = load_lua_data(QUESTIE_TBC / "tbcQuestDB.lua") if is_wotlk else {}
-    quest_fixes = WOTLK_QUEST_FIXES if is_wotlk else TBC_QUEST_FIXES if is_tbc else CLASSIC_QUEST_FIXES
-    apply_quest_objective_location_corrections(quests, quest_fixes)
+    is_forever = version == "forever"
+    is_sod = version == "sod"
+    flavor = "SoD" if is_sod else "Forever" if is_forever else "Wrath" if is_wotlk else "TBC" if is_tbc else "Vanilla"
+    source = load_flavor(flavor)
+    quests, npcs, objects, items = (source[name] for name in ("Quest", "Npc", "Object", "Item"))
+    previous_quests = {}
     sod_exclusive_quest_ids = set()
-    if not is_expansion:
-        sod_quests, sod_npcs, sod_objects, sod_items = load_sod_base_data()
-        classic_quest_ids = set(quests)
-        for table, additions in ((quests, sod_quests), (npcs, sod_npcs), (objects, sod_objects), (items, sod_items)):
-            for row_id, row in additions.items():
-                if row_id not in table:
-                    table[row_id] = row
-        for quest_id, quest in load_sod_defined_quest_fixes().items():
-            if quest_id not in quests:
-                quests[quest_id] = quest
-        sod_exclusive_quest_ids = set(quests) - classic_quest_ids
+    if is_sod:
+        sod_exclusive_quest_ids = set(quests) - set(load_flavor("Vanilla")["Quest"])
     xp_path = QUEST_XP_WOTLK if is_wotlk else QUEST_XP_TBC if is_tbc else QUEST_XP_CLASSIC
+    if is_forever:
+        xp_path = QUESTIEDB / "support/Forever/QuestXP/xpDB-classic.lua"
     xp_data = load_lua_assignment_table(xp_path, "QuestXP.db")
     faction_names = load_faction_names()
     faction_ids = load_faction_ids()
     reputation_corrections = {}
-    if is_expansion:
-        reputation_corrections.update(load_reputation_corrections(WOTLK_QUEST_FIXES if is_wotlk else TBC_QUEST_FIXES, faction_ids))
-    else:
-        reputation_corrections.update(load_reputation_corrections(CLASSIC_REPUTATION_FIXES, faction_ids))
-        reputation_corrections.update(load_reputation_corrections(CLASSIC_QUEST_FIXES, faction_ids))
-    item_fixes = WOTLK_ITEM_FIXES if is_wotlk else TBC_ITEM_FIXES if is_tbc else CLASSIC_ITEM_FIXES
-    quest_item_rewards = item_rewards_by_quest(items, item_fixes)
+    quest_item_rewards = item_rewards_by_quest(items, None)
     world_continent_ids = (0, 1, 530, 571) if is_wotlk else (0, 1, 530) if is_tbc else (0, 1)
     zones, continents = load_world_area_data(
         world_area_path=WORLDMAPAREA_WOTLK if is_wotlk else WORLDMAPAREA_TBC if is_tbc else WORLDMAPAREA_CLASSIC,
@@ -4191,27 +4258,39 @@ def build_version_records(version="classic"):
         zone_asset_dir=WOTLK_MAP_ASSET_DIR if is_wotlk else TBC_MAP_ASSET_DIR if is_tbc else MAP_ASSET_DIR,
         continent_asset_dir=WOTLK_CONTINENT_MAP_ASSET_DIR if is_wotlk else TBC_CONTINENT_MAP_ASSET_DIR if is_tbc else CONTINENT_MAP_ASSET_DIR,
         continent_ids=world_continent_ids,
-        version="wotlk" if is_wotlk else "tbc" if is_tbc else "era",
+        version="forever" if is_forever else "wotlk" if is_wotlk else "tbc" if is_tbc else "era",
     )
-    subzones = load_lua_return_table_merge(SUBZONE_TO_PARENT)
+    subzones = load_lua_return_table_merge(QUESTIEDB / "support/Forever/Zones/subZoneToParentZone.lua" if is_forever else SUBZONE_TO_PARENT)
     zones.update(load_instance_zone_data(
         AREATABLE_WOTLK if is_wotlk else AREATABLE_TBC if is_tbc else AREATABLE_CLASSIC,
         MAP_WOTLK if is_wotlk else MAP_TBC if is_tbc else MAP_CLASSIC,
         subzones,
         world_continent_ids,
+        QUESTIEDB / "support/Forever/Zones/areaIdToUiMapId.lua" if is_forever else AREA_ID_TO_UI_MAP,
     ))
+    if is_forever:
+        zones, continents = load_forever_map_data(zones, continents)
     for zone_id, zone in zones.items():
         if not zone.get("locationCategory"):
             zone["locationCategory"] = "city" if zone_id in CITY_ZONE_IDS else "zone"
-        if not is_expansion and zone_id in SOD_LOCATION_CATEGORY_OVERRIDES:
+        if not is_expansion and not is_forever and zone_id in SOD_LOCATION_CATEGORY_OVERRIDES:
             zone["sodLocationCategory"] = SOD_LOCATION_CATEGORY_OVERRIDES[zone_id]
     quest_sort_names = load_quest_sort_names(QUESTSORT_WOTLK if is_wotlk else QUESTSORT_TBC if is_tbc else QUESTSORT_CLASSIC)
-    quest_tag_corrections = load_quest_tag_corrections("wotlk" if is_wotlk else "tbc" if is_tbc else "era")
+    consumer_sort_names, consumer_categories = load_questie_categories(version)
+    quest_sort_names.update(consumer_sort_names)
+    CLASS_SORT_NAMES.clear()
+    CLASS_SORT_NAMES.update(consumer_categories[11].values())
+    PROFESSION_SORT_NAMES.clear()
+    PROFESSION_SORT_NAMES.update(consumer_categories[12].values())
+    SPECIAL_SORT_NAMES.clear()
+    SPECIAL_SORT_NAMES.update(set(consumer_categories[13].values())
+                              - SEASONAL_SORT_NAMES - set(SPECIAL_EVENT_SORT_NAMES) - REPUTATION_TURNIN_SORT_NAMES)
+    quest_tag_corrections = load_quest_tag_corrections(version)
     holiday_events = load_holiday_event_quests()
     aq_war_effort = load_quest_id_table("AQWarEffortQuests")
     invasion_quests = load_quest_id_table("InvasionQuests")
     fixed_breadcrumb_ids, fixed_escort_ids = load_classic_quest_fix_category_ids()
-    objective_first = load_objective_first_corrections()
+    objective_first = source["objectiveFirst"]
 
     candidates = {
         quest_id: quest
@@ -4285,7 +4364,7 @@ def build_version_records(version="classic"):
 
         records.append({
             "id": quest_id,
-            "gameVersions": [version] if is_expansion else (["sod"] if quest_id in sod_exclusive_quest_ids else ["era", "sod"]),
+            "gameVersions": [version] if is_expansion or is_forever else (["sod"] if quest_id in sod_exclusive_quest_ids else ["era", "sod"]),
             "name": table_value(quest, 0),
             "requiredLevel": table_value(quest, 3),
             "questLevel": table_value(quest, 4),
@@ -4336,6 +4415,8 @@ def build_version_records(version="classic"):
         **zone_level_ranges(records),
         **{zone_id: level_range for zone_id, level_range in (WOTLK_ZONE_LEVEL_RANGES if is_wotlk else TBC_ZONE_LEVEL_RANGES if is_tbc else CLASSIC_ZONE_LEVEL_RANGES).items() if zone_id in zones},
     }
+    if is_forever:
+        level_ranges.update({zone_id: tuple(zone["nativeLevelRange"]) for zone_id, zone in zones.items() if zone.get("nativeLevelRange")})
 
     max_level = 80 if is_wotlk else 70 if is_tbc else 60
     serializable_zones = []
@@ -4353,7 +4434,7 @@ def build_version_records(version="classic"):
         elif location_category == "raid":
             level_range = (max_level, max_level)
         sod_location_category = zone.get("sodLocationCategory")
-        sod_level_range = SOD_LOCATION_LEVEL_RANGES.get(zone_id) if not is_expansion else None
+        sod_level_range = SOD_LOCATION_LEVEL_RANGES.get(zone_id) if not is_expansion and not is_forever else None
         serializable_zones.append({
             "id": zone_id,
             "uiMapId": zone.get("uiMapId"),
@@ -4365,7 +4446,7 @@ def build_version_records(version="classic"):
             "isInstance": bool(zone.get("isInstance")),
             "locationCategory": location_category,
             "sodLocationCategory": sod_location_category,
-            "sodName": SOD_LOCATION_NAME_OVERRIDES.get(zone_id) if not is_expansion else None,
+            "sodName": SOD_LOCATION_NAME_OVERRIDES.get(zone_id) if not is_expansion and not is_forever else None,
             "worldRect": zone.get("worldRect"),
             "questCount": zone_counts[zone_id],
             "chainCount": len(zone_chain_ids[zone_id]),
@@ -4394,7 +4475,7 @@ def build_version_records(version="classic"):
             "y": continent["y"],
             "width": continent["width"],
             "height": continent["height"],
-            "image": to_web_path((WOTLK_CONTINENT_MAP_ASSET_DIR if is_wotlk else TBC_CONTINENT_MAP_ASSET_DIR if is_tbc else CONTINENT_MAP_ASSET_DIR) / f"{continent_id}.jpg"),
+            "image": continent.get("image") or to_web_path((WOTLK_CONTINENT_MAP_ASSET_DIR if is_wotlk else TBC_CONTINENT_MAP_ASSET_DIR if is_tbc else CONTINENT_MAP_ASSET_DIR) / f"{continent_id}.jpg"),
             "crop": [
                 round(continent.get("cropLeftPct", 0), 4),
                 round(continent.get("cropTopPct", 0), 4),
@@ -4421,6 +4502,9 @@ def build_version_records(version="classic"):
             {"id": "outland", "name": "Outland", "continentIds": [530]},
             {"id": "northrend", "name": "Northrend", "continentIds": [571]},
         ])
+    elif is_forever:
+        world_groups.extend({"id": continent["worldGroup"], "name": continent["name"], "continentIds": [continent_id]}
+                            for continent_id, continent in continents.items() if continent_id not in (0, 1))
     return records, chain_meta, serializable_zones, serializable_continents, npc_names, world_groups
 
 
@@ -4442,8 +4526,14 @@ def version_payload(bundle, max_level):
 
 
 def write_version_data_bundle(version_id, bundle, max_level):
+    payload = version_payload(bundle, max_level)
+    if version_id == "forever":
+        manifest = json.loads(FOREVER_MAP_MANIFEST.read_text(encoding="utf-8"))
+        payload["mapBuild"] = manifest["build"]
+        payload["mapSource"] = manifest["source"]
+        payload["mapCoordinateFrame"] = "native"
     serialized = json.dumps(
-        version_payload(bundle, max_level),
+        payload,
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode("utf-8")
@@ -4461,7 +4551,7 @@ def write_version_data_bundle(version_id, bundle, max_level):
 
 def write_generated_text(output_path, content, encoding="utf-8"):
     temporary_path = output_path.with_name(f".{output_path.name}.tmp")
-    temporary_path.write_text(content, encoding=encoding)
+    temporary_path.write_text(content, encoding=encoding, newline="\n")
     temporary_path.replace(output_path)
 
 
@@ -9020,6 +9110,10 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
             <p class="settings-section-copy">Choose the quest database shown in maps and search. Imported plans remain intact when versions differ.</p>
             <div class="game-version-options" id="game-version-options">
               <label class="game-version-option">
+                <input type="radio" name="game-version" value="forever">
+                <span><strong>WoW Forever (Beta)</strong><small>Forever quests and native beta maps, including new zones.</small></span>
+              </label>
+              <label class="game-version-option">
                 <input type="radio" name="game-version" value="era" checked>
                 <span><strong>Classic Era</strong><small>Original Vanilla quest progression.</small></span>
               </label>
@@ -9182,7 +9276,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
             <div class="info-accordion-content">
               <ul>
                 <li>Dreamway is currently in public testing. It is feature complete and performing well, but the goal is to collect feedback to further refine and polish before the launch of Classic+</li>
-                <li>The tool currently supports Classic Era, Season of Discovery, The Burning Crusade, and Wrath of the Lich King. Supports for Cataclysm and Mists of Pandaria are planned for the future</li>
+                <li>The tool currently supports WoW Forever (Beta), Classic Era, Season of Discovery, The Burning Crusade, and Wrath of the Lich King. Supports for Cataclysm and Mists of Pandaria are planned for the future</li>
                 <li>Dreamway is currently available in English only. Translations will be available in a future version</li>
                 <li>The web app does not render properly at lower resolutions or smaller window sizes</li>
                 <li>Clicking on zones in world or continent map view to open the zone map can be inconsistent, particularly for Northrend. Some areas of the map that should be clickable are not</li>
@@ -9194,7 +9288,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
             <summary>Questie acknowledgement</summary>
             <div class="info-accordion-content">
               <p>Dreamway is built on top of Questie&rsquo;s database, and requires Questie as a dependency in WoW. A big thank you to the Questie team for their incredible work and their permissive licensing. Dreamway uses the same GNU LGPLv3 license as Questie, and the source is available on GitHub at <a href="https://github.com/CirdanTheCodewright/Dreamway-Quest-Planner" target="_blank" rel="noopener noreferrer">https://github.com/CirdanTheCodewright/Dreamway-Quest-Planner</a>.</p>
-              <p>Dreamway will be updated after each Questie database update. If and when Classic+ launches, Dreamway will have all Classic+ exclusive quests as they become available in the Questie database.</p>
+              <p>Dreamway uses QuestieDBâ€™s owned Forever data, including available corrections and beta traces. Forever content is still incomplete. Forever maps use native beta artwork and coordinates; the map build is recorded alongside the data. Unavailable dungeon floor maps remain unavailable.</p>
             </div>
           </details>
           <details class="info-accordion">
@@ -9224,11 +9318,13 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       classic: "data/dreamway-classic.data.js",
       tbc: "data/dreamway-tbc.data.js",
       wotlk: "data/dreamway-wotlk.data.js",
+      forever: "data/dreamway-forever.data.js",
+      sod: "data/dreamway-sod.data.js",
     }};
     const versionDataPromises = new Map();
 
     function gameVersionDataId(version) {{
-      return version === "tbc" ? "tbc" : version === "wotlk" ? "wotlk" : "classic";
+      return version === "sod" ? "sod" : version === "forever" ? "forever" : version === "tbc" ? "tbc" : version === "wotlk" ? "wotlk" : "classic";
     }}
 
     function loadVersionDataScript(versionId) {{
@@ -9276,6 +9372,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     const QUEST_TYPE_FILTERS = DATA.questTypeFilters;
     const SOD_QUEST_FILTER = {{ id: "sod-exclusive", label: "Season of Discovery", defaultEnabled: true }};
     const GAME_VERSIONS = [
+      {{ id: "forever", label: "WoW Forever (Beta)" }},
       {{ id: "era", label: "Classic Era" }},
       {{ id: "sod", label: "Season of Discovery" }},
       {{ id: "tbc", label: "The Burning Crusade" }},
@@ -9288,6 +9385,8 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     ];
     const RACES = [
       {{ label: "All races", mask: null, color: "#fff0ce" }},
+      {{ label: "Skyborne (Alliance)", mask: 4294967296, faction: "Alliance", color: "#5aa9ff", versions: ["forever"] }},
+      {{ label: "Skyborne (Horde)", mask: 8589934592, faction: "Horde", color: "#ff6b5f", versions: ["forever"] }},
       {{ label: "Human", mask: 1, faction: "Alliance", color: "#5aa9ff" }},
       {{ label: "Dwarf", mask: 4, faction: "Alliance", color: "#5aa9ff" }},
       {{ label: "Night Elf", mask: 8, faction: "Alliance", color: "#5aa9ff" }},
@@ -9900,8 +9999,16 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       }});
     }}
 
+    function maskIntersects(a, b) {{
+      // Split exact numeric masks so bits 32/33 survive JS's 32-bit operators.
+      // Avoid BigInt allocations in catalogue filtering.
+      return ((a % 4294967296) & (b % 4294967296)) !== 0
+        || (Math.floor(a / 4294967296) & Math.floor(b / 4294967296)) !== 0;
+    }}
+
     function normalizeGameVersion(value) {{
       const normalized = String(value || "").trim().toLowerCase();
+      if (["forever", "camelot"].includes(normalized)) return "forever";
       if (["tbc", "burning-crusade", "the burning crusade", "burning crusade"].includes(normalized)) return "tbc";
       if (["wotlk", "wrath", "wrath-of-the-lich-king", "wrath of the lich king"].includes(normalized)) return "wotlk";
       return normalized === "sod" || normalized === "season-of-discovery" || normalized === "season of discovery"
@@ -10536,11 +10643,11 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
     function journeyCharacterCompatibilityWarning(quest) {{
       if (!activeJourney || !quest) return "";
       const supportsExpansionRaces = currentGameVersion === "tbc" || currentGameVersion === "wotlk";
-      const allianceMask = supportsExpansionRaces ? 1101 : 77;
-      const hordeMask = supportsExpansionRaces ? 690 : 178;
-      const allRaceMask = supportsExpansionRaces ? 2047 : 255;
+      const allianceMask = currentGameVersion === "forever" ? 4294967373 : supportsExpansionRaces ? 1101 : 77;
+      const hordeMask = currentGameVersion === "forever" ? 8589934770 : supportsExpansionRaces ? 690 : 178;
+      const allRaceMask = currentGameVersion === "forever" ? 12884902143 : supportsExpansionRaces ? 2047 : 255;
       const journeyRaceMask = Number(activeJourney.raceMask) || (activeJourney.faction === "Alliance" ? allianceMask : activeJourney.faction === "Horde" ? hordeMask : allRaceMask);
-      if (quest.requiredRaceMask && !(quest.requiredRaceMask & journeyRaceMask)) {{
+      if (quest.requiredRaceMask && !maskIntersects(quest.requiredRaceMask, journeyRaceMask)) {{
         return `${{quest.name}} may not be available to the selected Journey faction or race in ${{gameVersionLabel(currentGameVersion)}}.`;
       }}
       if (quest.requiredClassMask && activeJourney.classMask && !(quest.requiredClassMask & activeJourney.classMask)) {{
@@ -12570,13 +12677,18 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       }});
     }}
 
+    function replayMapPoint(event) {{
+      return {{ x: event.x, y: event.y }};
+    }}
+
     function replayWorldPoint(event) {{
       const zone = replayEventZone(event);
       const rect = zone?.worldRect;
       const continent = zone ? continentsById.get(Number(zone.worldContinentId ?? zone.continentId)) : null;
       if (!rect || !continent || (zone.worldGroup || "azeroth") !== (continent.worldGroup || "azeroth")) return null;
-      const localX = Number(rect.left) + event.x * Number(rect.width);
-      const localY = Number(rect.top) + event.y * Number(rect.height);
+      const point = replayMapPoint(event);
+      const localX = Number(rect.left) + point.x * Number(rect.width);
+      const localY = Number(rect.top) + point.y * Number(rect.height);
       return {{
         x: Number(continent.x) + localX * Number(continent.width) / 100,
         y: Number(continent.y) + localY * Number(continent.height) / 100,
@@ -12588,7 +12700,8 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       if (replayState.scope === "world") return replayWorldPoint(event);
       const zone = replayEventZone(event);
       if (!zone || currentView.type !== "zone" || currentView.zoneId !== zone.id) return null;
-      return {{ x: event.x * 100, y: event.y * 100 }};
+      const point = replayMapPoint(event);
+      return {{ x: point.x * 100, y: point.y * 100 }};
     }}
 
     function clearReplayMarkers() {{
@@ -13231,7 +13344,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
 
     function filterableZones() {{
       return ACTIVE_DATA.zones
-        .filter((zone) => zone.questCount > 0)
+        .filter((zone) => zone.questCount > 0 || (currentGameVersion === "forever" && zone.image))
         .sort(zoneSort);
     }}
 
@@ -13670,14 +13783,14 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       const selectedClasses = [...filters.classMasks];
       const raceOk = raceMask === 0
         ? selectedRaces.length > 0
-        : selectedRaces.some((mask) => (raceMask & mask) !== 0);
+        : selectedRaces.some((mask) => maskIntersects(raceMask, mask));
       const classOk = classMask === 0
         ? selectedClasses.length > 0
         : selectedClasses.some((mask) => (classMask & mask) !== 0);
       const questFactions = raceMask === 0
         ? ["Alliance", "Horde"]
         : [...new Set(RACES
-          .filter((race) => race.mask != null && (raceMask & race.mask) !== 0)
+          .filter((race) => race.mask != null && maskIntersects(raceMask, race.mask))
           .map((race) => race.faction)
           .filter(Boolean))];
       const factionOk = questFactions.some((faction) => filters.factions.has(faction));
@@ -14511,12 +14624,12 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       const classMask = Number(quest.requiredClassMask) || 0;
       const selectedRaces = [...filters.raceMasks];
       const selectedClasses = [...filters.classMasks];
-      const raceMatches = raceMask === 0 || selectedRaces.some((mask) => (raceMask & mask) !== 0);
+      const raceMatches = raceMask === 0 || selectedRaces.some((mask) => maskIntersects(raceMask, mask));
       const classMatches = classMask === 0 || selectedClasses.some((mask) => (classMask & mask) !== 0);
       const questFactions = raceMask === 0
         ? ["Alliance", "Horde"]
         : [...new Set(RACES
-          .filter((race) => race.mask != null && (raceMask & race.mask) !== 0)
+          .filter((race) => race.mask != null && maskIntersects(raceMask, race.mask))
           .map((race) => race.faction)
           .filter(Boolean))];
       const factionMatches = questFactions.some((faction) => filters.factions.has(faction));
@@ -15161,7 +15274,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       if (!rewards.length) return "None";
       return `<span class="catalogue-reward-list">${{rewards.map((reward) => {{
         const amount = Number(reward.amount) || 0;
-        const sign = amount > 0 ? "+" : amount < 0 ? "−" : "";
+        const sign = amount > 0 ? "+" : amount < 0 ? "âˆ’" : "";
         const className = amount < 0 ? "catalogue-reputation-loss" : "catalogue-reputation-gain";
         return `<span class="${{className}}">${{sign}}${{formatRewardNumber(Math.abs(amount))}} ${{escapeHtml(reward.name || `Faction ${{reward.factionId}}`)}}</span>`;
       }}).join("")}}</span>`;
@@ -16875,7 +16988,7 @@ def render_classic_html(classic_bundle, tbc_bundle, wotlk_bundle):
       if (input?.checked) {{
         setGameVersion(input.value).catch((error) => {{
           console.error(error);
-          setPlannerMessage(error?.message || "Dreamway could not load that game version.");
+          alert(error?.message || "Dreamway could not load that game version.");
           updateSettingsStatus();
         }});
       }}
@@ -17322,6 +17435,11 @@ def render_addon_quest_zones_lua(records, zones, game_version="era"):
         '    {m=32,n="Tauren",f="Horde",d=true,c="ff6b5f"},',
         '    {m=128,n="Troll",f="Horde",d=true,c="ff6b5f"},',
     ])
+    if game_version == "forever":
+        lines.extend([
+            '    {m=4294967296,n="Skyborne (Alliance)",f="Alliance",d=true,c="5aa9ff"},',
+            '    {m=8589934592,n="Skyborne (Horde)",f="Horde",d=true,c="ff6b5f"},',
+        ])
     if game_version in {"tbc", "wotlk"}:
         lines.extend([
             '    {m=1024,n="Draenei",f="Alliance",d=true,c="5aa9ff"},',
@@ -17354,7 +17472,7 @@ def render_addon_quest_zones_lua(records, zones, game_version="era"):
             f"d={'true' if entry.get('defaultEnabled') else 'false'}"
             "},"
         )
-    if game_version == "era":
+    if game_version == "sod":
         lines.append('    {id="sod-exclusive",n="Season of Discovery",d=true,v="sod"},')
     lines.extend([
         "  },",
@@ -17486,11 +17604,15 @@ def main():
     example_journeys = load_example_journeys()
     map_source_count, unique_map_count = prepare_webp_map_assets()
     classic_bundle = build_classic_records()
+    sod_bundle = build_version_records("sod")
+    forever_bundle = build_version_records("forever")
     tbc_bundle = build_version_records("tbc")
     wotlk_bundle = build_version_records("wotlk")
     runtime_map_count, runtime_map_bytes = finalize_webp_map_assets()
     data_outputs = [
         write_version_data_bundle("classic", classic_bundle, 60),
+        write_version_data_bundle("sod", sod_bundle, 60),
+        write_version_data_bundle("forever", forever_bundle, 60),
         write_version_data_bundle("tbc", tbc_bundle, 70),
         write_version_data_bundle("wotlk", wotlk_bundle, 80),
     ]
@@ -17501,9 +17623,14 @@ def main():
     addon_zones_tbc = ROOT / "DreamwayQuestPlanner" / "DreamwayQuestZones-BCC.lua"
     addon_zones_wotlk = ROOT / "DreamwayQuestPlanner" / "DreamwayQuestZones-WOTLKC.lua"
     addon_examples = ROOT / "DreamwayQuestPlanner" / "DreamwayExampleJourneys.lua"
-    addon_zones.write_text(render_addon_quest_zones_lua(records, zones, "era"), encoding="utf-8")
+    addon_zones.write_text("if Questie and Questie.IsSoD then return end\n" + render_addon_quest_zones_lua(records, zones, "era"), encoding="utf-8")
+    (ROOT / "DreamwayQuestPlanner/DreamwayQuestZones-SoD.lua").write_text(
+        "if not (Questie and Questie.IsSoD) then return end\n" +
+        render_addon_quest_zones_lua(sod_bundle[0], sod_bundle[2], "sod"), encoding="utf-8")
     addon_zones_tbc.write_text(render_addon_quest_zones_lua(tbc_bundle[0], tbc_bundle[2], "tbc"), encoding="utf-8")
     addon_zones_wotlk.write_text(render_addon_quest_zones_lua(wotlk_bundle[0], wotlk_bundle[2], "wotlk"), encoding="utf-8")
+    (ROOT / "DreamwayQuestPlanner/DreamwayQuestZones-Forever.lua").write_text(
+        render_addon_quest_zones_lua(forever_bundle[0], forever_bundle[2], "forever"), encoding="utf-8")
     addon_examples.write_text(render_addon_example_journeys_lua(example_journeys), encoding="utf-8")
     print(f"Wrote {output}")
     print(f"Wrote {addon_zones}")

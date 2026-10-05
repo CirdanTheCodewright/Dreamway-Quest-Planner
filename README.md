@@ -14,16 +14,17 @@ Create a Dreamway Shortcut.txt
 DreamwayQuestPlanner/ WoW addon package (`Dreamway Quest Planner` in game)
 tools/                  Data generator, map downloader, and verifier scripts
 assets/                 Classic map assets used by the web app
-Questie/                Questie source checkout used as quest data input
+Questie/                Questie runtime and policy source
+QuestieDB/              Official database schemas, corrections and generated data
 docs/                   Project notes and data format docs
 ```
 
-`Questie/` is tracked as a git submodule pointing at the upstream Questie repository. The generator reads Questie's Classic databases and emits `dreamway.html`.
+`Questie/` and `QuestieDB/` are upstream Git submodules. The generator runs QuestieDB’s Lua 5.1 correction and derivation pipeline and emits separate Era, SoD, Forever, TBC and Wrath packs. See [Forever migration notes](docs/forever-migration.md) for dependencies, validation and beta limitations.
 
 ### Updating Questie
 
 From the repository root, update the local Questie source to the latest upstream
-`master` commit with:
+`master` commits of Questie and QuestieDB with:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\update_questie.ps1
@@ -36,7 +37,7 @@ app:
 powershell -ExecutionPolicy Bypass -File .\tools\update_questie.ps1 -RebuildWebApp
 ```
 
-The updater refuses to overwrite local changes inside `Questie/` and handles the
+The updater refuses to overwrite local changes inside either dependency and handles the
 checkout's Git safe-directory setting without changing your global Git configuration.
 
 ## Web App

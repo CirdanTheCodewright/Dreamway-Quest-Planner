@@ -1,5 +1,5 @@
 local ADDON_NAME = ...
-DREAMWAY_VERSION = "0.6.0"
+DREAMWAY_VERSION = "0.8.0"
 
 local MODE_QUESTIE = "Questie"
 local MODE_DREAMWAY = "Dreamway"
@@ -41,6 +41,11 @@ local ProfileRecorder = {
     lastCombatPrune = 0,
     unsavedEventCount = 0,
 }
+ProfileRecorder.interfaceVersion = tonumber((select(4, GetBuildInfo()))) or 0
+ProfileRecorder.isForeverClient = ProfileRecorder.interfaceVersion >= 16000 and ProfileRecorder.interfaceVersion < 17000
+function ProfileRecorder.IsSecret(value)
+    return issecretvalue and issecretvalue(value) or false
+end
 local MAX_PANEL_SEARCH_RESULTS = 120
 local PANEL_SEARCH_ROW_HEIGHT = 22
 local PANEL_SEARCH_ROW_TOP_PAD = 6
@@ -59,6 +64,9 @@ local function NormalizeDreamwayGameVersion(value)
     if value == "tbc" then
         return "tbc"
     end
+    if value == "forever" or value == "camelot" then
+        return "forever"
+    end
     if value == "sod" then
         return "sod"
     end
@@ -66,6 +74,9 @@ local function NormalizeDreamwayGameVersion(value)
 end
 
 local function CurrentDreamwayGameVersion()
+    if ProfileRecorder.isForeverClient or (Questie and Questie.IsForever) then
+        return "forever"
+    end
     if Questie and Questie.IsWotlk then
         return "wotlk"
     end
@@ -92,10 +103,12 @@ function DreamwayCurrentMaxLevel()
 end
 
 function DreamwayBitBand(a, b)
-    if bit and bit.band then
+    a = tonumber(a) or 0
+    b = tonumber(b) or 0
+    if a < 4294967296 and b < 4294967296 and bit and bit.band then
         return bit.band(a, b)
     end
-    if bit32 and bit32.band then
+    if a < 4294967296 and b < 4294967296 and bit32 and bit32.band then
         return bit32.band(a, b)
     end
 
@@ -134,6 +147,8 @@ ProfileRecorder.playerRaceMasks = {
     [8] = 128,
     [10] = 512,
     [11] = 1024,
+    [95] = 4294967296,
+    [96] = 8589934592,
 }
 ProfileRecorder.playerRaceMasksByFile = {
     Human = 1,
@@ -659,6 +674,18 @@ local function ImportQuestieModule(moduleName)
     return nil
 end
 
+ProfileRecorder.compat = ImportQuestieModule("QuestieCompat")
+ProfileRecorder.client = {
+    GetQuestLogTitle = ProfileRecorder.compat and ProfileRecorder.compat.GetQuestLogTitle or GetQuestLogTitle,
+    GetNumQuestLogEntries = ProfileRecorder.compat and ProfileRecorder.compat.GetNumQuestLogEntries or GetNumQuestLogEntries,
+    GetQuestLogIndexByID = C_QuestLog and C_QuestLog.GetLogIndexForQuestID or GetQuestLogIndexByID,
+    GetQuestGreenRange = ProfileRecorder.compat and ProfileRecorder.compat.GetQuestGreenRange or GetQuestGreenRange,
+    SelectQuestLogEntry = ProfileRecorder.compat and ProfileRecorder.compat.SelectQuestLogEntry or SelectQuestLogEntry,
+    GetItemCount = C_Item and C_Item.GetItemCount or GetItemCount,
+    GetItemInfo = C_Item and C_Item.GetItemInfo or GetItemInfo,
+    GetItemIcon = C_Item and C_Item.GetItemIconByID or GetItemIcon,
+}
+
 local function GetQuestieTracker()
     return ImportQuestieModule("QuestieTracker")
 end
@@ -1008,8 +1035,8 @@ local function IsQuestInLog(questId)
         end
     end
 
-    if GetQuestLogIndexByID then
-        local ok, index = pcall(GetQuestLogIndexByID, questId)
+    if ProfileRecorder.client.GetQuestLogIndexByID then
+        local ok, index = pcall(ProfileRecorder.client.GetQuestLogIndexByID, questId)
         if ok and index then
             return index > 0
         end
@@ -1050,14 +1077,14 @@ local function IsQuestCompleteInLog(questId)
     end
 
     local questLogIndex
-    if GetQuestLogIndexByID then
-        local ok, index = pcall(GetQuestLogIndexByID, questId)
+    if ProfileRecorder.client.GetQuestLogIndexByID then
+        local ok, index = pcall(ProfileRecorder.client.GetQuestLogIndexByID, questId)
         if ok then
             questLogIndex = index
         end
     end
-    if questLogIndex and questLogIndex > 0 and GetQuestLogTitle then
-        local ok, _, _, _, _, _, complete = pcall(GetQuestLogTitle, questLogIndex)
+    if questLogIndex and questLogIndex > 0 and ProfileRecorder.client.GetQuestLogTitle then
+        local ok, _, _, _, _, _, complete = pcall(ProfileRecorder.client.GetQuestLogTitle, questLogIndex)
         if ok and (complete == true or complete == 1) then
             return true
         end
@@ -1354,8 +1381,8 @@ local function GetQuestLogIndex(questId)
         end
     end
 
-    if GetQuestLogIndexByID then
-        local ok, index = pcall(GetQuestLogIndexByID, questId)
+    if ProfileRecorder.client.GetQuestLogIndexByID then
+        local ok, index = pcall(ProfileRecorder.client.GetQuestLogIndexByID, questId)
         if ok and index and index > 0 then
             return index
         end
@@ -1447,11 +1474,11 @@ function ProfileRecorder.QuestLogQuestIds()
         end
     end
 
-    if #questIds == 0 and GetNumQuestLogEntries and GetQuestLogTitle then
-        local okCount, count = pcall(GetNumQuestLogEntries)
+    if #questIds == 0 and ProfileRecorder.client.GetNumQuestLogEntries and ProfileRecorder.client.GetQuestLogTitle then
+        local okCount, count = pcall(ProfileRecorder.client.GetNumQuestLogEntries)
         if okCount and tonumber(count) then
             for index = 1, tonumber(count) do
-                local results = { pcall(GetQuestLogTitle, index) }
+                local results = { pcall(ProfileRecorder.client.GetQuestLogTitle, index) }
                 local questId = results[1] and tonumber(results[9]) or nil
                 local isHeader = results[1] and results[5]
                 if questId and questId > 0 and not isHeader and not seen[questId] then
@@ -1646,6 +1673,7 @@ function ProfileRecorder.RecordObjectiveEvent(questId, objectiveIndex, objective
 end
 
 function ProfileRecorder.NormalizeObjectiveText(text)
+    if ProfileRecorder.IsSecret(text) then return "" end
     text = string.lower(tostring(text or ""))
     text = text:gsub("|c%x%x%x%x%x%x%x%x", ""):gsub("|r", "")
     text = text:gsub("%d+%s*/%s*%d+", "")
@@ -1658,6 +1686,7 @@ function ProfileRecorder.NormalizeObjectiveText(text)
 end
 
 function ProfileRecorder.RecordUiObjectiveMessage(errorType, message)
+    if ProfileRecorder.IsSecret(errorType) or ProfileRecorder.IsSecret(message) then return end
     local messageType = GetGameMessageInfo and GetGameMessageInfo(errorType) or nil
     local supported = messageType == "ERR_QUEST_OBJECTIVE_COMPLETE_S"
         or messageType == "ERR_QUEST_UNKNOWN_COMPLETE"
@@ -1868,6 +1897,7 @@ function ProfileRecorder.ActiveQuestItemObjectives(itemId)
 end
 
 function ProfileRecorder.RecordLootedQuestItem(message)
+    if ProfileRecorder.IsSecret(message) then return end
     message = tostring(message or "")
     if not message:find("^You ") then
         return
@@ -1881,7 +1911,7 @@ function ProfileRecorder.RecordLootedQuestItem(message)
         return
     end
     C_Timer.After(0.2, function()
-        local bagCount = GetItemCount and tonumber(GetItemCount(itemId, false)) or 0
+        local bagCount = ProfileRecorder.client.GetItemCount and tonumber(ProfileRecorder.client.GetItemCount(itemId, false)) or 0
         for _, match in ipairs(matches) do
             local objectives = ProfileRecorder.QuestObjectiveSnapshot(match.questId)
             local objective = objectives[match.objectiveIndex] or {
@@ -2020,6 +2050,10 @@ function ProfileRecorder.RegisterQuestieCallbacks()
 end
 
 function ProfileRecorder.AcceptedQuestId(questLogIndex, questId)
+    -- Forever sends the quest ID alone, rather than the legacy index/ID pair.
+    if ProfileRecorder.isForeverClient then
+        return tonumber(questId or questLogIndex)
+    end
     questId = tonumber(questId)
     if questId then
         return questId
@@ -2031,8 +2065,8 @@ function ProfileRecorder.AcceptedQuestId(questLogIndex, questId)
             return tonumber(resolved)
         end
     end
-    if questLogIndex and GetQuestLogTitle then
-        local results = { pcall(GetQuestLogTitle, questLogIndex) }
+    if questLogIndex and ProfileRecorder.client.GetQuestLogTitle then
+        local results = { pcall(ProfileRecorder.client.GetQuestLogTitle, questLogIndex) }
         if results[1] then
             return tonumber(results[9])
         end
@@ -2085,6 +2119,7 @@ function ProfileRecorder.PruneCombatState(timestamp)
 end
 
 function ProfileRecorder.RecordRecentXpKill()
+    if ProfileRecorder.isForeverClient then return end
     local timestamp = GetTime and GetTime() or 0
     ProfileRecorder.PruneCombatState(timestamp)
     for index = #ProfileRecorder.recentNpcDeaths, 1, -1 do
@@ -2103,6 +2138,7 @@ function ProfileRecorder.RecordRecentXpKill()
 end
 
 function ProfileRecorder.RecordCombatLogKill()
+    if ProfileRecorder.isForeverClient then return end
     if not CombatLogGetCurrentEventInfo then
         return
     end
@@ -2211,6 +2247,13 @@ local function OpenQuestieDetails(quest)
 end
 
 local function OpenQuestLogFallback(questId)
+    if ProfileRecorder.isForeverClient and QuestMapFrame_OpenToQuestDetails then
+        if not InCombatLockdown() then
+            QuestMapFrame_OpenToQuestDetails(questId)
+            return true
+        end
+        return false
+    end
     local questLogIndex
     if C_QuestLog and C_QuestLog.GetLogIndexForQuestID then
         local ok, index = pcall(C_QuestLog.GetLogIndexForQuestID, questId)
@@ -2219,8 +2262,8 @@ local function OpenQuestLogFallback(questId)
         end
     end
 
-    if not questLogIndex and GetQuestLogIndexByID then
-        local ok, index = pcall(GetQuestLogIndexByID, questId)
+    if not questLogIndex and ProfileRecorder.client.GetQuestLogIndexByID then
+        local ok, index = pcall(ProfileRecorder.client.GetQuestLogIndexByID, questId)
         if ok and index and index > 0 then
             questLogIndex = index
         end
@@ -2230,8 +2273,8 @@ local function OpenQuestLogFallback(questId)
         return false
     end
 
-    if SelectQuestLogEntry then
-        SelectQuestLogEntry(questLogIndex)
+    if ProfileRecorder.client.SelectQuestLogEntry then
+        ProfileRecorder.client.SelectQuestLogEntry(questLogIndex)
     end
 
     local questLogFrame = QuestLogExFrame or ClassicQuestLog or QuestLogFrame
@@ -2659,7 +2702,7 @@ function DreamwayUsableTrackerItems(quest)
 
     local items = {}
     local trackerUtils = ImportQuestieModule("TrackerUtils")
-    local getItemCount = C_Item and C_Item.GetItemCount or GetItemCount
+    local getItemCount = C_Item and C_Item.GetItemCount or ProfileRecorder.client.GetItemCount
     for _, itemId in ipairs(candidates) do
         if getItemCount and getItemCount(itemId) > 0 then
             local usable = true
@@ -2686,11 +2729,11 @@ function DreamwayConfigureTrackerItemButton(button, itemId, questId, size)
         if C_Item and C_Item.GetItemIconByID then
             texture = C_Item.GetItemIconByID(itemId)
         end
-        if not texture and GetItemIcon then
-            texture = GetItemIcon(itemId)
+        if not texture and ProfileRecorder.client.GetItemIcon then
+            texture = ProfileRecorder.client.GetItemIcon(itemId)
         end
-        if not texture and GetItemInfo then
-            texture = select(10, GetItemInfo(itemId))
+        if not texture and ProfileRecorder.client.GetItemInfo then
+            texture = select(10, ProfileRecorder.client.GetItemInfo(itemId))
         end
         if texture then
             ProfileRecorder.trackerItemTextures[itemId] = texture
@@ -2704,7 +2747,7 @@ function DreamwayConfigureTrackerItemButton(button, itemId, questId, size)
     if button.FakeHide then button:FakeHide() end
     button.itemId = itemId
     button.questID = questId
-    local getItemCount = C_Item and C_Item.GetItemCount or GetItemCount
+    local getItemCount = C_Item and C_Item.GetItemCount or ProfileRecorder.client.GetItemCount
     button.charges = getItemCount and getItemCount(itemId, nil, true) or 0
     button.rangeTimer = -1
     button:SetNormalTexture(texture)
@@ -2757,7 +2800,7 @@ function DreamwayRefreshTrackerItemButtonState(button)
         return
     end
 
-    local getItemCount = C_Item and C_Item.GetItemCount or GetItemCount
+    local getItemCount = C_Item and C_Item.GetItemCount or ProfileRecorder.client.GetItemCount
     local charges = getItemCount and getItemCount(button.itemId, nil, true) or 0
     button.charges = charges or 0
     if button.count then
@@ -2767,13 +2810,14 @@ function DreamwayRefreshTrackerItemButtonState(button)
 
     if button.cooldown then
         local start, duration, enabled
-        if QuestieCompat and QuestieCompat.GetItemCooldown then
-            start, duration, enabled = QuestieCompat.GetItemCooldown(button.itemId)
+        if ProfileRecorder.compat and ProfileRecorder.compat.GetItemCooldown then
+            start, duration, enabled = ProfileRecorder.compat.GetItemCooldown(button.itemId)
         elseif GetItemCooldown then
             start, duration, enabled = GetItemCooldown(button.itemId)
         end
-        if enabled == 1 and duration and duration > 0 then
-            button.cooldown:SetCooldown(start or 0, duration, enabled)
+        if not ProfileRecorder.IsSecret(enabled) and not ProfileRecorder.IsSecret(start) and not ProfileRecorder.IsSecret(duration)
+            and (enabled == 1 or enabled == true) and duration and duration > 0 then
+            button.cooldown:SetCooldown(start or 0, duration)
             button.cooldown:Show()
         else
             button.cooldown:Hide()
@@ -5023,6 +5067,8 @@ function panelSearchFilters.Ensure()
         [8] = 128,
         [10] = 512,
         [11] = 1024,
+    [95] = 4294967296,
+    [96] = 8589934592,
     }
     local currentRaceMask = raceMaskById[tonumber(currentRaceId)]
     local currentClassMask = currentClassId and (2 ^ (tonumber(currentClassId) - 1)) or nil
@@ -5169,8 +5215,8 @@ function panelSearchFilters.PassesLevel(quest)
         questLevel = playerLevel
     end
     local greenRange = 5
-    if GetQuestGreenRange then
-        local ok, value = pcall(GetQuestGreenRange, "player")
+    if ProfileRecorder.client.GetQuestGreenRange then
+        local ok, value = pcall(ProfileRecorder.client.GetQuestGreenRange, "player")
         if ok and tonumber(value) then
             greenRange = tonumber(value)
         end
@@ -5761,11 +5807,11 @@ local function QuestCharacterCompatibilityWarning(journey, quest)
         local currentVersion = CurrentDreamwayGameVersion()
         local supportsExpansionRaces = currentVersion == "tbc" or currentVersion == "wotlk"
         if character.faction == "Alliance" then
-            journeyRaceMask = supportsExpansionRaces and 1101 or 77
+            journeyRaceMask = CurrentDreamwayGameVersion() == "forever" and 4294967373 or (supportsExpansionRaces and 1101 or 77)
         elseif character.faction == "Horde" then
-            journeyRaceMask = supportsExpansionRaces and 690 or 178
+            journeyRaceMask = CurrentDreamwayGameVersion() == "forever" and 8589934770 or (supportsExpansionRaces and 690 or 178)
         else
-            journeyRaceMask = supportsExpansionRaces and 2047 or 255
+            journeyRaceMask = CurrentDreamwayGameVersion() == "forever" and 12884902143 or (supportsExpansionRaces and 2047 or 255)
         end
     end
 
@@ -6952,6 +6998,9 @@ end
 
 function DreamwayGameVersionLabel(value)
     value = NormalizeDreamwayGameVersion(value)
+    if value == "forever" then
+        return "WoW Forever (Beta)"
+    end
     if value == "sod" then
         return "Season of Discovery"
     end
@@ -6977,6 +7026,10 @@ function DreamwayJourneyRaceOptions(gameVersion)
         { n = "Troll", m = 128, f = "Horde" },
     }
     gameVersion = NormalizeDreamwayGameVersion(gameVersion)
+    if gameVersion == "forever" then
+        options[#options + 1] = { n = "Skyborne (Alliance)", m = 4294967296, f = "Alliance" }
+        options[#options + 1] = { n = "Skyborne (Horde)", m = 8589934592, f = "Horde" }
+    end
     if gameVersion == "tbc" or gameVersion == "wotlk" then
         options[#options + 1] = { n = "Draenei", m = 1024, f = "Alliance" }
         options[#options + 1] = { n = "Blood Elf", m = 512, f = "Horde" }
@@ -10548,14 +10601,6 @@ UpdatePanelSearchVisibleRows = function(force)
             else
                 button:EnableMouse(true)
                 button.label:SetPoint("RIGHT", button, "RIGHT", -108, 0)
-                if not row.renderText then
-                    row.renderText = ColoredQuestSearchDisplayName(row.quest)
-                    row.isComplete = IsJourneyComplete(row.quest) and true or false
-                    row.prerequisiteWarning = panelPrerequisiteWarnings[tonumber(row.quest and row.quest.id)]
-                    if row.prerequisiteWarning then
-                        row.renderText = WARNING_INLINE_TEXTURE .. " " .. row.renderText
-                    end
-                end
                 button.label:SetText(row.renderText)
                 button.label:SetTextColor(1, 1, 1)
                 button.location:SetText(row.location or "")
@@ -10656,6 +10701,17 @@ RefreshPanelSearchResults = function(forceRebuild)
 
     local journey = ActiveJourney()
     local rows, totalMatches, shownMatches = PanelSearchRows(journey)
+    -- Resolve state once per result model, never from a scrolling/recycled row.
+    for _, row in ipairs(rows) do
+        if row.kind == "quest" then
+            row.renderText = ColoredQuestSearchDisplayName(row.quest)
+            row.isComplete = IsJourneyComplete(row.quest) and true or false
+            row.prerequisiteWarning = panelPrerequisiteWarnings[tonumber(row.quest and row.quest.id)]
+            if row.prerequisiteWarning then
+                row.renderText = WARNING_INLINE_TEXTURE .. " " .. row.renderText
+            end
+        end
+    end
     panelSearchResultRows = rows
     panelSearchResultsDirty = false
     panelSearchResults:Show()
@@ -11634,7 +11690,11 @@ events:RegisterEvent("QUEST_WATCH_UPDATE")
 events:RegisterEvent("UNIT_QUEST_LOG_CHANGED")
 events:RegisterEvent("QUEST_ACCEPTED")
 events:RegisterEvent("QUEST_TURNED_IN")
-events:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+-- Forever restricts combat-log access. Quest progress still comes from quest events;
+-- do not subscribe to an unavailable stream or infer kills from protected unit data.
+if not ProfileRecorder.isForeverClient then
+    events:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+end
 events:RegisterEvent("CHAT_MSG_COMBAT_XP_GAIN")
 events:RegisterEvent("CHAT_MSG_LOOT")
 events:RegisterEvent("UI_INFO_MESSAGE")
@@ -11659,7 +11719,11 @@ events:SetScript("OnEvent", function(_, event, ...)
             ProfileRecorder.RefreshQuestObjectiveEventState(false)
         end)
         C_Timer.After(5, ProfileRecorder.RegisterQuestieCallbacks)
-        TryInitialize()
+        if Questie and Questie.API and Questie.API.RegisterOnReady then
+            Questie.API.RegisterOnReady(TryInitialize)
+        else
+            TryInitialize()
+        end
     elseif event == "PLAYER_LOGOUT" then
         ProfileRecorder.RecordEvent(ProfileRecorder.EVENT_LOGOUT)
         ProfileRecorder.RefreshCharacterProfile()
@@ -11701,7 +11765,7 @@ events:SetScript("OnEvent", function(_, event, ...)
         ProfileRecorder.ScheduleQuestObjectiveEventRefresh(true)
     elseif event == "COMBAT_LOG_EVENT_UNFILTERED" then
         ProfileRecorder.RecordCombatLogKill()
-    elseif event == "CHAT_MSG_COMBAT_XP_GAIN" then
+    elseif event == "CHAT_MSG_COMBAT_XP_GAIN" and not ProfileRecorder.isForeverClient then
         ProfileRecorder.RecordRecentXpKill()
     elseif event == "PLAYER_DEAD" then
         ProfileRecorder.RecordEvent(ProfileRecorder.EVENT_DEATH)

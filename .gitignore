@@ -27,3 +27,6 @@ Thumbs.db
 # Local Journey drafts
 journeys/local/
 *.local.json
+
+# Workspace-local Lua validation runtime
+tools/.runtime/
